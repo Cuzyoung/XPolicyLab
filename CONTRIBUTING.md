@@ -72,6 +72,15 @@ bash eval.sh <bench_name> <task_name> <ckpt_name> <env_cfg_type> <action_type> <
 
 `eval.sh` starts the policy server, waits for it, runs the environment client, and cleans up — keep it aligned with `policy/demo_policy/eval.sh`; document any extra arguments in the policy README. Checkpoints resolve to `checkpoints/<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>-<seed>/` unless the policy README documents another layout.
 
+### Policy README
+
+All policy READMEs share one template — [policy/demo_policy/README.md](policy/demo_policy/README.md) is the minimal reference, [policy/AHA_WAM/README.md](policy/AHA_WAM/README.md) shows a complex adapter (model assets, custom environment variables):
+
+1. **Header**: `**Contributor:** ... | **Paper:** ... | **arXiv:** ... | **Original code:** ...`, then 1–3 sentences on the model and what the adapter supports; mention vendored upstream directories here.
+2. **Pointer paragraph** (verbatim): shared conventions link to the root README, official results link to the [RoboDojo LeaderBoard](https://robodojo-benchmark.com/LeaderBoard).
+3. **Sections in order**: `Installation`, `Data Processing`, `Training`, `Evaluation`, plus `Model Assets` / `Configuration` / `Notes` only when the adapter needs them. State explicitly when a stage is unsupported (eval-only, upstream-native data, ...).
+4. **Policy-specific content only**: one command template plus one runnable example per stage, extra arguments, required environment variables, `deploy.yml` keys, checkpoint-layout deviations. Do not restate shared argument tables or the split-machine flow — link to the root README instead.
+
 ## Testing
 
 Run these in order before opening a PR.

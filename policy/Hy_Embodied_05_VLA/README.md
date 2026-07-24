@@ -2,222 +2,74 @@
 
 **Contributor:** RoboDojo Team | **Paper:** Hy-Embodied-0.5-VLA technical report | **arXiv:** TBD | **Original code:** https://github.com/Tencent-Hunyuan/Hy-Embodied-0.5-VLA
 
-`Hy_Embodied_05_VLA` is the XPolicyLab/RoboDojo adapter for the corresponding policy. It keeps integration-facing scripts at this directory level and leaves the original or vendored implementation in the nested source tree when present.
+`Hy_Embodied_05_VLA` adapts the Tencent Hunyuan Hy-Embodied-0.5-VLA policy to XPolicyLab/RoboDojo. Integration scripts live at this directory level; the Hy-Embodied source tree is expected at `Hy-Embodied-0.5-VLA/` (set up by `install.sh`, override with `HY_VLA_ROOT`). The default and tested `action_type` for this adapter is `ee`.
 
-<details>
-<summary>File Structure</summary>
-
-| Path | Purpose |
-|---|---|
-| `README.md` | Supplemental documentation or environment metadata. |
-| `install.sh` | Installs the policy-side runtime and editable dependencies. |
-| `process_data.sh` | Converts RoboDojo demonstration data into the policy-specific training format. |
-| `train.sh` | Launches the XPolicyLab training wrapper for this policy. |
-| `eval.sh` | Runs a same-machine policy server plus RoboDojo environment client evaluation. |
-| `setup_eval_policy_server.sh` | Starts only the policy server for distributed/debug evaluation. |
-| `setup_eval_env_client.sh` | Starts only the RoboDojo environment client and connects to a policy server. |
-| `deploy.py` | Evaluation loop imported by the RoboDojo env client. |
-| `model.py` | Model adapter loaded by the XPolicyLab policy server. |
-| `deploy.yml` | Runtime configuration and default checkpoint/model parameters. |
-
-</details>
+Shared conventions — argument meanings, checkpoint naming, split-machine deployment, `EVAL_ENV_TYPE` — are documented in the [XPolicyLab README](../../README.md). Official results: [RoboDojo LeaderBoard](https://robodojo-benchmark.com/LeaderBoard).
 
 ## Installation
 
-What it does: installs or activates the policy-side runtime so the XPolicyLab server can import the adapter and upstream model code.
-
-Parameters used by the command:
-
-| Parameter | Description |
-|---|---|
-| `policy_uv_env` | `uv` to use `deploy.yml` `policy_uv_env_path`, or an explicit Hy-Embodied project path. |
-
 ```bash
 cd XPolicyLab/policy/Hy_Embodied_05_VLA
-# Example: install dependencies for the Hy_Embodied_05_VLA policy adapter.
 bash install.sh
-# `eval.sh` arg 9 is not a conda env. Pass `uv` or the Hy-Embodied project path.
 source Hy-Embodied-0.5-VLA/.venv/bin/activate
 ```
 
-## Demo Data Processing
+The policy-environment argument of the eval scripts is not a conda env: pass `uv` (which reads `deploy.yml` `policy_uv_env_path`) or an explicit Hy-Embodied project path.
 
-What it does: computes `norm_stats.pkl` for the Hy-Embodied HDF5 dataset. Hy-VLA does not use a bespoke XPolicyLab HDF5-to-LeRobot converter; use the upstream Hy-Embodied data pipeline for full data collection/conversion.
+## Data Processing
 
-`train.sh` forwards its arguments directly to the upstream
-`scripts/train_robotwin_umi.sh` entrypoint. Configure the upstream-required
-environment variables first, such as `HDF5_DIR`, `EXP_ROOT`, `CHIEF_IP`, and
-`NPROC_PER_NODE`; the standard XPolicyLab six-argument training shape does not
-apply to this adapter.
-
-Parameters are upstream-defined by `scripts/train_robotwin_umi.sh`, not the
-common XPolicyLab wrapper.
-
-| Parameter | Description |
-|---|---|
-| `manifest_csv` | CSV manifest consumed by the Hy-Embodied normalization script. |
-| `hdf5_dir` | Directory containing the HDF5 trajectories referenced by the manifest. |
-| `output_pkl` | Output path for `norm_stats.pkl`; pass this path through `deploy.yml` or `HY_VLA_NORM_PATH`. Relative paths are resolved by the upstream script after it enters `HY_VLA_ROOT`. |
-| `downsample_rate` | Optional frame downsample rate; default is `3`. |
-| `chunk_size` | Optional action chunk size; default is `20`. |
+`process_data.sh` only computes the normalization statistics (`norm_stats.pkl`) that the policy server consumes at eval time. Hy-VLA does not use a bespoke XPolicyLab HDF5-to-LeRobot converter; use the upstream Hy-Embodied data pipeline for full data collection/conversion.
 
 ```bash
 cd XPolicyLab/policy/Hy_Embodied_05_VLA
-# Template: compute normalization statistics.
 bash process_data.sh <manifest_csv> <hdf5_dir> <output_pkl> [downsample_rate] [chunk_size]
 
-# Example: compute norm stats for a prepared RoboDojo HDF5 manifest.
+# Example: compute norm stats for a prepared RoboDojo HDF5 manifest (defaults: downsample_rate 3, chunk_size 20)
 bash process_data.sh data/manifest.csv data/hdf5 Hy-VLA-RoboDojo-v3/hyvla_dojo_ckpt_v3/norm_stats.pkl 3 20
 ```
 
-## Model Training
+Relative `output_pkl` paths are resolved by the upstream script after it enters `HY_VLA_ROOT`; pass the resulting path through `deploy.yml` (`norm_path`) or `HY_VLA_NORM_PATH`.
 
-What it does: starts the policy-specific training recipe through the XPolicyLab wrapper and writes checkpoints under this adapter directory.
+## Training
 
-Parameters used by the command:
-
-| Parameter | Description |
-|---|---|
-| upstream args | Arguments consumed by `scripts/train_robotwin_umi.sh`. |
+`train.sh` does not follow the standard XPolicyLab six-argument shape: it forwards all arguments directly to the upstream `scripts/train_robodojo_umi.sh` entrypoint inside the Hy-Embodied source tree, and the run is tuned via upstream environment overrides (`EXP_ID`, `EXP_ROOT`, `PRETRAIN`, `HDF5_DIR`, `NORM_PATH`, `NUM_MACHINES`, `NPROC_PER_NODE`, `CHIEF_IP`, `INDEX`, ...).
 
 ```bash
 cd XPolicyLab/policy/Hy_Embodied_05_VLA
-# Template: pass through to the upstream Hy-Embodied training script.
-HDF5_DIR=<hdf5_dir> EXP_ROOT=<output_dir> bash train.sh <upstream_args...>
+
+# Single-node example
+CHIEF_IP=127.0.0.1 INDEX=0 NUM_MACHINES=1 NPROC_PER_NODE=8 \
+HDF5_DIR=/path/to/robodojo/hdf5 EXP_ROOT=/path/to/experiments \
+bash train.sh
 ```
 
-Use the checkpoint path expected by `deploy.yml` (`ckpt_path`) during
-evaluation. Relative `hy_root` and `ckpt_path` values are resolved against this
-policy directory and `hy_root`, respectively. The default action type for this
-adapter is `ee`.
+There is no `checkpoints/<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>-<seed>/` convention here: point the checkpoint path expected by `deploy.yml` (`ckpt_path`) at the trained run for evaluation. Relative `hy_root` and `ckpt_path` values are resolved against this policy directory and `hy_root`, respectively.
 
-## Deployment and Evaluation
-
-What it does: serves the policy through XPolicyLab and connects it to a RoboDojo evaluation client. Use `eval.sh` for a same-machine smoke test, or split server/client scripts for debugging and multi-machine evaluation.
-
-Parameters used by `eval.sh`:
-
-| Parameter | Description |
-|---|---|
-| `bench_name` | Benchmark or dataset family, usually `RoboDojo`. |
-| `task_name` | RoboDojo simulation task to evaluate, for example `stack_bowls`. |
-| `ckpt_name` | Checkpoint/run directory name. Resolution checks an explicit path, `checkpoints/`, and `Hy-VLA-RoboDojo-v3/` before falling back to `deploy.yml` `ckpt_path`. |
-| `env_cfg_type` | Robot/environment configuration, for example `arx_x5`. |
-| `action_type` | Action representation; default and tested path is `ee`. |
-| `seed` | Evaluation seed. |
-| `policy_gpu_id` | GPU used by the policy server. |
-| `env_gpu_id` | GPU used by the RoboDojo simulation client. |
-| `policy_uv_env` | `uv` or an explicit Hy-Embodied project path for the policy server. |
-| `eval_env_conda_env` | Conda environment for RoboDojo simulation/client. |
+## Evaluation
 
 ```bash
 cd XPolicyLab/policy/Hy_Embodied_05_VLA
-# Template: run same-machine policy server and RoboDojo environment client.
-bash eval.sh <bench_name> <task_name> <ckpt_name> <env_cfg_type> <action_type> <seed> <policy_gpu_id> <env_gpu_id> <policy_uv_env> <eval_env_conda_env>
+bash eval.sh <bench_name> <task_name> <ckpt_name> <env_cfg_type> <action_type> <seed> \
+  <policy_gpu_id> <env_gpu_id> <policy_uv_env> <eval_env_conda_env>
 
-# Example: evaluate the default Hy-VLA checkpoint on stack_bowls.
+# Example: evaluate the default Hy-VLA checkpoint on stack_bowls
 bash eval.sh RoboDojo stack_bowls hyvla_dojo_ckpt_v3 arx_x5 ee 0 0 0 uv <eval_env_conda_env>
 ```
 
-Parameters used by the split server/client flow:
+`EVAL_ENV_TYPE=debug` runs the offline wiring check (no simulator); leave it unset or set `EVAL_ENV_TYPE=sim` for RoboDojo simulation. For split-machine deployment via `setup_eval_policy_server.sh` / `setup_eval_env_client.sh`, follow the [Deployment Flow](../../README.md#-deployment-flow).
 
-| Parameter | Description |
-|---|---|
-| `bench_name` | Benchmark or dataset family, usually `RoboDojo`. |
-| `task_name` | RoboDojo simulation task to evaluate, for example `stack_bowls`. |
-| `ckpt_name` | Checkpoint/run directory name or explicit checkpoint path. |
-| `env_cfg_type` | Robot/environment configuration, for example `arx_x5`. |
-| `action_type` | Action representation; default and tested path is `ee`. |
-| `seed` | Evaluation seed. |
-| `policy_gpu_id` | GPU used by the policy server. |
-| `env_gpu_id` | GPU used by the RoboDojo simulation client. |
-| `policy_uv_env` | `uv` or an explicit Hy-Embodied project path for the policy server. |
-| `eval_env_conda_env` | Conda environment for RoboDojo simulation/client. |
-| `policy_server_port` | Port exposed by the policy server, for example `5000`. |
-| `policy_server_host` | Server bind host, for example `0.0.0.0` on the policy machine. |
-| `policy_server_ip` | IP or hostname that the environment client uses to reach the policy server. |
-| `additional_info` | Comma-separated runtime labels passed to the eval client, for example `ckpt_name=...,action_type=ee`. |
+`ckpt_name` resolution checks an explicit path, `checkpoints/`, and `Hy-VLA-RoboDojo-v3/` before falling back to `deploy.yml` `ckpt_path`.
 
-```bash
-cd XPolicyLab/policy/Hy_Embodied_05_VLA
-# Terminal 1 on the policy machine: start the policy server.
-bash setup_eval_policy_server.sh \
-  <bench_name> <task_name> <ckpt_name> <env_cfg_type> <action_type> <seed> \
-  <policy_gpu_id> <policy_uv_env> <policy_server_port> <policy_server_host>
-
-# Example: bind the policy server to all interfaces on port 5000.
-bash setup_eval_policy_server.sh \
-  RoboDojo stack_bowls hyvla_dojo_ckpt_v3 arx_x5 ee 0 \
-  0 uv 5000 0.0.0.0
-
-# Terminal 2 on the environment machine: connect RoboDojo to the policy server.
-bash setup_eval_env_client.sh \
-  <bench_name> <task_name> <ckpt_name> <env_cfg_type> <action_type> <seed> \
-  <env_gpu_id> <eval_env_conda_env> <additional_info> \
-  <policy_server_port> <policy_server_ip>
-
-# Example: connect to a policy server reachable at <policy_server_ip>:5000.
-bash setup_eval_env_client.sh \
-  RoboDojo stack_bowls hyvla_dojo_ckpt_v3 arx_x5 ee 0 \
-  0 <eval_env_conda_env> "ckpt_name=hyvla_dojo_ckpt_v3,action_type=ee" \
-  5000 <policy_server_ip>
-```
-
-Set `EVAL_ENV_TYPE=debug` for offline shape/IO checks when the adapter supports it; leave it unset or set `EVAL_ENV_TYPE=sim` for RoboDojo simulation.
-
-## Important Parameters
-
-Common parameter meanings used across the commands above:
-
-| Parameter | Description |
-|---|---|
-| `bench_name` | Benchmark or dataset family, usually `RoboDojo`. |
-| `task_name` | RoboDojo simulation task to evaluate, for example `stack_bowls`. |
-| `ckpt_name` | Checkpoint/run directory name or explicit checkpoint path. |
-| `env_cfg_type` | Robot/environment configuration, for example `arx_x5`. |
-| `action_type` | Action representation; this adapter is tested with `ee`. |
-| `seed` | Evaluation seed. |
-| `policy_gpu_id` | GPU used by the policy server. |
-| `env_gpu_id` | GPU used by the RoboDojo simulation client. |
-| `policy_uv_env` | `uv` to read `deploy.yml` `policy_uv_env_path`, or an explicit Hy-Embodied project path for the policy server. |
-| `eval_env_conda_env` | Conda environment for RoboDojo simulation/client. |
+## Configuration
 
 Policy-specific `deploy.yml` keys worth checking before evaluation:
 
 | Key | Notes |
 |---|---|
-| `policy_name` | Runtime or checkpoint option consumed by this adapter. |
 | `hy_root` | Hy-Embodied source tree. Relative paths resolve against this policy directory; `$HY_VLA_ROOT` is used when this key is empty. |
 | `ckpt_path` | Default checkpoint directory. Relative paths resolve against `hy_root`. |
 | `norm_path` | Optional normalization stats path. Relative paths resolve against `hy_root`; empty uses `$HY_VLA_NORM_PATH`, then `<ckpt_path>/norm_stats.pkl`. |
-| `with_absolute` | Runtime or checkpoint option consumed by this adapter. |
-| `blend_mode` | Runtime or checkpoint option consumed by this adapter. |
-| `exc_action_size` | Runtime or checkpoint option consumed by this adapter. |
-| `exc_action_interval` | Runtime or checkpoint option consumed by this adapter. |
-| `img_history_size` | Runtime or checkpoint option consumed by this adapter. |
-| `img_history_interval` | Runtime or checkpoint option consumed by this adapter. |
-| `policy_uv_env_path` | Runtime or checkpoint option consumed by this adapter. |
 
-Frequently used environment variables detected in the adapter scripts:
+Additional keys consumed by the adapter: `with_absolute`, `blend_mode`, `exc_action_size`, `exc_action_interval`, `img_history_size`, `img_history_interval`, `policy_uv_env_path`.
 
-| Variable | Notes |
-|---|---|
-| `CAM_HEAD` | Optional override used by the local scripts or upstream runtime. |
-| `CAM_LEFT` | Optional override used by the local scripts or upstream runtime. |
-| `CAM_RIGHT` | Optional override used by the local scripts or upstream runtime. |
-| `CHIEF_IP` | Optional override used by the local scripts or upstream runtime. |
-| `CKPT_NAME` | Optional override used by the local scripts or upstream runtime. |
-| `CONDA_BASE` | Optional override used by the local scripts or upstream runtime. |
-| `EVAL_ENV_TYPE` | Optional override used by the local scripts or upstream runtime. |
-| `EXP_ID` | Optional override used by the local scripts or upstream runtime. |
-| `EXP_ROOT` | Optional override used by the local scripts or upstream runtime. |
-| `HDF5_DIR` | Optional override used by the local scripts or upstream runtime. |
-| `HY_VLA_CKPT_PATH` | Optional override used by the local scripts or upstream runtime. |
-| `HY_VLA_NORM_PATH` | Optional override for `norm_stats.pkl` when `deploy.yml` `norm_path` is empty. |
-| `HY_VLA_ROOT` | Optional override for the Hy-Embodied source tree. |
-
-## Notes
-
-- Keep `ckpt_name` stable between data processing, training, and evaluation. For data-size ablations, encode the subset in `ckpt_name` such as `stack_bowls_50ep`.
-- `task_name` is only the evaluation task; multi-task checkpoints can be evaluated on different tasks without renaming the checkpoint directory.
-- Prefer running `setup_eval_policy_server.sh` and `setup_eval_env_client.sh` separately when debugging dependency, CUDA, or model-loading issues.
+Policy-specific environment variables: `HY_VLA_ROOT` (Hy-Embodied source tree override), `HY_VLA_NORM_PATH` (norm-stats override when `deploy.yml` `norm_path` is empty), `HY_VLA_CKPT_PATH` (optional checkpoint override).

@@ -60,7 +60,7 @@ Top-level adapters live in `policy/`. Each policy README documents that model's 
 - [GigaWorldPolicy](policy/GigaWorldPolicy/README.md), [H_RDT](policy/H_RDT/README.md), [Hy_Embodied_05_VLA](policy/Hy_Embodied_05_VLA/README.md), [InternVLA_A1](policy/InternVLA_A1/README.md), [InternVLA_A1_5](policy/InternVLA_A1_5/README.md), [LDA_1B](policy/LDA_1B/README.md)
 - [LingBot_VA](policy/LingBot_VA/README.md), [LingBot_VLA](policy/LingBot_VLA/README.md), [Mem_0](policy/Mem_0/README.md), [MolmoACT2](policy/MolmoACT2/README.md)
 - [OpenVLA_OFT](policy/OpenVLA_OFT/README.md), [Pi_0](policy/Pi_0/README.md), [Pi_05](policy/Pi_05/README.md), [Pi_0_Fast](policy/Pi_0_Fast/README.md), [RDT_1B](policy/RDT_1B/README.md), [RISE](policy/RISE/README.md)
-- [SmolVLA](policy/SmolVLA/README.md), [Spatial_Forcing](policy/Spatial_Forcing/README.md), [Spirit_v15](policy/Spirit_v15/README.md), [TinyVLA](policy/TinyVLA/README.md), [X_VLA](policy/X_VLA/README.md), [X_WAM](policy/X_WAM/README.md), [Xiaomi_Robotics_0](policy/Xiaomi_Robotics_0/README.md), [Xiaomi_Robotics_1](policy/Xiaomi_Robotics_1), [starVLA](policy/starVLA/README.md)
+- [SmolVLA](policy/SmolVLA/README.md), [Spatial_Forcing](policy/Spatial_Forcing/README.md), [Spirit_v15](policy/Spirit_v15/README.md), [TinyVLA](policy/TinyVLA/README.md), [X_VLA](policy/X_VLA/README.md), [X_WAM](policy/X_WAM/README.md), [Xiaomi_Robotics_0](policy/Xiaomi_Robotics_0/README.md), [Xiaomi_Robotics_1](policy/Xiaomi_Robotics_1/README.md), [starVLA](policy/starVLA/README.md)
 
 **Baselines and examples**
 
