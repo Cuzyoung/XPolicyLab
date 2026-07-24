@@ -70,7 +70,7 @@ Top-level adapters live in `policy/`. Each policy README documents that model's 
 
 ## 📤 Submit Your Policy
 
-Community policies are welcome — open a PR that adds `policy/<POLICY>/`. A PR is also **required** to enter the official [RoboDojo](https://robodojo-benchmark.com/LeaderBoard) and [RoboTwin](https://robotwin-platform.github.io/leaderboard) leaderboards, together with the checkpoint that reproduces your results.
+Community policies are welcome — open a PR that adds `policy/<POLICY>/`. A PR is also **required** to enter the official [RoboDojo](https://robodojo-benchmark.com/LeaderBoard) and [RoboTwin](https://robotwin-platform.github.io/leaderboard) leaderboards, together with the checkpoint that reproduces your results. The full adapter standard, testing steps, and PR description template live in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 PR rules:
 
@@ -138,7 +138,7 @@ The fastest way to add a model is to copy the reference adapter, keep the XPolic
 <details>
 <summary>Using a coding agent</summary>
 
-This repo ships a Cursor Agent Skill at [.cursor/skills/xpolicylab-model-integration](.cursor/skills/xpolicylab-model-integration/SKILL.md) — Cursor picks it up automatically when you ask an agent to integrate a policy, so a prompt like "Integrate <POLICY_NAME> into XPolicyLab" is enough. For other agents, paste this checklist:
+This repo ships Cursor Agent Skills under [.cursor/skills](.cursor/skills): `xpolicylab-model-integration` builds an adapter (a prompt like "Integrate <POLICY_NAME> into XPolicyLab" is enough), and `xpolicylab-adapter-check` audits one against [CONTRIBUTING.md](CONTRIBUTING.md) before a PR ("Check policy/<POLICY_NAME>"). Cursor picks them up automatically. For other agents, paste this checklist:
 
 ```text
 Integrate <POLICY_NAME> into XPolicyLab.
