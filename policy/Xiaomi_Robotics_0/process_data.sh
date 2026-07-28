@@ -160,7 +160,7 @@ python "${POLICY_DIR}/scripts/generate_data_config.py" \
   "${converted_data_root}/action_stats.json" \
   "${XR0_ROOT}/configs/data/${data_config_name}.yaml" \
   --json_dir "${converted_data_root}/json" \
-  --batch_size "${XR0_BATCH_SIZE:-16}"
+  --batch_size "${XR0_BATCH_SIZE:-32}"
 
 if [[ -d "${converted_data_root}/.raw_staging" ]]; then
   rm -rf "${converted_data_root}/.raw_staging"

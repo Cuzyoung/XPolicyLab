@@ -54,7 +54,7 @@ export GRADIENT_ACCUMULATION_STEPS="${ABOT_GRAD_ACC:-1}"
 export NUM_WORKERS="${ABOT_NUM_WORKERS:-0}"
 # RoboDojo_sim_v21_video_abot is AV1 encoded, so torchvision_av is required; decord cannot decode it
 export VIDEO_BACKEND="${ABOT_VIDEO_BACKEND:-torchvision_av}"
-export MAX_TRAIN_STEPS="${ABOT_MAX_TRAIN_STEPS:-150000}"
+export MAX_TRAIN_STEPS="${ABOT_MAX_TRAIN_STEPS:-100000}"
 export SAVE_INTERVAL="${ABOT_SAVE_INTERVAL:-10000}"
 
 mkdir -p "${ckpt_dir}"

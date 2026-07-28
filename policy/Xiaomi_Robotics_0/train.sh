@@ -79,5 +79,5 @@ bash scripts/train.sh \
   "trainer.seed=${seed}" \
   "model.params.model.pretrained=${pretrained_path}" \
   "model.params.model.async_train=${XR0_ASYNC_TRAIN:-false}" \
-  "trainer.max_steps=${XR0_MAX_STEPS:-30000}" \
+  "trainer.max_steps=${XR0_MAX_STEPS:-100000}" \
   "trainer.save_interval=${XR0_SAVE_INTERVAL:-5000}"

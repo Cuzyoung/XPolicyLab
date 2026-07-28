@@ -1,9 +1,9 @@
 data = dict(
     params=dict(
-        max_steps=30000,
+        max_steps=100000,
         train_datasets=dict(
             action_length=30,
-            batch_size=16,
+            batch_size=32,
             mean=[
                 [
                     0.003474651137366891,
@@ -2082,7 +2082,7 @@ trainer = dict(
     exp_name='robodojo_sim',
     gradient_clip_algorithm='norm',
     gradient_clip_val=1.0,
-    max_steps=30000,
+    max_steps=100000,
     num_nodes=1,
     optimizer=dict(
         params=dict(betas=[
@@ -2098,7 +2098,7 @@ trainer = dict(
         params=dict(
             max_lr=0.0001,
             min_lr=5e-07,
-            num_training_steps=30000,
+            num_training_steps=100000,
             num_warmup_steps=2000,
             warmup_lr_start=5e-07),
         type='mibot.utils.cosine_warmup.get_cosine_schedule_with_warmup'),
