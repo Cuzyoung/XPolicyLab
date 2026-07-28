@@ -37,7 +37,7 @@ deepspeed --master_port 29600 --num_gpus=8 --num_nodes=1 ./train_tinyvla.py \
   --group_by_modality_length False \
   --bf16 True \
   --output_dir $OUTPUT \
-  --max_steps 10000 \
+  --max_steps 60000 \
   --per_device_train_batch_size 32 \
   --gradient_accumulation_steps 1 \
   --save_strategy "steps" \

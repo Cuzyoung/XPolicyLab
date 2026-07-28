@@ -15,7 +15,7 @@ gpu_id=$6
 
 # Batch config (single source of truth):
 #   global_batch = DM0_BATCH_SIZE * NUM_GPUS * DM0_GRAD_ACCUM
-export DM0_GLOBAL_BATCH_SIZE="${DM0_GLOBAL_BATCH_SIZE:-64}"
+export DM0_GLOBAL_BATCH_SIZE="${DM0_GLOBAL_BATCH_SIZE:-32}"
 export DM0_BATCH_SIZE="${DM0_BATCH_SIZE:-4}"
 export DM0_MAX_STEPS="${DM0_MAX_STEPS:-100000}"
 

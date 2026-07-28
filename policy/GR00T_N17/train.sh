@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GLOBAL_BATCH_SIZE=640 MAX_STEPS=60000 bash train.sh RoboDojo cotrain arx_x5 joint 0 0,1,2,3,4,5,6,7
+# GLOBAL_BATCH_SIZE=640 MAX_STEPS=100000 bash train.sh RoboDojo cotrain arx_x5 joint 0 0,1,2,3,4,5,6,7
 
 set -euo pipefail
 
@@ -67,7 +67,7 @@ fi
 
 mkdir -p "${output_dir}"
 
-MAX_STEPS="${MAX_STEPS:-60000}"
+MAX_STEPS="${MAX_STEPS:-100000}"
 SAVE_STEPS="${SAVE_STEPS:-1000}"
 GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-640}"
 USE_WANDB="${USE_WANDB:-0}"

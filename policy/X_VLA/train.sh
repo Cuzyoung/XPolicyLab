@@ -33,7 +33,7 @@ accelerate launch \
     --train_metas_path "${meta_path}" \
     --learning_rate 1e-4 \
     --learning_coef 0.1 \
-    --iters 30000 \
+    --iters 100000 \
     --freeze_steps 1000 \
     --warmup_steps 2000 \
     --batch_size 32 \

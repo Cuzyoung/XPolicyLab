@@ -43,7 +43,7 @@ lerobot-train \
   --output_dir=${OUTPUT_DIR} \
   --job_name=${JOB_NAME} \
   --policy.device=cuda \
-  --batch_size=64 \
+  --batch_size=512 \
   --steps=100000 \
   --save_freq=10000 \
   --log_freq=10 \
