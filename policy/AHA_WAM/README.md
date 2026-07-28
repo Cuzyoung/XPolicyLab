@@ -44,6 +44,7 @@ If preprocessing fails on unresolved Hydra placeholders in `configs/model/ahawam
 cd XPolicyLab/policy/AHA_WAM
 export AHA_WAM_TRAIN_DATASET_DIR=/path/to/RoboDojo_lerobot_v21_video
 export DIFFSYNTH_MODEL_BASE_PATH=/path/to/diffsynth/model/cache
+export AHA_WAM_RESUME=/path/to/official-compatible/states_5000
 
 bash train.sh <bench_name> <ckpt_name> <env_cfg_type> <action_type> <seed> <gpu_id>
 
@@ -52,6 +53,12 @@ bash train.sh RoboDojo cotrain arx_x5 joint 0 0
 ```
 
 Checkpoints land in `checkpoints/<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>-<seed>/`; at eval time `ckpt_name` may be the short run name, the full run-directory name, or a path. The training dataset must contain `meta/`, `dataset_stats.json`, and a T5 text-embedding cache at `text_embeds_cache/` unless overridden via `AHA_WAM_TRAIN_DATASET_STATS_PATH` / `AHA_WAM_TEXT_EMBED_CACHE_DIR`. Multi-process count is inferred from a comma-separated `gpu_id`.
+
+The default task is `robodojo_ahawam_finetune_32_kv_xpolicy`: batch size 8,
+gradient accumulation 2, learning rate `1e-5`, 32 epochs / 30,000 max steps,
+and GC every 50 optimizer steps. Set `AHA_WAM_RESUME` to the reference
+`states_5000`-compatible state for a true official-style finetune; an unset
+resume starts from the configured base weights and is not equivalent.
 
 ## Evaluation
 
@@ -64,7 +71,7 @@ bash eval.sh <bench_name> <task_name> <ckpt_name> <env_cfg_type> <action_type> <
 bash eval.sh RoboDojo stack_bowls RoboDojo-cotrain-arx_x5-joint-0 arx_x5 joint 0 0 0 <policy_conda_env> <eval_env_conda_env>
 ```
 
-`EVAL_ENV_TYPE=debug` runs the offline wiring check (no simulator); leave it unset or set `EVAL_ENV_TYPE=sim` for RoboDojo simulation. For split-machine deployment via `setup_eval_policy_server.sh` / `setup_eval_env_client.sh`, follow the [Deployment Flow](../../README.md#-deployment-flow).
+`EVAL_ENV_TYPE=debug` runs the offline wiring check (no simulator); leave it unset or set `EVAL_ENV_TYPE=sim` for RoboDojo simulation. AHA-WAM batch evaluation is intentionally disabled because one model instance owns one mutable history state; use one policy-server process per environment. For split-machine deployment via `setup_eval_policy_server.sh` / `setup_eval_env_client.sh`, follow the [Deployment Flow](../../README.md#-deployment-flow).
 
 ## Configuration
 
@@ -86,7 +93,7 @@ Environment variables used by the adapter scripts:
 | `AHA_WAM_ENV_CFG_ROOT` | Optional env config root; defaults to `<repo>/env_cfg`. |
 | `AHA_WAM_APPTAINER_IMAGE` | Optional Apptainer image for the policy server. |
 | `AHA_WAM_APPTAINER_BINDS` | Optional Apptainer bind arguments when using `AHA_WAM_APPTAINER_IMAGE`. |
-| `AHA_WAM_CHUNKS_PER_VIDEO_PREFILL` | Optional video prefill cadence; default is `4`. |
+| `AHA_WAM_CHUNKS_PER_VIDEO_PREFILL` | Optional video prefill cadence; official RobotWin-style default is `2`. |
 | `AHA_WAM_ALLOW_DUMMY_POLICY` | Debug-only option to skip real checkpoint/stats loading. |
 | `AHA_WAM_DEBUG_EVAL_EPISODE_NUM` | Debug-client episode count override. |
 | `XPOLICYLAB_BENCH_ROOT` | Optional client `--root_dir` override; defaults to the RoboDojo repo root. |

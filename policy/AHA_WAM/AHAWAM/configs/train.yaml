@@ -28,10 +28,14 @@ gradient_accumulation_steps: 1
 mixed_precision: "bf16" # one of: [no, fp16, bf16]
 seed: 42
 max_grad_norm: 1.0
+manual_gc_every: 1
 weight_decay: 0.0
 freeze_video_dit: false
 resume: null
 init_checkpoint: null
+# Set false when the dataset/config changed: model, optimizer, scheduler, and
+# random states are restored, while sampler progress restarts from epoch 0.
+resume_dataloader_state: true
 # Cross-config resume: total batch size (batch_size * num_gpus * grad_accum)
 # of the source run. Steps are converted proportionally when this differs
 # from the current global batch size.

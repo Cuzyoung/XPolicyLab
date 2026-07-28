@@ -3,7 +3,11 @@ import numpy as np
 from pathlib import Path
 from typing import List, Literal, Dict, Optional, Any, DefaultDict
 from tqdm import tqdm
-from .lerobot.lerobot_dataset import LeRobotDatasetMetadata, MultiLeRobotDataset
+from .lerobot.lerobot_dataset import (
+    LeRobotDatasetMetadata,
+    MultiLeRobotDataset,
+    get_lerobot_repo_id_for_root,
+)
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import traceback
@@ -13,6 +17,32 @@ from .processors.base_processor import BaseProcessor
 logger = get_logger(__name__)
 
 MAX_GETITEM_ATTEMPT = 5
+
+
+def expand_lerobot_dataset_dirs(dataset_dirs: List[str]) -> List[str]:
+    """Accept dataset leaves or a parent directory containing several datasets."""
+    expanded: List[str] = []
+    seen = set()
+    for dataset_dir in dataset_dirs:
+        root = Path(dataset_dir)
+        if (root / "meta" / "info.json").is_file():
+            candidates = [root]
+        elif root.is_dir():
+            candidates = sorted(
+                path.parent.parent
+                for path in root.rglob("meta/info.json")
+                if path.is_file()
+            )
+        else:
+            candidates = [root]
+
+        for candidate in candidates:
+            candidate_str = str(candidate)
+            if candidate_str not in seen:
+                expanded.append(candidate_str)
+                seen.add(candidate_str)
+    return expanded
+
 
 class BaseLerobotDataset(torch.utils.data.Dataset):
     def __init__(
@@ -34,22 +64,23 @@ class BaseLerobotDataset(torch.utils.data.Dataset):
         # sampling
         global_sample_stride: int = 1,
         image_sample_indices: Optional[List[int]] = None,
+        skip_missing_episode_files: bool = False,
     ):
         assert len(dataset_dirs) > 0, "At least one dataset directory is required"
         assert past_action_size == 0
         assert past_obs_size == 0
         assert action_size == obs_size - 1, "In this dataset, action_size should be obs_size - 1"
         
-        self.dataset_dirs = dataset_dirs
+        self.dataset_dirs = expand_lerobot_dataset_dirs(dataset_dirs)
         self.shape_meta = shape_meta
         self.action_size = action_size
         self.past_action_size = past_action_size
         self.obs_size = obs_size
         self.processor = None  # Will be set externally
         metas = []
-        for ds_dir in dataset_dirs:
+        for ds_dir in self.dataset_dirs:
             ds_root = Path(ds_dir)
-            repo_id = ds_dir
+            repo_id = get_lerobot_repo_id_for_root(ds_dir, ds_root)
             meta = LeRobotDatasetMetadata(repo_id=repo_id, root=ds_root)
             metas.append(meta)
 
@@ -66,6 +97,7 @@ class BaseLerobotDataset(torch.utils.data.Dataset):
 
         self.val_set_proportion = val_set_proportion
         self.is_training_set = is_training_set
+        self.skip_missing_episode_files = bool(skip_missing_episode_files)
 
         self.image_meta = shape_meta["images"]
         self.state_meta = shape_meta["state"]
@@ -74,7 +106,10 @@ class BaseLerobotDataset(torch.utils.data.Dataset):
         delta_timestamps = {}
         for meta in self.image_meta:
             key = meta["key"]
-            meta["lerobot_key"] = f"observation.images.{key}" if key != "default" else "observation.images"
+            meta["lerobot_key"] = meta.get(
+                "lerobot_key",
+                f"observation.images.{key}" if key != "default" else "observation.images",
+            )
             image_steps = (
                 self.image_sample_indices
                 if self.image_sample_indices is not None
@@ -86,20 +121,30 @@ class BaseLerobotDataset(torch.utils.data.Dataset):
         
         for meta in self.state_meta:
             key = meta["key"]
-            meta["lerobot_key"] = f"observation.state.{key}" if key != "default" else "observation.state"
+            meta["lerobot_key"] = meta.get(
+                "lerobot_key",
+                f"observation.state.{key}" if key != "default" else "observation.state",
+            )
             delta_timestamps[meta["lerobot_key"]] = [
                 (t * global_sample_stride) / fps for t in range(-past_obs_size, -past_obs_size + obs_size)
             ]
         
         for meta in self.action_meta:
             key = meta["key"]
-            meta["lerobot_key"] = f"action.{key}" if key != "default" else "action"
+            meta["lerobot_key"] = meta.get(
+                "lerobot_key",
+                f"action.{key}" if key != "default" else "action",
+            )
             delta_timestamps[meta["lerobot_key"]] = [(t * global_sample_stride) / fps for t in range(-past_action_size, -past_action_size + action_size)]
 
         episodes = {}
         if val_set_proportion < 1e-6:
             for meta in metas:
-                episodes.update({meta.repo_id: list(range(meta.total_episodes))})
+                episode_indices = self._filter_available_episodes(
+                    meta, list(range(meta.total_episodes))
+                )
+                if episode_indices:
+                    episodes.update({meta.repo_id: episode_indices})
         else:
             for meta in metas:
                 split_idx = int(meta.total_episodes * (1 - val_set_proportion))
@@ -108,9 +153,27 @@ class BaseLerobotDataset(torch.utils.data.Dataset):
                 rng = np.random.default_rng(seed)
                 rng.shuffle(episode_indices)
                 if self.is_training_set:
-                    episodes.update({meta.repo_id: [episode_indices[i] for i in range(split_idx)]})
+                    selected_episodes = [episode_indices[i] for i in range(split_idx)]
                 else:
-                    episodes.update({meta.repo_id: [episode_indices[i] for i in range(split_idx, meta.total_episodes)]})
+                    selected_episodes = [
+                        episode_indices[i]
+                        for i in range(split_idx, meta.total_episodes)
+                    ]
+                selected_episodes = self._filter_available_episodes(
+                    meta, selected_episodes
+                )
+                if selected_episodes:
+                    episodes.update({meta.repo_id: selected_episodes})
+
+        if not episodes:
+            raise RuntimeError(
+                "No valid episodes remain after applying train/val split"
+                + (
+                    " and missing-file filtering."
+                    if self.skip_missing_episode_files
+                    else "."
+                )
+            )
 
         self.multi_dataset = MultiLeRobotDataset(
             dataset_dirs=self.dataset_dirs,
@@ -133,6 +196,37 @@ class BaseLerobotDataset(torch.utils.data.Dataset):
             "from": torch.cat([dataset["from"] for dataset in episode_data_index]),
             "to": torch.cat([dataset["to"] for dataset in episode_data_index]),
         }
+
+    def _filter_available_episodes(
+        self,
+        meta: LeRobotDatasetMetadata,
+        episode_indices: list[int],
+    ) -> list[int]:
+        if not self.skip_missing_episode_files:
+            return episode_indices
+
+        valid = []
+        missing_count = 0
+        for ep_idx in episode_indices:
+            required_files = [meta.root / meta.get_data_file_path(ep_idx)]
+            required_files.extend(
+                meta.root / meta.get_video_file_path(ep_idx, video_key)
+                for video_key in meta.video_keys
+            )
+            if all(path.is_file() for path in required_files):
+                valid.append(ep_idx)
+            else:
+                missing_count += 1
+
+        if missing_count:
+            logger.warning(
+                "Skipping %d/%d episodes in %s because referenced parquet/video "
+                "files are missing.",
+                missing_count,
+                len(episode_indices),
+                meta.root,
+            )
+        return valid
 
     def _get_action(self, meta, lerobot_sample) -> torch.Tensor:
         key, lerobot_key, raw_shape = meta["key"], meta["lerobot_key"], meta["raw_shape"]

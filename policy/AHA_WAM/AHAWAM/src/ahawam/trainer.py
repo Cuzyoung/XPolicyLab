@@ -49,12 +49,14 @@ class Wan22Trainer:
         self.eval_num_inference_steps = int(cfg.eval_num_inference_steps)
         self.gradient_accumulation_steps = int(cfg.gradient_accumulation_steps)
         self.max_grad_norm = float(cfg.max_grad_norm)
+        self.manual_gc_every = int(cfg.get("manual_gc_every", 1))
         self.seed = int(cfg.seed)
         self.history_aware_batching = bool(cfg.get("history_aware_batching", False))
         self.freeze_video_dit = bool(cfg.get("freeze_video_dit", False))
 
         self.resume = cfg.resume
         self.resume_global_batch_size = cfg.get("resume_global_batch_size", None)
+        self.resume_dataloader_state = bool(cfg.get("resume_dataloader_state", True))
         self.init_checkpoint = cfg.get("init_checkpoint", None)
         self.mixed_precision = str(cfg.mixed_precision).strip().lower()
         if self.mixed_precision not in {"no", "fp16", "bf16"}:
@@ -89,7 +91,7 @@ class Wan22Trainer:
             zero_stage = "n/a"
 
         logger.info(
-            "Accelerate training: distributed_type=%s zero_stage=%s world_size=%d process_index=%d cfg_mixed_precision=%s accelerator_mixed_precision=%s grad_accum=%d grad_clip=%.4f",
+            "Accelerate training: distributed_type=%s zero_stage=%s world_size=%d process_index=%d cfg_mixed_precision=%s accelerator_mixed_precision=%s grad_accum=%d grad_clip=%.4f manual_gc_every=%d",
             self.accelerator.distributed_type,
             zero_stage,
             self.accelerator.num_processes,
@@ -98,6 +100,7 @@ class Wan22Trainer:
             self.accelerator.mixed_precision,
             self.gradient_accumulation_steps,
             self.max_grad_norm,
+            self.manual_gc_every,
         )
         logger.info("using accelerator.device=%s", self.accelerator.device)
         worker_init_fn = set_global_seed(self.seed, get_worker_init_fn=True)
@@ -123,6 +126,7 @@ class Wan22Trainer:
         self._load_weights_before_prepare()
 
         trainable_params = [p for p in self.model.dit.parameters() if p.requires_grad]
+        dit_trainable_param_count = sum(p.numel() for p in trainable_params)
         extra_trainable_modules: list[nn.Module] = []
         get_extra_modules = getattr(
             self.model, "get_additional_trainable_modules", None
@@ -141,11 +145,18 @@ class Wan22Trainer:
                 extra_trainable_modules.append(proprio_encoder)
         for module in extra_trainable_modules:
             trainable_params.extend(p for p in module.parameters() if p.requires_grad)
+        trainable_param_count = sum(p.numel() for p in trainable_params)
         if not trainable_params:
             raise ValueError(
                 "No trainable parameters remain after applying freeze settings. "
                 "Disable `freeze_video_dit` or enable another trainable module."
             )
+        logger.info(
+            "Trainable parameters: total=%.3fB dit=%.3fB extra=%.3fM",
+            trainable_param_count / 1e9,
+            dit_trainable_param_count / 1e9,
+            (trainable_param_count - dit_trainable_param_count) / 1e6,
+        )
         self.optimizer = torch.optim.AdamW(
             trainable_params,
             lr=self.learning_rate,
@@ -216,6 +227,7 @@ class Wan22Trainer:
             "forward_time": 0.0,
             "backward_time": 0.0,
             "optimizer_time": 0.0,
+            "gc_time": 0.0,
         }
 
     def _update_profile_window(
@@ -225,12 +237,14 @@ class Wan22Trainer:
         forward_time: float,
         backward_time: float,
         optimizer_time: float,
+        gc_time: float,
     ):
         self._profile_window["steps"] += 1
         self._profile_window["data_time"] += float(data_time)
         self._profile_window["forward_time"] += float(forward_time)
         self._profile_window["backward_time"] += float(backward_time)
         self._profile_window["optimizer_time"] += float(optimizer_time)
+        self._profile_window["gc_time"] += float(gc_time)
 
     def _consume_profile_window(self):
         steps = max(int(self._profile_window["steps"]), 1)
@@ -239,6 +253,7 @@ class Wan22Trainer:
             "forward_time": self._profile_window["forward_time"] / steps,
             "backward_time": self._profile_window["backward_time"] / steps,
             "optimizer_time": self._profile_window["optimizer_time"] / steps,
+            "gc_time": self._profile_window["gc_time"] / steps,
         }
         self._profile_window = self._reset_profile_window()
         return profile
@@ -282,16 +297,30 @@ class Wan22Trainer:
         self.wandb_run = None
 
     def _build_loader(self, dataset, worker_init_fn=None):
-        sampler_cls = ResumableEpochSampler
-        if self.history_aware_batching:
-            sampler_cls = HistoryAwareResumableEpochSampler
-            logger.info("Using history-aware train sampler.")
-        self.train_sampler = sampler_cls(
-            dataset=dataset,
-            seed=self.seed,
-            batch_size=self.batch_size,
-            num_processes=self.accelerator.num_processes,
-        )
+        build_train_sampler = getattr(dataset, "build_train_sampler", None)
+        if callable(build_train_sampler):
+            self.train_sampler = build_train_sampler(
+                seed=self.seed,
+                batch_size=self.batch_size,
+                num_processes=self.accelerator.num_processes,
+                gradient_accumulation_steps=self.gradient_accumulation_steps,
+                max_steps=self.max_steps,
+            )
+            logger.info(
+                "Using dataset-provided train sampler: %s",
+                type(self.train_sampler).__name__,
+            )
+        else:
+            sampler_cls = ResumableEpochSampler
+            if self.history_aware_batching:
+                sampler_cls = HistoryAwareResumableEpochSampler
+                logger.info("Using history-aware train sampler.")
+            self.train_sampler = sampler_cls(
+                dataset=dataset,
+                seed=self.seed,
+                batch_size=self.batch_size,
+                num_processes=self.accelerator.num_processes,
+            )
         loader_kwargs = {
             "dataset": dataset,
             "batch_size": self.batch_size,
@@ -401,6 +430,13 @@ class Wan22Trainer:
         eta_h, eta_rem = divmod(eta_seconds, 3600)
         eta_m, eta_s = divmod(eta_rem, 60)
         return f"{eta_h:02d}:{eta_m:02d}:{eta_s:02d}", steps_per_sec
+
+    def _samples_per_optimizer_step(self) -> int:
+        return (
+            self.batch_size
+            * max(int(self.accelerator.num_processes), 1)
+            * max(int(self.gradient_accumulation_steps), 1)
+        )
 
     def _load_weights_before_prepare(self):
         """Load model weights BEFORE accelerator.prepare() to ensure DeepSpeed
@@ -1002,7 +1038,11 @@ class Wan22Trainer:
                 payload = json.load(f)
             self.global_step = int(payload["global_step"])
 
-            if "epoch" in payload and "batch_in_epoch" in payload:
+            if (
+                self.resume_dataloader_state
+                and "epoch" in payload
+                and "batch_in_epoch" in payload
+            ):
                 self.epoch = int(payload["epoch"])
                 self.batch_in_epoch = int(payload["batch_in_epoch"])
                 self.train_sampler.set_epoch_offset(self.epoch)
@@ -1019,10 +1059,17 @@ class Wan22Trainer:
                 self.epoch = 0
                 self.batch_in_epoch = 0
                 self.train_sampler.clear_resume_batch_offset()
-                logger.warning(
-                    "State file does not contain `epoch`/`batch_in_epoch`; "
-                    "optimizer/scheduler were restored, but dataloader progress resume is skipped."
-                )
+                if self.resume_dataloader_state:
+                    logger.warning(
+                        "State file does not contain `epoch`/`batch_in_epoch`; "
+                        "optimizer/scheduler were restored, but dataloader progress resume is skipped."
+                    )
+                else:
+                    logger.warning(
+                        "Skipping dataloader progress restore because "
+                        "`resume_dataloader_state=false`; optimizer/scheduler/random "
+                        "states were restored, sampler progress restarts from epoch 0."
+                    )
             self.accelerator.wait_for_everyone()
             return
 
@@ -1091,6 +1138,7 @@ class Wan22Trainer:
                     else self.accelerator.unwrap_model(self.model)
                 )
                 data_time = data_ready_time - last_step_end_time
+                gc_time = 0.0
                 forward_start_time = time.perf_counter()
 
                 with self.accelerator.autocast():
@@ -1110,9 +1158,13 @@ class Wan22Trainer:
                     self.optimizer.zero_grad(set_to_none=True)
                     self.global_step += 1
 
-                    # Manual GC every step: promptly releases Python references to
-                    # CUDA tensors, preventing allocator fragmentation/defrag stalls.
-                    gc.collect()
+                    if (
+                        self.manual_gc_every > 0
+                        and self.global_step % self.manual_gc_every == 0
+                    ):
+                        gc_start_time = time.perf_counter()
+                        gc.collect()
+                        gc_time = time.perf_counter() - gc_start_time
                     current_lr = float(self.optimizer.param_groups[0]["lr"])
                     optimizer_time = optimizer_end_time - backward_end_time
                     should_log = (
@@ -1127,6 +1179,7 @@ class Wan22Trainer:
                     forward_time=forward_end_time - forward_start_time,
                     backward_time=backward_end_time - forward_end_time,
                     optimizer_time=optimizer_time,
+                    gc_time=gc_time,
                 )
                 last_step_end_time = time.perf_counter()
 
@@ -1174,19 +1227,18 @@ class Wan22Trainer:
                                 % (
                                     current_lr,
                                     steps_per_sec,
-                                    steps_per_sec
-                                    * self.batch_size
-                                    * self.accelerator.num_processes,
+                                    steps_per_sec * self._samples_per_optimizer_step(),
                                     eta_str,
                                 )
                             )
                             description += (
-                                " timing(data=%.3fs fwd=%.3fs bwd=%.3fs opt=%.3fs)"
+                                " timing(data=%.3fs fwd=%.3fs bwd=%.3fs opt=%.3fs gc=%.3fs)"
                                 % (
                                     profile_metrics["data_time"],
                                     profile_metrics["forward_time"],
                                     profile_metrics["backward_time"],
                                     profile_metrics["optimizer_time"],
+                                    profile_metrics["gc_time"],
                                 )
                             )
                             lambda_state = getattr(self, "_lambda_state", None)
@@ -1202,8 +1254,7 @@ class Wan22Trainer:
                                 "train/lr": current_lr,
                                 "performance/steps_per_sec": steps_per_sec,
                                 "performance/samples_per_sec": steps_per_sec
-                                * self.batch_size
-                                * self.accelerator.num_processes,
+                                * self._samples_per_optimizer_step(),
                                 "performance/data_time_s": profile_metrics["data_time"],
                                 "performance/forward_time_s": profile_metrics[
                                     "forward_time"
@@ -1214,6 +1265,7 @@ class Wan22Trainer:
                                 "performance/optimizer_time_s": profile_metrics[
                                     "optimizer_time"
                                 ],
+                                "performance/gc_time_s": profile_metrics["gc_time"],
                             }
                             for key, value in global_loss_metrics.items():
                                 wandb_payload[f"train/{key}"] = value

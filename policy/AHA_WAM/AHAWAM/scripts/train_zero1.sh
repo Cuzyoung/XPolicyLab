@@ -28,7 +28,7 @@ MAIN_PROCESS_IP="${MASTER_ADDR:-127.0.0.1}"
 MAIN_PROCESS_PORT="${MASTER_PORT:-29500}"
 DEEPSPEED_HOSTFILE="${DEEPSPEED_HOSTFILE:-${DS_HOSTFILE:-${HOSTFILE:-}}}"
 
-DEFAULT_TASK="robodojo_local_history_updated_kv_prior_only_16"
+DEFAULT_TASK="robodojo_ahawam_finetune_32_kv_xpolicy"
 DEFAULT_MODEL="ahawam"
 is_integer() {
   [[ "${1}" =~ ^[0-9]+$ ]]

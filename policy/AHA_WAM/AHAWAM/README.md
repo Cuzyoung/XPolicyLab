@@ -12,9 +12,9 @@ baseline model variants.
   observation/action metadata, normalization stats, and text embedding cache.
 - `configs/model/ahawam.yaml`: AHA-WAM model, ActionDiT, scheduler, and loss
   defaults.
-- `configs/task/robodojo_local_history_updated_kv_prior_only_16.yaml`: the
-  training task matching the prepared RoboDojo data and 14-D joint/qpos action
-  format.
+- `configs/task/robodojo_ahawam_finetune_32_kv_xpolicy.yaml`: portable
+  XPolicyLab counterpart of the official 32-epoch RoboDojo AHA-WAM finetune
+  recipe, matching the prepared data and 14-D joint/qpos action format.
 - `scripts/train.py` and `scripts/train_zero1.sh`: Hydra and Accelerate
   launchers.
 - `src/ahawam`: package code for datasets, Wan2.2/AHA-WAM modules, and trainer.
@@ -59,12 +59,18 @@ Useful overrides:
 export AHA_WAM_TRAIN_DATASET_DIR=/path/to/RoboDojo_lerobot_v21_video
 export AHA_WAM_OUTPUT_ROOT=/path/to/checkpoints
 export AHA_WAM_INIT_CHECKPOINT=/path/to/step_xxxxxx.pt
+export AHA_WAM_RESUME=/path/to/states_5000
 export AHA_WAM_TRAIN_SEED=1
 export DIFFSYNTH_MODEL_BASE_PATH=/path/to/dualWAM/checkpoints
 ```
 
 The wrapper maps seed `0` to training seed `1`, matching the upstream AHAWAM
 requirement that seeds are positive `uint32` values.
+
+For result-level reproduction, `AHA_WAM_RESUME` must point to the same
+official-compatible training-state checkpoint used by the reference finetune.
+Leaving it unset runs the aligned recipe from the configured base weights, which
+is not numerically equivalent to the official resumed run.
 
 ### Smoke Test
 
