@@ -17,6 +17,8 @@ class WsModelClient:
         trial_id: str,
         action_case_id: str | None = None,
         repeat_index: int | None = None,
+        ws_ping_interval_s: float | None = 20.0,
+        ws_ping_timeout_s: float | None = 20.0,
         client: Any | None = None,
     ):
         self.action_case_id = action_case_id
@@ -27,7 +29,12 @@ class WsModelClient:
         self._latest_obs_batch: list[Any] | None = None
         self._loop = asyncio.new_event_loop()
         self._client = client or PolicyEvalClient(
-            PolicyEvalClientConfig(url=url, evaluation_id=evaluation_id)
+            PolicyEvalClientConfig(
+                url=url,
+                evaluation_id=evaluation_id,
+                ws_ping_interval_s=ws_ping_interval_s,
+                ws_ping_timeout_s=ws_ping_timeout_s,
+            )
         )
         self._loop.run_until_complete(self._client.connect(handshake=True))
 

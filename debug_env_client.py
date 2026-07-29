@@ -26,6 +26,8 @@ class TestEnv:
                 trial_id=deploy_cfg["trial_id"],
                 action_case_id=deploy_cfg["action_case_id"],
                 repeat_index=deploy_cfg["repeat_index"],
+                ws_ping_interval_s=deploy_cfg.get("ws_ping_interval_s", 20.0),
+                ws_ping_timeout_s=deploy_cfg.get("ws_ping_timeout_s", 20.0),
             )
         else:
             self.model_client = ModelClient(host=deploy_cfg['host'], port=deploy_cfg['port'])
