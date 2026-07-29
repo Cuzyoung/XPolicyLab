@@ -3,7 +3,7 @@ set -euo pipefail
 
 # XPolicyLab-compatible training wrapper for the aha-wam RoboDojo model.
 # It intentionally launches only the task/model used by this policy:
-#   task=robodojo_local_history_updated_kv_prior_only_16
+#   task=robodojo_ahawam_finetune_32_kv_xpolicy
 #   model=ahawam
 #
 # Usage:
@@ -41,7 +41,7 @@ fi
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 POLICY_DIR="${ROOT_DIR}/XPolicyLab/policy/AHA_WAM"
 AHA_WAM_PROJECT_ROOT="${AHA_WAM_PROJECT_ROOT:-${POLICY_DIR}/AHAWAM}"
-TASK_CONFIG="${AHA_WAM_TASK_CONFIG:-robodojo_local_history_updated_kv_prior_only_16}"
+TASK_CONFIG="${AHA_WAM_TASK_CONFIG:-robodojo_ahawam_finetune_32_kv_xpolicy}"
 DATASET_DIR="${AHA_WAM_TRAIN_DATASET_DIR:?set AHA_WAM_TRAIN_DATASET_DIR to your RoboDojo LeRobot dataset dir}"
 DATASET_STATS_PATH="${AHA_WAM_TRAIN_DATASET_STATS_PATH:-${DATASET_DIR}/dataset_stats.json}"
 TEXT_CACHE_DIR="${AHA_WAM_TEXT_EMBED_CACHE_DIR:-${DATASET_DIR}/text_embeds_cache}"
@@ -52,11 +52,13 @@ ckpt_setting="${bench_name}-${ckpt_name}-${env_cfg_type}-${action_type}-${seed}"
 RUN_ID="${RUN_ID:-${ckpt_setting}}"
 
 batch_size="${AHA_WAM_BATCH_SIZE:-8}"
-gradient_accumulation_steps="${AHA_WAM_GRADIENT_ACCUMULATION_STEPS:-8}"
-num_workers="${AHA_WAM_NUM_WORKERS:-8}"
-num_epochs="${AHA_WAM_NUM_EPOCHS:-20}"
-max_steps="${AHA_WAM_MAX_STEPS:-null}"
-learning_rate="${AHA_WAM_LEARNING_RATE:-6e-6}"
+gradient_accumulation_steps="${AHA_WAM_GRADIENT_ACCUMULATION_STEPS:-2}"
+num_workers="${AHA_WAM_NUM_WORKERS:-6}"
+num_epochs="${AHA_WAM_NUM_EPOCHS:-32}"
+max_steps="${AHA_WAM_MAX_STEPS:-30000}"
+learning_rate="${AHA_WAM_LEARNING_RATE:-1e-5}"
+manual_gc_every="${AHA_WAM_MANUAL_GC_EVERY:-50}"
+resume_dataloader_state="${AHA_WAM_RESUME_DATALOADER_STATE:-false}"
 save_every="${AHA_WAM_SAVE_EVERY:-2500}"
 eval_every="${AHA_WAM_EVAL_EVERY:-500}"
 log_every="${AHA_WAM_LOG_EVERY:-10}"
@@ -119,6 +121,8 @@ train_args=(
     "num_epochs=${num_epochs}"
     "max_steps=${max_steps}"
     "learning_rate=${learning_rate}"
+    "manual_gc_every=${manual_gc_every}"
+    "resume_dataloader_state=${resume_dataloader_state}"
     "save_every=${save_every}"
     "eval_every=${eval_every}"
     "log_every=${log_every}"

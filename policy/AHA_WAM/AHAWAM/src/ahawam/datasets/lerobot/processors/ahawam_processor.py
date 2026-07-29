@@ -108,6 +108,26 @@ class AHAWAMProcessor(BaseProcessor):
         return self
 
     def set_normalizer_from_stats(self, dataset_stats: Dict[str, Any] = None):
+        if dataset_stats is None:
+            raise ValueError(
+                "dataset_stats is None. Please set `pretrained_norm_stats` to a valid "
+                "stats JSON, or enable stats computation for this dataset."
+            )
+        for field in ("action", "state"):
+            if field not in dataset_stats or dataset_stats[field] is None:
+                raise ValueError(f"dataset_stats is missing `{field}` stats.")
+            missing_keys = [
+                meta["key"]
+                for meta in self.shape_meta.get(field, [])
+                if meta["key"] not in dataset_stats[field]
+                or dataset_stats[field][meta["key"]] is None
+            ]
+            if missing_keys:
+                available_keys = list(dataset_stats[field].keys())
+                raise ValueError(
+                    f"dataset_stats missing {field} keys {missing_keys}; "
+                    f"available keys are {available_keys}."
+                )
         self._normalizer = LinearNormalizer(
             use_stepwise_action_norm=self.use_stepwise_action_norm,
             shape_meta=self.shape_meta,

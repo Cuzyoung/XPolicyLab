@@ -203,8 +203,6 @@ class Model(ModelTemplate):
         self.pending_actions: deque[np.ndarray] = deque()
         self.last_obs = None
         self.last_instruction = self.default_instruction
-        self._batch_obs: dict[int, dict] = {}
-        self._batch_instruction: dict[int, str] = {}
         self.allow_dummy_policy = _parse_bool(self.model_cfg.get("allow_dummy_policy", False))
         self._chunks_since_video_prefill = 0
 
@@ -233,10 +231,12 @@ class Model(ModelTemplate):
             self.policy = None
             self.action_horizon = int(self.model_cfg.get("action_horizon") or 64)
             self.replan_steps = int(self.model_cfg.get("replan_steps") or 16)
+            self.action_chunk_size = int(self.model_cfg.get("action_chunk_size") or 16)
             self.chunks_per_video_prefill = int(
                 self.model_cfg.get("chunks_per_video_prefill") or max(1, self.action_horizon // self.replan_steps)
             )
-            self.video_prefill_action_horizon = self._resolve_video_prefill_action_horizon(self.replan_steps)
+            self._validate_rollout_config()
+            self.video_prefill_action_horizon = self._resolve_video_prefill_action_horizon(self.action_chunk_size)
             print("[aha-wam] allow_dummy_policy=true; real model loading is skipped.")
         else:
             from ahawam.datasets.lerobot.robot_video_dataset import DEFAULT_PROMPT
@@ -245,10 +245,11 @@ class Model(ModelTemplate):
             self.policy = self._load_policy()
             self.action_horizon = int(self.model_cfg.get("action_horizon") or self.policy.action_horizon)
             self.replan_steps = int(self.model_cfg.get("replan_steps") or self.policy.model.action_chunk_size)
-            self.replan_steps = min(self.replan_steps, int(self.policy.model.action_chunk_size))
+            self.action_chunk_size = int(self.policy.model.action_chunk_size)
+            self._validate_rollout_config()
             self.chunks_per_video_prefill = self._resolve_chunks_per_video_prefill()
             self.video_prefill_action_horizon = self._resolve_video_prefill_action_horizon(
-                int(self.policy.model.action_chunk_size)
+                self.action_chunk_size
             )
             self._warmup()
         print(
@@ -267,15 +268,25 @@ class Model(ModelTemplate):
         configs_root = self.elava_root / "configs"
         task_name = str(self.model_cfg.get("task_config") or self.model_cfg.get("sim_task"))
         overrides = [f"task={task_name}"]
-        if "prepend_episode_first_frame" in self.model_cfg:
-            overrides.append(
-                "model.prepend_episode_first_frame="
-                f"{str(_parse_bool(self.model_cfg.get('prepend_episode_first_frame'))).lower()}"
-            )
         if GlobalHydra.instance().is_initialized():
             GlobalHydra.instance().clear()
         with initialize_config_dir(version_base="1.3", config_dir=str(configs_root)):
             return compose(config_name="train.yaml", overrides=overrides)
+
+    def _validate_rollout_config(self) -> None:
+        if self.action_horizon <= 0:
+            raise ValueError(f"action_horizon must be positive, got {self.action_horizon}.")
+        if self.action_horizon % self.action_chunk_size != 0:
+            raise ValueError(
+                "action_horizon must be divisible by action_chunk_size: "
+                f"{self.action_horizon} % {self.action_chunk_size} != 0."
+            )
+        if self.replan_steps != self.action_chunk_size:
+            raise ValueError(
+                "AHA-WAM advances one complete internal action chunk per inference call; "
+                "replan_steps must therefore equal action_chunk_size: "
+                f"{self.replan_steps} != {self.action_chunk_size}."
+            )
 
     def _load_policy(self):
         from hydra.utils import instantiate
@@ -511,12 +522,11 @@ class Model(ModelTemplate):
         self.last_instruction = _get_instruction(obs, self.default_instruction)
 
     def update_obs_batch(self, obs_list):
-        self._batch_obs = {}
-        self._batch_instruction = {}
-        for obs in obs_list:
-            env_idx = int(obs["env_idx"])
-            self._batch_obs[env_idx] = obs
-            self._batch_instruction[env_idx] = _get_instruction(obs, self.default_instruction)
+        del obs_list
+        raise NotImplementedError(
+            "AHA-WAM keeps mutable rollout/history state and does not support batched "
+            "multi-environment evaluation. Run one policy-server process per environment."
+        )
 
     def get_action(self):
         if self.last_obs is None:
@@ -528,13 +538,11 @@ class Model(ModelTemplate):
         return _unpack_robot_state(actions, self.action_type, self.robot_action_dim_info)
 
     def get_action_batch(self, env_idx_list):
-        # The underlying AHAWAM history state is single-rollout stateful. Use one process per
-        # environment for true parallel eval; this fallback is for debug compatibility only.
-        results = []
-        for env_idx in env_idx_list:
-            self.update_obs(self._batch_obs[int(env_idx)])
-            results.append(self.get_action())
-        return results
+        del env_idx_list
+        raise NotImplementedError(
+            "AHA-WAM batched evaluation is disabled because sharing one model instance "
+            "would contaminate rollout/history state across environments."
+        )
 
     def reset(self):
         self.pending_actions.clear()
