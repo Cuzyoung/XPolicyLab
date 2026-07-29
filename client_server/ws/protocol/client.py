@@ -50,6 +50,21 @@ class WebSocketConnection(Protocol):
     def __aiter__(self) -> AsyncIterator[bytes | str]: ...
 
 
+def _normalize_ws_ping(value: Any, *, field_name: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            f"{field_name} must be null or a positive number, got {value!r}"
+        )
+    seconds = float(value)
+    if seconds <= 0:
+        raise ValueError(
+            f"{field_name} must be null or a positive number, got {value!r}"
+        )
+    return seconds
+
+
 @dataclass
 class PolicyEvalClientConfig:
     url: str
@@ -58,9 +73,17 @@ class PolicyEvalClientConfig:
     request_timeout_s: float = 120.0
     max_connect_attempts: int = 10
     connect_retry_delay_s: float = 5.0
-    ws_ping_interval_s: float = 20.0
-    ws_ping_timeout_s: float = 20.0
+    ws_ping_interval_s: float | None = 20.0
+    ws_ping_timeout_s: float | None = 20.0
     proxy: str | Literal[True] | None = None
+
+    def __post_init__(self) -> None:
+        self.ws_ping_interval_s = _normalize_ws_ping(
+            self.ws_ping_interval_s, field_name="ws_ping_interval_s"
+        )
+        self.ws_ping_timeout_s = _normalize_ws_ping(
+            self.ws_ping_timeout_s, field_name="ws_ping_timeout_s"
+        )
 
 
 @dataclass

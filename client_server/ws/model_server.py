@@ -30,12 +30,35 @@ def _ok_payload(result: Any = None) -> dict[str, Any]:
     return payload
 
 
+def _normalize_ws_ping(value: Any, *, field_name: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            f"{field_name} must be null or a positive number, got {value!r}"
+        )
+    seconds = float(value)
+    if seconds <= 0:
+        raise ValueError(
+            f"{field_name} must be null or a positive number, got {value!r}"
+        )
+    return seconds
+
+
 @dataclass
 class PolicyServerConfig:
     host: str = "0.0.0.0"
     port: int = 19000
-    ws_ping_interval_s: float = 20.0
-    ws_ping_timeout_s: float = 20.0
+    ws_ping_interval_s: float | None = 20.0
+    ws_ping_timeout_s: float | None = 20.0
+
+    def __post_init__(self) -> None:
+        self.ws_ping_interval_s = _normalize_ws_ping(
+            self.ws_ping_interval_s, field_name="ws_ping_interval_s"
+        )
+        self.ws_ping_timeout_s = _normalize_ws_ping(
+            self.ws_ping_timeout_s, field_name="ws_ping_timeout_s"
+        )
 
 
 @dataclass
@@ -318,6 +341,8 @@ def main() -> None:
         PolicyServerConfig(
             host=deploy_cfg.get("host", "0.0.0.0"),
             port=int(deploy_cfg.get("port", 19000)),
+            ws_ping_interval_s=deploy_cfg.get("ws_ping_interval_s", 20.0),
+            ws_ping_timeout_s=deploy_cfg.get("ws_ping_timeout_s", 20.0),
         ),
     )
     asyncio.run(server.serve_forever())
