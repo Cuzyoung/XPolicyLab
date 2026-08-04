@@ -40,6 +40,7 @@ Action dict keys: dual-arm uses `left_arm_joint_state` / `right_arm_joint_state`
 
 ## Conventions
 
+- **Image decoding is mandatory via `decode_image_bit`** from `XPolicyLab.utils.process_data` — never hand-roll `cv2.imdecode` / `np.frombuffer` / PIL decoding in `model.py`, data-conversion scripts, or training dataloaders. RoboTwin/RoboDojo legacy image-bit layouts are only handled correctly by this function; custom decoders silently decode wrong or fail on part of the data.
 - `eval.sh` positional args, same for all adapters: `bench_name task_name ckpt_name env_cfg_type action_type seed policy_gpu_id env_gpu_id policy_env_or_uv_path eval_env_conda_env`.
 - Checkpoints resolve to `checkpoints/<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>-<seed>/`; a full folder name or explicit path also works.
 - Observations carry the language prompt under `instruction` (string; fall back to `instructions`). Images are RGB; poses are `[x, y, z, qw, qx, qy, qz]`.

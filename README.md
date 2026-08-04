@@ -405,6 +405,8 @@ from XPolicyLab.utils.process_data import decode_image_bit, get_robot_action_dim
 
 `decode_image_bit` handles encoded RGB image streams. `get_robot_action_dim_info(env_cfg_type)` returns robot-specific `arm_dim` and `ee_dim` lists, so adapters do not need to hard-code action dimensions.
 
+> **Mandatory:** always decode image bits with `decode_image_bit` from `XPolicyLab.utils.process_data` — never write your own `cv2.imdecode` / `np.frombuffer` / PIL decoding in adapters, conversion scripts, or training dataloaders. RoboTwin and RoboDojo historical data store image bits in legacy layouts that only this function handles correctly; a hand-rolled decoder will silently decode wrong or fail on part of the data.
+
 Robot action dimensions are registered in `utils/robot/_robot_info.json`: each top-level key is an `env_cfg_type` such as `arx_x5`, with `arm_dim` / `ee_dim` lists for per-arm joint and end-effector/gripper dimensions. Update it when adding a new robot configuration so conversion, training, and deployment code can infer action shapes consistently.
 
 ## 💾 Data And Checkpoints

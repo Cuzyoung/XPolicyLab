@@ -42,6 +42,8 @@ Define `class Model(ModelTemplate)` (`from XPolicyLab.model_template import Mode
 
 Action dictionaries use the standard keys (`left_arm_joint_state`, `right_ee_joint_state`, `ee_pose`, ...) with dimensions taken from `get_robot_action_dim_info(env_cfg_type)` in `XPolicyLab.utils.process_data` — never hard-coded. Register new robots in `utils/robot/_robot_info.json`. Observation and trajectory formats: README, [Standard Data Formats](README.md#-standard-data-formats).
 
+Decode image bits only with `decode_image_bit` from `XPolicyLab.utils.process_data` — never hand-roll `cv2.imdecode` / `np.frombuffer` / PIL decoding in adapters, conversion scripts, or training dataloaders. RoboTwin/RoboDojo legacy image-bit layouts are only handled correctly by this function.
+
 ### `deploy.yml`
 
 `policy_name` must equal the directory name — the server imports `XPolicyLab.policy.<policy_name>.model`, and the setup scripts derive the name from the directory. Keep `protocol: ws` (`legacy_tcp` is for unmigrated legacy adapters only). Per-run fields are overridden by the setup scripts; put stable defaults here. Reference (`policy/demo_policy/deploy.yml`):
