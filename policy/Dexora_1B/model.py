@@ -340,7 +340,8 @@ class Model(ModelTemplate):
         for candidates in self.camera_candidates:
             image = _extract_camera(observation, candidates)
             if self.input_color_order == "bgr":
-                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                # Obs arrives RGB; swap to BGR for checkpoints trained on BGR data.
+                image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
             images.append(image)
 
         instruction = observation.get("instruction") or observation.get("instructions")
