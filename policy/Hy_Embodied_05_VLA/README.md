@@ -70,6 +70,6 @@ Policy-specific `deploy.yml` keys worth checking before evaluation:
 | `ckpt_path` | Default checkpoint directory. Relative paths resolve against `hy_root`. |
 | `norm_path` | Optional normalization stats path. Relative paths resolve against `hy_root`; empty uses `$HY_VLA_NORM_PATH`, then `<ckpt_path>/norm_stats.pkl`. |
 
-Additional keys consumed by the adapter: `with_absolute`, `blend_mode`, `exc_action_size`, `exc_action_interval`, `img_history_size`, `img_history_interval`, `policy_uv_env_path`.
+Additional keys consumed by the adapter: `with_absolute`, `blend_mode`, `exc_action_size`, `exc_action_interval`, `history_cadence`, `img_history_size`, `img_history_interval`, `policy_uv_env_path`.
 
 Policy-specific environment variables: `HY_VLA_ROOT` (Hy-Embodied source tree override), `HY_VLA_NORM_PATH` (norm-stats override when `deploy.yml` `norm_path` is empty), `HY_VLA_CKPT_PATH` (optional checkpoint override).
