@@ -73,6 +73,6 @@ bash eval.sh RoboDojo stack_bowls RoboDojo-cotrain-arx_x5-joint-0 arx_x5 joint 0
 
 ## Configuration
 
-`deploy.yml` keys to check before evaluation: `checkpoint_path`, `config_path`, `lang_embedding_path`, `lang_embedding_dir`, `stats_path`, `device`, `dtype`, `input_color_order`, `vision_backbone_id`, `vision_image_size`, `allow_dummy_lang_embedding`.
+`deploy.yml` keys to check before evaluation: `checkpoint_path`, `config_path`, `lang_embedding_path`, `lang_embedding_dir`, `stats_path`, `device`, `dtype`, `vision_backbone_id`, `vision_image_size`, `allow_dummy_lang_embedding`.
 
 Policy-specific environment variables: `HRDT_SOURCE_ROOT` (required for training and metadata generation), `T5_MODEL_PATH` and `HRDT_CONFIG_PATH` (language-embedding step), `XPOLICY_HRDT_MAX_EPISODES` (optional per-task episode cap; empty or unset uses all episodes), plus the optional overrides `XPOLICY_HRDT_ACTION_TYPE` and `HRDT_ROOT`.

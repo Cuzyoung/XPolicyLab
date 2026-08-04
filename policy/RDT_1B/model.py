@@ -23,7 +23,11 @@ for _path in (str(_REPO_ROOT), str(_CUR_DIR), str(_RDT_ROOT), str(_RDT_ROOT / "m
 
 from XPolicyLab.model_template import ModelTemplate
 from XPolicyLab.utils.checkpoint_resolver import resolve_checkpoint_root
-from XPolicyLab.utils.process_data import get_robot_action_dim_info, unpack_robot_state
+from XPolicyLab.utils.process_data import (
+    decode_image_bit,
+    get_robot_action_dim_info,
+    unpack_robot_state,
+)
 
 from .rdt.scripts.robodojo_model import create_model
 from .rdt.models.multimodal_encoder.t5_encoder import T5Embedder
@@ -338,8 +342,13 @@ class Model(ModelTemplate):
         torch.cuda.empty_cache()
 
     def _jpeg_mapping(self, img):
-        img = cv2.imencode(".jpg", img)[1].tobytes()
-        return cv2.imdecode(np.frombuffer(img, np.uint8), cv2.IMREAD_COLOR)
+        """Replay the lossy JPEG round-trip the training data went through.
+
+        This is a compression simulator, not an observation decoder: the input
+        is an array this adapter just encoded, and the channel order is
+        unchanged across the round-trip.
+        """
+        return decode_image_bit(cv2.imencode(".jpg", img)[1].tobytes())
 
     def _resize_img(self, img):
         img_size = tuple(self.model_cfg.get("image_size", (640, 480)))

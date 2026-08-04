@@ -101,7 +101,7 @@ def _choose_checkpoint_file(path: Path, preferred_file: str) -> Path | None:
     return None
 
 
-def _image_to_uint8_hwc(image: Any, input_color_space: str = "rgb") -> np.ndarray:
+def _image_to_uint8_hwc(image: Any) -> np.ndarray:
     arr = np.asarray(image)
     if arr.ndim != 3:
         raise ValueError(f"Expected image ndim=3, got shape {arr.shape}")
@@ -116,8 +116,6 @@ def _image_to_uint8_hwc(image: Any, input_color_space: str = "rgb") -> np.ndarra
         arr = np.repeat(arr, 3, axis=-1)
     if arr.shape[-1] != 3:
         raise ValueError(f"Unsupported image shape: {arr.shape}")
-    if input_color_space.lower() == "bgr":
-        arr = arr[..., ::-1]
     return np.ascontiguousarray(arr)
 
 
@@ -164,7 +162,6 @@ class Model(ModelTemplate):
         self.delta_to_absolute = _parse_bool(self.model_cfg.get("delta_to_absolute"), True)
         self.num_frames = int(self.model_cfg.get("num_frames") or max(self.action_chunk, 24))
         self.load_model = _parse_bool(self.model_cfg.get("load_model"), True)
-        self.input_color_space = str(self.model_cfg.get("input_color_space") or "rgb")
         self.action_request_count = 0
 
         self.view_candidates = {
@@ -355,10 +352,10 @@ class Model(ModelTemplate):
                 if isinstance(item, dict):
                     for key in ("color", "rgb", "image"):
                         if key in item:
-                            return _image_to_uint8_hwc(item[key], self.input_color_space)
-                return _image_to_uint8_hwc(item, self.input_color_space)
+                            return _image_to_uint8_hwc(item[key])
+                return _image_to_uint8_hwc(item)
             if name in obs:
-                return _image_to_uint8_hwc(obs[name], self.input_color_space)
+                return _image_to_uint8_hwc(obs[name])
         raise KeyError(f"Could not find image for candidates: {candidates}")
 
     def _extract_prompt(self, obs: dict[str, Any]) -> str:

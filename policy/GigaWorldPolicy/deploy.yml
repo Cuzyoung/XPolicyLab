@@ -46,7 +46,6 @@ skip_action_denorm: false
 delta_to_absolute: true
 sample_seed: 42
 
-input_color_space: rgb
 left_view_candidates: [cam_head]
 wrist_view_candidates: [cam_left_wrist]
 right_view_candidates: [cam_right_wrist]

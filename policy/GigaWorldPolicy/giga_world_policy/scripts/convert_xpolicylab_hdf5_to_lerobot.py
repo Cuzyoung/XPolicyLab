@@ -92,15 +92,13 @@ def _normalise_instruction(value: Any, fallback: str) -> str:
     return fallback
 
 
-def _decode_frame_rgb(raw, decode_image_bit, width: int, height: int, input_color_space: str) -> np.ndarray:
+def _decode_frame_rgb(raw, decode_image_bit, width: int, height: int) -> np.ndarray:
     frame = np.asarray(decode_image_bit(raw))
     if frame.ndim == 4 and frame.shape[0] == 1:
         frame = frame[0]
 
     if frame.ndim != 3 or frame.shape[-1] != 3:
         raise ValueError(f"Expected HWC image with 3 channels, got {frame.shape}")
-    if input_color_space.lower() == "bgr":
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     if (frame.shape[1], frame.shape[0]) != (width, height):
         frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
     return np.ascontiguousarray(frame.astype(np.uint8))
@@ -288,7 +286,6 @@ def convert(args: argparse.Namespace):
                     decode_image_bit,
                     args.image_width,
                     args.image_height,
-                    args.input_color_space,
                 )
                 for i in range(length)
             ]
@@ -375,7 +372,6 @@ def convert(args: argparse.Namespace):
             "packing_order": "left arm, left end-effector, right arm, right end-effector" if len(robot_dim["arm_dim"]) == 2 else "arm, end-effector",
             "camera_map": CAMERA_MAP,
             "image_size": [args.image_width, args.image_height],
-            "input_color_space": args.input_color_space,
             "source_dirs": [{"task_name": t, "path": str(p)} for t, p in source_dirs],
         },
     )
@@ -402,7 +398,6 @@ def main():
     parser.add_argument("--fps", type=int, default=None)
     parser.add_argument("--image-width", type=int, default=640)
     parser.add_argument("--image-height", type=int, default=480)
-    parser.add_argument("--input-color-space", default="rgb", choices=["rgb", "bgr"])
     parser.add_argument("--video-codec", default="mp4v")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()

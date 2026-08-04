@@ -21,7 +21,6 @@ lang_embedding_dir: H_RDT/datasets/xpolicylab/lang_embeddings
 stats_path: H_RDT/datasets/xpolicylab/stats.json
 device: cuda
 dtype: bfloat16
-input_color_order: rgb
 vision_backbone_id: dino-siglip
 vision_image_size: 384
 allow_dummy_lang_embedding: false

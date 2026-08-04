@@ -55,8 +55,7 @@ else
     --output-dir "${out_dir}"
     --image-width "${image_width}"
     --image-height "${image_height}"
-    --input-color-space "${GIGAWORLD_INPUT_COLOR_SPACE:-rgb}"
-    --video-codec "${GIGAWORLD_VIDEO_CODEC:-mp4v}"
+      --video-codec "${GIGAWORLD_VIDEO_CODEC:-mp4v}"
     --overwrite
   )
   if [[ -n "${expert_data_num}" ]]; then
