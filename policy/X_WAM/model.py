@@ -21,7 +21,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation
 
@@ -70,9 +69,6 @@ def _is_none_like(value: Any) -> bool:
 def _to_uint8_hwc(image: Any) -> np.ndarray:
     """Decode/standardize an obs image into an HWC uint8 RGB array."""
     arr = np.asarray(image)
-    # JPEG/PNG byte buffer.
-    if arr.ndim == 1 and arr.dtype == np.uint8:
-        arr = cv2.imdecode(arr, cv2.IMREAD_COLOR)[..., ::-1]  # BGR -> RGB
     if arr.ndim != 3:
         raise ValueError(f"Expected HWC image, got shape {arr.shape}")
     if arr.shape[0] in (1, 3) and arr.shape[-1] not in (1, 3):

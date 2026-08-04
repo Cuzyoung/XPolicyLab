@@ -11,6 +11,7 @@ import random
 from tqdm import tqdm
 
 from XPolicyLab.utils.load_file import load_yaml, load_json
+from XPolicyLab.utils.process_data import decode_image_bit
 
 from lerobot.common.datasets.lerobot_dataset import HF_LEROBOT_HOME
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
@@ -87,22 +88,8 @@ def create_empty_dataset(
         video_backend=dataset_config.video_backend,
     )
 
-def decode_image(img_bytes: bytes | np.bytes_ | np.ndarray) -> np.ndarray:
-    if isinstance(img_bytes, (bytes, np.bytes_)):
-        jpeg_bytes = bytes(img_bytes).rstrip(b"\0")
-    elif isinstance(img_bytes, np.ndarray) and img_bytes.dtype.kind in ("S", "U"):
-        jpeg_bytes = img_bytes.item().rstrip(b"\0")
-    else:
-        raise TypeError(f"Unsupported image payload type: {type(img_bytes)!r}")
-
-    image = cv2.imdecode(np.frombuffer(jpeg_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
-    if image is None:
-        raise ValueError("Failed to decode JPEG image from HDF5 payload.")
-    return image # return RGB data not BGR data
-
 def _load_compressed_images(group: h5py.Group, key: str) -> np.ndarray:
-    frames = [decode_image(frame) for frame in group[key]]
-    return np.asarray(frames)
+    return np.asarray(decode_image_bit(group[key]))
 
 def _make_action_from_state(state: np.ndarray) -> np.ndarray:
     action = np.empty_like(state, dtype=np.float32)

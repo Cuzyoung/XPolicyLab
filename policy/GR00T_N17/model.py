@@ -7,11 +7,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-import cv2
 import numpy as np
 
 from XPolicyLab.model_template import ModelTemplate
-from XPolicyLab.utils.process_data import decode_image_bit
 from XPolicyLab.utils.checkpoint_resolver import resolve_checkpoint_root
 
 _POLICY_DIR = Path(__file__).resolve().parent
@@ -170,17 +168,9 @@ def _resolve_checkpoint_dir(model_cfg: dict[str, Any]) -> Path:
     )
 
 
-def _decode_compressed_image(image_buffer: np.ndarray) -> np.ndarray:
-    return decode_image_bit(image_buffer)
-
-
 def _ensure_hwc_uint8(image: Any) -> np.ndarray:
-    if isinstance(image, (bytes, bytearray, memoryview)):
-        return _decode_compressed_image(np.frombuffer(bytes(image), dtype=np.uint8))
 
     image = np.asarray(image)
-    if image.ndim == 1 and image.dtype == np.uint8:
-        return _decode_compressed_image(image)
 
     if image.ndim != 3:
         raise ValueError(f"Expected image ndim=3, got shape {image.shape}")

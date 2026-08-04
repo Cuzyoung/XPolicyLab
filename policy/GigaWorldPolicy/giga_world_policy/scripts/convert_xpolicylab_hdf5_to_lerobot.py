@@ -93,31 +93,9 @@ def _normalise_instruction(value: Any, fallback: str) -> str:
 
 
 def _decode_frame_rgb(raw, decode_image_bit, width: int, height: int, input_color_space: str) -> np.ndarray:
-    # XPolicyLab color observations are semantically RGB. Encoded image bytes are
-    # decoded through OpenCV here, whose native output is BGR, so convert them
-    # explicitly instead of depending on decode_image_bit's OpenCV convention.
-    raw_array = np.asarray(raw)
-    if raw_array.ndim == 3 and raw_array.shape[-1] == 3:
-        frame = raw_array
-    elif raw_array.ndim == 4 and raw_array.shape[0] == 1 and raw_array.shape[-1] == 3:
-        frame = raw_array[0]
-    elif isinstance(raw, (bytes, bytearray, np.bytes_, np.void)):
-        encoded = np.frombuffer(raw, np.uint8)
-        frame = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
-        if frame is None:
-            raise ValueError("Failed to decode image frame")
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    elif raw_array.ndim == 1 and raw_array.dtype == np.uint8:
-        frame = cv2.imdecode(np.ascontiguousarray(raw_array), cv2.IMREAD_COLOR)
-        if frame is None:
-            raise ValueError("Failed to decode image frame")
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    else:
-        frame = decode_image_bit(raw)
-        if frame is None:
-            raise ValueError("Failed to decode image frame")
-        if frame.ndim == 4 and frame.shape[0] == 1:
-            frame = frame[0]
+    frame = np.asarray(decode_image_bit(raw))
+    if frame.ndim == 4 and frame.shape[0] == 1:
+        frame = frame[0]
 
     if frame.ndim != 3 or frame.shape[-1] != 3:
         raise ValueError(f"Expected HWC image with 3 channels, got {frame.shape}")

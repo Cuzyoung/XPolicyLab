@@ -9,7 +9,6 @@ import numpy as np
 
 from XPolicyLab.model_template import ModelTemplate
 from XPolicyLab.utils.process_data import (
-    decode_image_bit,
     get_batch_size,
     get_robot_action_dim_info,
     pack_robot_state,
@@ -315,8 +314,6 @@ def _step_sort_key(path: Path) -> int:
 
 
 def _as_chw_uint8(value) -> np.ndarray:
-    if not isinstance(value, np.ndarray):
-        value = decode_image_bit(value)
     arr = np.asarray(value)
     if arr.ndim == 4:
         arr = arr[0]

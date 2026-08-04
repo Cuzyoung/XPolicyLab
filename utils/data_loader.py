@@ -1,22 +1,10 @@
 # Load data for data conversion
-import h5py, json, cv2, argparse
+import h5py, json, argparse
 import numpy as np
 
-def load_xspark_v1(hdf5_path, decode_images=True):
-    def decode_image(img_bytes):
-        try:
-            if isinstance(img_bytes, (bytes, np.bytes_)):
-                jpeg_bytes = img_bytes.rstrip(b"\0")
-            elif isinstance(img_bytes, np.ndarray) and img_bytes.dtype.kind in ['S', 'U']:
-                jpeg_bytes = img_bytes.item().rstrip(b"\0")
-            else:
-                return img_bytes
-            
-            nparr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
-            return cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        except Exception:
-            return img_bytes
+from XPolicyLab.utils.process_data import decode_image_bit
 
+def load_xspark_v1(hdf5_path, decode_images=True):
     def h5_to_dict(obj):
         d = {}
         for key, item in obj.items():
@@ -26,10 +14,7 @@ def load_xspark_v1(hdf5_path, decode_images=True):
                 val = item[()]
                 
                 if key == "colors" and isinstance(val, np.ndarray):
-                    decoded_frames = []
-                    for frame in val:
-                        decoded_frames.append(frame if not decode_images else decode_image(frame))
-                    d[key] = np.array(decoded_frames)
+                    d[key] = decode_image_bit(val) if decode_images else val
                     continue
 
                 if isinstance(val, (bytes, np.bytes_)):

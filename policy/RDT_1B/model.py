@@ -23,7 +23,7 @@ for _path in (str(_REPO_ROOT), str(_CUR_DIR), str(_RDT_ROOT), str(_RDT_ROOT / "m
 
 from XPolicyLab.model_template import ModelTemplate
 from XPolicyLab.utils.checkpoint_resolver import resolve_checkpoint_root
-from XPolicyLab.utils.process_data import decode_image_bit, get_robot_action_dim_info, unpack_robot_state
+from XPolicyLab.utils.process_data import get_robot_action_dim_info, unpack_robot_state
 
 from .rdt.scripts.robodojo_model import create_model
 from .rdt.models.multimodal_encoder.t5_encoder import T5Embedder
@@ -61,12 +61,8 @@ def extract_image(observation, candidate_names):
 
 
 def ensure_hwc_uint8(image):
-    if isinstance(image, (bytes, bytearray, memoryview)):
-        image = decode_compressed_image(np.frombuffer(bytes(image), dtype=np.uint8))
 
     image = np.asarray(image)
-    if image.ndim == 1 and image.dtype == np.uint8:
-        image = decode_compressed_image(image)
 
     if image.ndim != 3:
         raise ValueError(f"Expected image ndim=3, got shape {image.shape}")
@@ -82,10 +78,6 @@ def ensure_hwc_uint8(image):
     if image.shape[0] in (1, 3):
         return np.transpose(image, (1, 2, 0))
     raise ValueError(f"Unsupported image shape: {image.shape}")
-
-
-def decode_compressed_image(image_buffer):
-    return decode_image_bit(image_buffer)
 
 
 def encode_obs(observation, default_prompt):

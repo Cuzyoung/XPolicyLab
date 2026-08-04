@@ -9,7 +9,6 @@ from typing import Any
 
 import numpy as np
 
-from XPolicyLab.utils.process_data import decode_image_bit
 
 _CUR_DIR = Path(__file__).resolve().parent
 _XPL_ROOT = _CUR_DIR.parents[2]
@@ -103,11 +102,7 @@ def _choose_checkpoint_file(path: Path, preferred_file: str) -> Path | None:
 
 
 def _image_to_uint8_hwc(image: Any, input_color_space: str = "rgb") -> np.ndarray:
-    if isinstance(image, (bytes, bytearray, memoryview)):
-        image = decode_image_bit(np.frombuffer(bytes(image), dtype=np.uint8))
     arr = np.asarray(image)
-    if arr.ndim == 1 and arr.dtype == np.uint8:
-        arr = decode_image_bit(arr)
     if arr.ndim != 3:
         raise ValueError(f"Expected image ndim=3, got shape {arr.shape}")
     if arr.shape[0] in (1, 3) and arr.shape[-1] not in (1, 3):

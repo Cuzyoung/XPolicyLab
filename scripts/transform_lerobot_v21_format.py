@@ -20,6 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from XPolicyLab.utils.data_loader import load
 from XPolicyLab.utils.load_file import load_json, load_yaml
+from XPolicyLab.utils.process_data import decode_image_bit
 
 
 DEFAULT_DATASET_NAME = "RoboDojo"
@@ -341,36 +342,6 @@ def _find_camera_array(data, camera_name):
     return None
 
 
-def _decode_one_image(frame):
-    if isinstance(frame, np.ndarray) and frame.ndim == 3:
-        if frame.dtype != np.uint8:
-            return frame.astype(np.uint8)
-        return frame
-
-    if isinstance(frame, np.ndarray) and frame.dtype == np.uint8 and frame.ndim == 1:
-        img = cv2.imdecode(frame, cv2.IMREAD_COLOR)
-        if img is None:
-            raise ValueError("Failed to decode image from uint8 buffer")
-        return img
-
-    if isinstance(frame, (bytes, bytearray, np.bytes_)):
-        img = cv2.imdecode(np.frombuffer(frame.rstrip(b"\0"), dtype=np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
-            raise ValueError("Failed to decode image from byte buffer")
-        return img
-
-    if isinstance(frame, np.ndarray) and frame.dtype.kind in {"S", "U"}:
-        raw = frame.item() if frame.ndim == 0 else frame.tobytes()
-        if isinstance(raw, str):
-            raw = raw.encode("utf-8")
-        img = cv2.imdecode(np.frombuffer(raw.rstrip(b"\0"), dtype=np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
-            raise ValueError("Failed to decode image from string buffer")
-        return img
-
-    raise ValueError(f"Unsupported image frame type: {type(frame)}")
-
-
 def _resize_image(image):
     if image.shape[:2] == (TARGET_IMAGE_HEIGHT, TARGET_IMAGE_WIDTH):
         return image
@@ -378,31 +349,16 @@ def _resize_image(image):
 
 
 def _decode_images_if_needed(images):
-    if isinstance(images, (bytes, bytearray, np.bytes_)):
-        return np.stack([_resize_image(_decode_one_image(images))], axis=0).astype(np.uint8)
-
-    arr = np.asarray(images)
-    if arr.ndim == 4 and arr.dtype != object:
-        if arr.dtype != np.uint8:
-            arr = arr.astype(np.uint8)
-        if arr.shape[1:3] != (TARGET_IMAGE_HEIGHT, TARGET_IMAGE_WIDTH):
-            arr = np.stack([_resize_image(frame) for frame in arr], axis=0)
-        return arr
-
-    if arr.ndim == 3 and arr.dtype != object:
-        if arr.dtype != np.uint8:
-            arr = arr.astype(np.uint8)
-        return _resize_image(arr)[None, ...]
-
-    if arr.ndim == 0:
-        frames = [arr.item()]
-    elif isinstance(images, np.ndarray) and images.dtype == object:
-        frames = images.tolist()
-    else:
-        frames = list(images)
-
-    decoded = [_resize_image(_decode_one_image(frame)) for frame in frames]
-    return np.stack(decoded, axis=0).astype(np.uint8)
+    frames = np.asarray(decode_image_bit(images))
+    if frames.ndim == 3:
+        frames = frames[None, ...]
+    if frames.ndim != 4:
+        raise ValueError(f"Expected decoded frames with shape [T,H,W,3], got {frames.shape}")
+    if frames.dtype != np.uint8:
+        frames = frames.astype(np.uint8)
+    if frames.shape[1:3] != (TARGET_IMAGE_HEIGHT, TARGET_IMAGE_WIDTH):
+        frames = np.stack([_resize_image(frame) for frame in frames], axis=0)
+    return frames
 
 
 def _empty_image_sequence(num_frames):

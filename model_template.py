@@ -43,6 +43,10 @@ class ModelTemplate:
         """
         Update the current observation used by the model.
         更新当前模型使用的观测。
+
+        The policy server decodes camera colors before calling this, so
+        obs["vision"][<camera>]["color"] is always an image array.
+        策略服务端已完成图像解码，此处拿到的 color 一定是图像数组。
         """
         raise NotImplementedError(
             self._error_msg("update_obs() must be implemented by the user.")
@@ -52,6 +56,9 @@ class ModelTemplate:
         """
         Update the current observation used by the model.
         更新当前模型使用的观测。
+
+        Same decoding guarantee as update_obs().
+        与 update_obs() 一样，图像已由服务端解码。
         """
         raise NotImplementedError(
             self._error_msg("update_obs_batch() must be implemented by the user.")

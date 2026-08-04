@@ -2,7 +2,6 @@ import argparse
 import sys
 from pathlib import Path
 
-import cv2
 import h5py
 import numpy as np
 from tqdm import tqdm
@@ -12,6 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from XPolicyLab.utils.data_loader import load
+from XPolicyLab.utils.process_data import decode_image_bit
 
 
 CAMERA_CANDIDATES = {
@@ -105,45 +105,13 @@ def _find_camera_array(data, camera_name):
     return None
 
 
-def _decode_one_image(frame):
-    if isinstance(frame, np.ndarray) and frame.ndim == 3:
-        if frame.dtype != np.uint8:
-            return frame.astype(np.uint8)
-        return frame
-
-    if isinstance(frame, np.ndarray) and frame.dtype == np.uint8 and frame.ndim == 1:
-        img = cv2.imdecode(frame, cv2.IMREAD_COLOR)
-        if img is None:
-            raise ValueError("Failed to decode image from uint8 buffer")
-        return img
-
-    if isinstance(frame, (bytes, bytearray, np.bytes_)):
-        img = cv2.imdecode(np.frombuffer(frame.rstrip(b"\0"), dtype=np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
-            raise ValueError("Failed to decode image from byte buffer")
-        return img
-
-    if isinstance(frame, np.ndarray) and frame.dtype.kind in {"S", "U"}:
-        raw = frame.item() if frame.ndim == 0 else frame.tobytes()
-        if isinstance(raw, str):
-            raw = raw.encode("utf-8")
-        img = cv2.imdecode(np.frombuffer(raw.rstrip(b"\0"), dtype=np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
-            raise ValueError("Failed to decode image from string buffer")
-        return img
-
-    raise ValueError(f"Unsupported image frame type: {type(frame)}")
-
-
 def _decode_images_if_needed(images):
-    arr = np.asarray(images)
-    if arr.ndim == 4:
-        if arr.dtype != np.uint8:
-            arr = arr.astype(np.uint8)
-        return arr
-
-    decoded = [_decode_one_image(frame) for frame in images]
-    return np.stack(decoded, axis=0).astype(np.uint8)
+    frames = np.asarray(decode_image_bit(images))
+    if frames.ndim == 3:
+        frames = frames[None, ...]
+    if frames.ndim != 4:
+        raise ValueError(f"Expected decoded frames with shape [T,H,W,3], got {frames.shape}")
+    return frames.astype(np.uint8, copy=False)
 
 
 def _concat_state_parts(parts, name):

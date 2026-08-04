@@ -1,5 +1,7 @@
 import os
 import fnmatch
+import sys
+from pathlib import Path
 
 import h5py
 import yaml
@@ -7,6 +9,13 @@ import cv2
 import numpy as np
 
 from configs.state_vec import STATE_VEC_IDX_MAPPING
+
+_XPOLICYLAB_ROOT = Path(__file__).resolve().parents[4]
+for _search_path in (str(_XPOLICYLAB_ROOT.parent), str(_XPOLICYLAB_ROOT)):
+    if _search_path not in sys.path:
+        sys.path.insert(0, _search_path)
+
+from XPolicyLab.utils.process_data import decode_image_bit
 
 
 class HDF5VLADataset:
@@ -407,12 +416,7 @@ class HDF5VLADataset:
 
     @staticmethod
     def _decode_image(img):
-        if isinstance(img, np.ndarray) and img.ndim == 3:
-            return img.astype(np.uint8, copy=False)
-        decoded = cv2.imdecode(np.frombuffer(img, np.uint8), cv2.IMREAD_COLOR)
-        if decoded is None:
-            raise ValueError(f"Failed to decode image with shape {getattr(img, 'shape', None)}")
-        return decoded
+        return np.asarray(decode_image_bit(img)).astype(np.uint8, copy=False)
 
 if __name__ == "__main__":
     ds = HDF5VLADataset()

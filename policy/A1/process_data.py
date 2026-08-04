@@ -56,15 +56,11 @@ def _resolve_source_root(project_root: Path, bench_name: str, task_name: str, en
 
 
 def _decode_rgb(image_bits) -> np.ndarray:
-    image = decode_image_bit(image_bits)
-    if image is None:
-        raise ValueError("Failed to decode compressed image bytes.")
-    image = np.asarray(image)
+    image = np.asarray(decode_image_bit(image_bits))
     if image.ndim != 3 or image.shape[-1] != 3:
         raise ValueError(f"Expected decoded HWC image, got {image.shape}")
     image = cv2.resize(image, (320, 240), interpolation=cv2.INTER_AREA)
-    # decode_image_bit uses cv2.imdecode(..., IMREAD_COLOR), which returns BGR.
-    return cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.uint8)
+    return image.astype(np.uint8)
 
 
 def _write_video(video_path: Path, frames_rgb: Iterable[np.ndarray], fps: int) -> None:

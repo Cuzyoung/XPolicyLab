@@ -58,15 +58,7 @@ def _load_yaml(path):
 
 
 def _decode_image(image):
-    if isinstance(image, (bytes, bytearray, memoryview)):
-        image = np.frombuffer(bytes(image), dtype=np.uint8)
-
     image = np.asarray(image)
-    if image.ndim == 1 and image.dtype == np.uint8:
-        decoded = cv2.imdecode(image, cv2.IMREAD_COLOR)
-        if decoded is None:
-            raise ValueError("Failed to decode compressed image buffer.")
-        image = decoded
 
     if image.ndim != 3:
         raise ValueError(f"Expected HWC/CHW image, got shape {image.shape}.")

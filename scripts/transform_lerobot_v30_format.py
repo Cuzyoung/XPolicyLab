@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 from typing import Any, Literal
 
-import cv2
 import numpy as np
 from tqdm import tqdm
 
@@ -20,6 +19,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from XPolicyLab.utils.data_loader import load
 from XPolicyLab.utils.load_file import load_json, load_yaml
+from XPolicyLab.utils.process_data import decode_image_bit
 
 
 DEFAULT_DATASET_NAME = "RoboDojo"
@@ -444,80 +444,17 @@ def _pad_state_to_target_dims(array, current_dims, target_dims, name):
 # Images
 # ============================================================
 
-def _decode_one_image(frame):
-
-    # Already RGB
-    if isinstance(frame, np.ndarray) and frame.ndim == 3:
-
-        if frame.dtype != np.uint8:
-            frame = frame.astype(np.uint8)
-
-        return frame
-
-    # JPEG bytes stored in uint8 buffer
-    if (
-        isinstance(frame, np.ndarray)
-        and frame.dtype == np.uint8
-        and frame.ndim == 1
-    ):
-        img = cv2.imdecode(frame, cv2.IMREAD_COLOR)
-
-        if img is None:
-            raise ValueError("Failed to decode image")
-
-        return img
-
-    # raw bytes
-    if isinstance(frame, (bytes, bytearray, np.bytes_)):
-
-        img = cv2.imdecode(
-            np.frombuffer(frame.rstrip(b"\0"), dtype=np.uint8),
-            cv2.IMREAD_COLOR,
-        )
-
-        if img is None:
-            raise ValueError("Failed to decode image")
-
-        return img
-
-    raise ValueError(f"Unsupported image type: {type(frame)}")
-
-
 def _decode_images_if_needed(images):
 
-    # Fast path:
-    # already [N,H,W,3] uint8
-    arr = np.asarray(images)
+    frames = np.asarray(decode_image_bit(images))
 
-    if (
-        arr.ndim == 4
-        and arr.dtype == np.uint8
-    ):
-        return arr
+    if frames.ndim == 3:
+        frames = frames[None, ...]
 
-    # single image
-    if (
-        arr.ndim == 3
-        and arr.dtype == np.uint8
-    ):
-        return arr[None]
+    if frames.ndim != 4:
+        raise ValueError(f"Expected decoded frames with shape [T,H,W,3], got {frames.shape}")
 
-    # slow path
-    if arr.ndim == 0:
-        frames = [arr.item()]
-
-    elif isinstance(images, np.ndarray) and images.dtype == object:
-        frames = images.tolist()
-
-    else:
-        frames = list(images)
-
-    decoded = [
-        _decode_one_image(frame)
-        for frame in frames
-    ]
-
-    return np.stack(decoded, axis=0).astype(np.uint8)
+    return frames.astype(np.uint8, copy=False)
 
 
 def _find_camera_array(data, camera_name):
