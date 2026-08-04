@@ -8,7 +8,6 @@ import torch
 
 from XPolicyLab.model_template import ModelTemplate
 from XPolicyLab.utils.process_data import (
-    decode_image_bit,
     get_robot_action_dim_info,
     pack_robot_state,
     unpack_robot_state,
@@ -20,7 +19,6 @@ if str(TINYVLA_DIR) not in sys.path:
     sys.path.append(str(TINYVLA_DIR))
 
 from eval_real_franka import llava_pythia_act_policy
-
 
 
 class Model(ModelTemplate):
@@ -113,18 +111,9 @@ class Model(ModelTemplate):
         return curr_image, robot_state, raw_lang
 
     def _load_camera_rgb(self, camera_obs):
-        """Match train.py load_images(): decode JPEG bytes as BGR then convert to RGB."""
         raw = camera_obs.get("color") if "color" in camera_obs else camera_obs.get("colors")
         if raw is None:
             raise KeyError("camera observation must contain 'color' or 'colors'")
 
-        if isinstance(raw, (bytes, bytearray, np.bytes_)):
-            rgb = cv2.cvtColor(decode_image_bit(raw), cv2.COLOR_BGR2RGB)
-        else:
-            raw = np.asarray(raw)
-            if raw.ndim == 1:
-                rgb = cv2.cvtColor(decode_image_bit(raw), cv2.COLOR_BGR2RGB)
-            else:
-                rgb = raw
-
+        rgb = np.asarray(raw)
         return cv2.resize(rgb, (640, 480), interpolation=cv2.INTER_AREA)

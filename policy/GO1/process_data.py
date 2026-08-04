@@ -152,23 +152,8 @@ def create_empty_dataset(
     )
 
 
-def decode_image(img_bytes: bytes | np.bytes_ | np.ndarray) -> np.ndarray:
-    if isinstance(img_bytes, (bytes, np.bytes_)):
-        jpeg_bytes = bytes(img_bytes).rstrip(b"\0")
-    elif isinstance(img_bytes, np.ndarray) and img_bytes.dtype.kind in ("S", "U"):
-        jpeg_bytes = img_bytes.item().rstrip(b"\0")
-    else:
-        raise TypeError(f"Unsupported image payload type: {type(img_bytes)!r}")
-
-    image = cv2.imdecode(np.frombuffer(jpeg_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
-    if image is None:
-        raise ValueError("Failed to decode JPEG image from HDF5 payload.")
-    return image
-
-
 def _load_compressed_images(group: h5py.Group, key: str) -> np.ndarray:
-    frames = [decode_image(frame) for frame in group[key]]
-    return np.asarray(frames)
+    return np.asarray(decode_image_bit(group[key]))
 
 
 def load_data(ep_path: str | Path, action_type: str, robot_action_dim_info: dict) -> dict[str, Any]:
@@ -194,14 +179,11 @@ def load_data(ep_path: str | Path, action_type: str, robot_action_dim_info: dict
     vision = data.get("vision", {})
     for source_name, output_name in CAMERA_ALIASES.items():
         if source_name in vision and "colors" in vision[source_name]:
-            raw_imgs = decode_image_bit(vision[source_name]["colors"])  # (T, H, W, 3) BGR
-            processed = []
-            for img in raw_imgs:
-                img = cv2.resize(img, (320, 240), interpolation=cv2.INTER_AREA)  # -> (240, 320, 3)
-                # Training and inference both convert arrays to PIL/ImageNet-style RGB tensors.
-                # Keeping BGR here would silently corrupt channel semantics.
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                processed.append(img)
+            raw_imgs = decode_image_bit(vision[source_name]["colors"])  # (T, H, W, 3) RGB
+            processed = [
+                cv2.resize(img, (320, 240), interpolation=cv2.INTER_AREA)  # -> (240, 320, 3)
+                for img in raw_imgs
+            ]
             images[output_name] = np.asarray(processed)
 
     try:

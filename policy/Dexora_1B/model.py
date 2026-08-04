@@ -40,15 +40,7 @@ def _optional_path(value: str | None, *base_dirs: Path) -> Path | None:
 
 
 def _decode_image(image: Any) -> np.ndarray:
-    if isinstance(image, (bytes, bytearray, memoryview)):
-        image = np.frombuffer(bytes(image), dtype=np.uint8)
-
     image = np.asarray(image)
-    if image.ndim == 1 and image.dtype == np.uint8:
-        decoded = cv2.imdecode(image, cv2.IMREAD_COLOR)
-        if decoded is None:
-            raise ValueError("Failed to decode compressed image bytes.")
-        image = decoded
 
     if image.ndim != 3:
         raise ValueError(f"Expected HWC/CHW image, got shape {image.shape}.")
@@ -348,7 +340,8 @@ class Model(ModelTemplate):
         for candidates in self.camera_candidates:
             image = _extract_camera(observation, candidates)
             if self.input_color_order == "bgr":
-                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                # Obs arrives RGB; swap to BGR for checkpoints trained on BGR data.
+                image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
             images.append(image)
 
         instruction = observation.get("instruction") or observation.get("instructions")

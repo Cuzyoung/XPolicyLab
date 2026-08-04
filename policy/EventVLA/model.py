@@ -68,15 +68,7 @@ def _optional_path(value: str | None, *base_dirs: Path) -> Path | None:
 
 
 def _decode_image(image: Any) -> np.ndarray:
-    if isinstance(image, (bytes, bytearray, memoryview)):
-        image = np.frombuffer(bytes(image), dtype=np.uint8)
-
     image = np.asarray(image)
-    if image.ndim == 1 and image.dtype == np.uint8:
-        decoded = cv2.imdecode(image, cv2.IMREAD_COLOR)
-        if decoded is None:
-            raise ValueError("Failed to decode compressed image bytes.")
-        image = cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB)
 
     if image.ndim != 3:
         raise ValueError(f"Expected HWC/CHW image, got shape {image.shape}.")

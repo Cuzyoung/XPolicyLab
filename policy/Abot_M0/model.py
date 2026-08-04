@@ -24,7 +24,6 @@ from deployment.model_server.tools.image_tools import to_pil_preserve
 from XPolicyLab.model_template import ModelTemplate
 from XPolicyLab.utils.checkpoint_resolver import candidate_checkpoint_roots
 from XPolicyLab.utils.process_data import (
-    decode_image_bit,
     get_robot_action_dim_info,
     pack_robot_state,
     unpack_robot_state,
@@ -92,15 +91,9 @@ def extract_image(observation: dict[str, Any], candidate_names: list[str]) -> np
     raise KeyError(f"Could not find any image for candidates: {candidate_names}")
 
 
-def decode_compressed_image(image_buffer: np.ndarray) -> np.ndarray:
-    return decode_image_bit(image_buffer)
-
-
 def prepare_rgb_image(image: np.ndarray) -> np.ndarray:
     """Decode compressed/CHW observations into HWC uint8 RGB."""
     image = np.asarray(image)
-    if image.ndim == 1 and image.dtype == np.uint8:
-        image = decode_compressed_image(image)
     if image.ndim == 3 and image.shape[0] in (1, 3) and image.shape[-1] not in (1, 3):
         image = np.transpose(image, (1, 2, 0))
     if image.ndim != 3 or image.shape[-1] != 3:

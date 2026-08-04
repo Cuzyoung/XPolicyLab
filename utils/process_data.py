@@ -264,18 +264,169 @@ def get_action_dim(env_cfg_type):
     robot_action_dim_info = load_json(os.path.join(os.path.dirname(__file__), "../../env_cfg/robot", "_robot_info.json"))[robot_name]
     return sum(robot_action_dim_info["arm_dim"]) + sum(robot_action_dim_info["ee_dim"])
 
-def decode_image_bit(image_bits):
-    def _decode(single_image_bit):
-        return cv2.imdecode(
-            np.frombuffer(single_image_bit, np.uint8),
-            cv2.IMREAD_COLOR
+def _decode_single_image_bit(image_bit):
+    """Decode one encoded image buffer into an HWC uint8 array."""
+    if isinstance(image_bit, np.ndarray) and image_bit.dtype.kind in {"S", "U"}:
+        image_bit = image_bit.item() if image_bit.ndim == 0 else image_bit.tobytes()
+
+    if isinstance(image_bit, str):
+        image_bit = image_bit.encode("utf-8")
+    elif isinstance(image_bit, memoryview):
+        image_bit = image_bit.tobytes()
+
+    if isinstance(image_bit, (bytes, bytearray)):
+        # Fixed-width HDF5 byte columns pad the tail with NUL.
+        image_bit = image_bit.rstrip(b"\0")
+    elif isinstance(image_bit, np.ndarray):
+        image_bit = np.ascontiguousarray(image_bit)
+
+    image = cv2.imdecode(np.frombuffer(image_bit, np.uint8), cv2.IMREAD_COLOR)
+
+    if image is None:
+        raise ValueError(
+            f"Failed to decode image bits (type={type(image_bit).__name__}, "
+            f"size={getattr(image_bit, 'size', len(image_bit) if hasattr(image_bit, '__len__') else '?')})."
         )
 
-    if isinstance(image_bits, np.ndarray) and image_bits.ndim == 1:
-        return _decode(image_bits)
+    return image
 
-    if isinstance(image_bits, (list, tuple, np.ndarray)):
-        images = [_decode(x) for x in image_bits]
-        return np.array(images)
-    else:
-        return _decode(image_bits)
+
+def _decode_image_bit_sequence(image_bits):
+    frames = []
+
+    for index, image_bit in enumerate(image_bits):
+        try:
+            frames.append(decode_image_bit(image_bit))
+        except ValueError as exc:
+            raise ValueError(f"Frame {index}: {exc}") from exc
+
+    if not frames:
+        return np.zeros((0,), dtype=np.uint8)
+
+    return np.stack(frames, axis=0)
+
+
+def decode_image_bit(image_bits):
+    """
+    Decode encoded image bit stream(s) into uint8 image array(s).
+
+    Values that are already decoded are returned unchanged, so this function is
+    safe to call on an observation or trajectory field without knowing whether
+    the producer encoded it.
+
+    Dispatch is on dtype first, then ndim:
+        - bytes / bytearray / memoryview / str  -> one encoded buffer
+        - ndarray of dtype kind 'S', 'U', 'O'   -> sequence of encoded buffers,
+                                                   or one buffer when 0-d
+        - uint8 ndarray, ndim == 1              -> one encoded buffer
+        - uint8 ndarray, ndim == 2              -> (T, N) stack of encoded buffers
+        - uint8 ndarray, ndim >= 3              -> already decoded, returned as is
+        - ndarray of any other dtype            -> already decoded, returned as is
+        - list / tuple                          -> element-wise, stacked on axis 0
+
+    Grayscale (H, W) uint8 images are not supported: a 2-D uint8 array is always
+    read as a stack of encoded buffers.
+
+    Raises:
+        ValueError: if any buffer fails to decode.
+    """
+    if isinstance(image_bits, (bytes, bytearray, memoryview, str)):
+        return _decode_single_image_bit(image_bits)
+
+    if isinstance(image_bits, np.ndarray):
+        if image_bits.dtype.kind in {"S", "U", "O"}:
+            if image_bits.ndim == 0:
+                return _decode_single_image_bit(image_bits.item())
+            return _decode_image_bit_sequence(image_bits)
+
+        if image_bits.dtype == np.uint8:
+            if image_bits.ndim == 1:
+                return _decode_single_image_bit(image_bits)
+            if image_bits.ndim == 2:
+                return _decode_image_bit_sequence(image_bits)
+
+        return image_bits
+
+    if isinstance(image_bits, (list, tuple)):
+        return _decode_image_bit_sequence(image_bits)
+
+    return _decode_single_image_bit(image_bits)
+
+
+# Color fields of one camera in an observation. 'depth' is deliberately absent:
+# depth is stored as 16-bit or float data that cv2.IMREAD_COLOR would destroy.
+OBS_IMAGE_KEYS = ("color", "colors", "rgb", "image")
+
+_DECODABLE_TYPES = (bytes, bytearray, memoryview, np.ndarray, list, tuple)
+
+
+def _decode_obs_image(value, camera_name, image_key):
+    if value is None:
+        return value
+
+    try:
+        return decode_image_bit(value)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(
+            f"Failed to decode obs['vision']['{camera_name}']['{image_key}']: {exc}"
+        ) from exc
+
+
+def decode_obs_images(obs):
+    """
+    Decode the encoded color streams of a runtime observation, in place.
+
+    The policy server calls this before handing an observation to the model, so
+    `update_obs` / `update_obs_batch` always receive plain image arrays and no
+    adapter has to decode anything. Values that are already decoded pass through
+    untouched, and only the color fields listed in OBS_IMAGE_KEYS are visited —
+    depth maps, intrinsics, extrinsics and shapes are left alone.
+
+    Args:
+        obs: One observation dict, or a list/tuple of them for batched eval.
+             Anything else is returned unchanged.
+
+    Returns:
+        The same object, with encoded color fields replaced by decoded arrays.
+
+    Raises:
+        ValueError: if a color field fails to decode, naming the camera.
+    """
+    if isinstance(obs, (list, tuple)):
+        for single_obs in obs:
+            decode_obs_images(single_obs)
+        return obs
+
+    if not isinstance(obs, dict):
+        return obs
+
+    vision = obs.get("vision")
+    if not isinstance(vision, dict):
+        return obs
+
+    for camera_name, camera in vision.items():
+        if isinstance(camera, dict):
+            for image_key in OBS_IMAGE_KEYS:
+                if image_key in camera:
+                    camera[image_key] = _decode_obs_image(
+                        camera[image_key], camera_name, image_key
+                    )
+        elif isinstance(camera, _DECODABLE_TYPES):
+            # Layout where vision/<camera> is the image itself.
+            vision[camera_name] = _decode_obs_image(camera, camera_name, "color")
+
+    return obs
+
+def images_encoding(imgs):
+    encode_data = []
+    padded_data = []
+    max_len = 0
+    for i in range(len(imgs)):
+        success, encoded_image = cv2.imencode(".jpg", imgs[i])
+        jpeg_data = encoded_image.tobytes()
+        encode_data.append(jpeg_data)
+        max_len = max(max_len, len(jpeg_data))
+    # padding
+    for i in range(len(imgs)):
+        padded_data.append(encode_data[i].ljust(max_len, b"\0"))
+    return encode_data, max_len

@@ -5,7 +5,6 @@ import sys
 import json
 from pathlib import Path
 
-import cv2
 import numpy as np
 import torch
 import yaml
@@ -58,15 +57,7 @@ def _load_yaml(path):
 
 
 def _decode_image(image):
-    if isinstance(image, (bytes, bytearray, memoryview)):
-        image = np.frombuffer(bytes(image), dtype=np.uint8)
-
     image = np.asarray(image)
-    if image.ndim == 1 and image.dtype == np.uint8:
-        decoded = cv2.imdecode(image, cv2.IMREAD_COLOR)
-        if decoded is None:
-            raise ValueError("Failed to decode compressed image buffer.")
-        image = decoded
 
     if image.ndim != 3:
         raise ValueError(f"Expected HWC/CHW image, got shape {image.shape}.")
@@ -122,7 +113,6 @@ class Model(ModelTemplate):
 
         self.device = self._get_device(self.model_cfg.get("device", "cuda"))
         self.dtype = torch.bfloat16 if self.model_cfg.get("dtype", "bfloat16") == "bfloat16" else torch.float32
-        self.input_color_order = self.model_cfg.get("input_color_order", "bgr").lower()
 
         self.config_path = _resolve_path(
             self.model_cfg.get("config_path"),
@@ -299,11 +289,6 @@ class Model(ModelTemplate):
         head_cam = _decode_image(_extract_image(observation, ["cam_head", "head_camera"]))
         left_cam = _decode_image(_extract_image(observation, ["cam_left_wrist", "left_camera"]))
         right_cam = _decode_image(_extract_image(observation, ["cam_right_wrist", "right_camera"]))
-
-        if self.input_color_order == "bgr":
-            head_cam = cv2.cvtColor(head_cam, cv2.COLOR_BGR2RGB)
-            left_cam = cv2.cvtColor(left_cam, cv2.COLOR_BGR2RGB)
-            right_cam = cv2.cvtColor(right_cam, cv2.COLOR_BGR2RGB)
 
         return {
             "head_cam": head_cam,

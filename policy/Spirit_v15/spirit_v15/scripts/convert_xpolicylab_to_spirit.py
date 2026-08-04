@@ -17,6 +17,7 @@ if str(XPOLICYLAB_ROOT) not in sys.path:
     sys.path.insert(0, str(XPOLICYLAB_ROOT))
 
 from XPolicyLab.utils.data_loader import load
+from XPolicyLab.utils.process_data import decode_image_bit
 
 
 DATA_ROOT = Path(os.environ.get("XPOLICYLAB_DATA_ROOT", XPOLICYLAB_ROOT / "data"))
@@ -301,30 +302,6 @@ def _extract_dual_arm_state(data: dict) -> Tuple[np.ndarray, np.ndarray, np.ndar
     return left_pose_arr, left_gripper_arr, right_pose_arr, right_gripper_arr
 
 
-def _decode_one_image(frame) -> np.ndarray:
-    if isinstance(frame, np.ndarray) and frame.ndim == 3:
-        return frame.astype(np.uint8) if frame.dtype != np.uint8 else frame
-    if isinstance(frame, np.ndarray) and frame.dtype == np.uint8 and frame.ndim == 1:
-        img = cv2.imdecode(frame, cv2.IMREAD_COLOR)
-        if img is None:
-            raise ValueError("Failed to decode image from uint8 buffer")
-        return img
-    if isinstance(frame, (bytes, bytearray, np.bytes_)):
-        img = cv2.imdecode(np.frombuffer(frame.rstrip(b"\0"), dtype=np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
-            raise ValueError("Failed to decode image from byte buffer")
-        return img
-    if isinstance(frame, np.ndarray) and frame.dtype.kind in {"S", "U"}:
-        raw = frame.item() if frame.ndim == 0 else frame.tobytes()
-        if isinstance(raw, str):
-            raw = raw.encode("utf-8")
-        img = cv2.imdecode(np.frombuffer(raw.rstrip(b"\0"), dtype=np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
-            raise ValueError("Failed to decode image from string buffer")
-        return img
-    raise ValueError(f"Unsupported image frame type: {type(frame)}")
-
-
 def _resize_image(image: np.ndarray) -> np.ndarray:
     if image.shape[:2] == (TARGET_IMAGE_HEIGHT, TARGET_IMAGE_WIDTH):
         return image
@@ -332,29 +309,16 @@ def _resize_image(image: np.ndarray) -> np.ndarray:
 
 
 def _decode_images_if_needed(images) -> np.ndarray:
-    if isinstance(images, (bytes, bytearray, np.bytes_)):
-        return np.stack([_resize_image(_decode_one_image(images))], axis=0).astype(np.uint8)
-
-    arr = np.asarray(images)
-    if arr.ndim == 4 and arr.dtype != object:
-        arr = arr.astype(np.uint8) if arr.dtype != np.uint8 else arr
-        if arr.shape[1:3] != (TARGET_IMAGE_HEIGHT, TARGET_IMAGE_WIDTH):
-            arr = np.stack([_resize_image(frame) for frame in arr], axis=0)
-        return arr
-
-    if arr.ndim == 3 and arr.dtype != object:
-        arr = arr.astype(np.uint8) if arr.dtype != np.uint8 else arr
-        return _resize_image(arr)[None, ...]
-
-    if arr.ndim == 0:
-        frames = [arr.item()]
-    elif isinstance(images, np.ndarray) and images.dtype == object:
-        frames = images.tolist()
-    else:
-        frames = list(images)
-
-    decoded = [_resize_image(_decode_one_image(frame)) for frame in frames]
-    return np.stack(decoded, axis=0).astype(np.uint8)
+    frames = np.asarray(decode_image_bit(images))
+    if frames.ndim == 3:
+        frames = frames[None, ...]
+    if frames.ndim != 4:
+        raise ValueError(f"Expected decoded frames with shape [T,H,W,3], got {frames.shape}")
+    if frames.dtype != np.uint8:
+        frames = frames.astype(np.uint8)
+    if frames.shape[1:3] != (TARGET_IMAGE_HEIGHT, TARGET_IMAGE_WIDTH):
+        frames = np.stack([_resize_image(frame) for frame in frames], axis=0)
+    return frames
 
 
 def _find_camera_array(data: dict, camera_name: str) -> Optional[np.ndarray]:
@@ -408,6 +372,8 @@ def _create_black_frames(num_frames: int) -> np.ndarray:
 
 
 def _write_video(video_path: Path, frames: np.ndarray, fps: float) -> None:
+    """Write RGB frames. cv2.VideoWriter consumes BGR, and the training dataset
+    reads these files back with cv2.VideoCapture + COLOR_BGR2RGB."""
     if frames.ndim != 4 or frames.shape[-1] != 3:
         raise ValueError(f"Expected frames shape [T,H,W,3], got {frames.shape}")
     height, width = frames.shape[1], frames.shape[2]
@@ -421,7 +387,7 @@ def _write_video(video_path: Path, frames: np.ndarray, fps: float) -> None:
         raise ValueError(f"Failed to open video writer for {video_path}")
     try:
         for frame in frames:
-            writer.write(frame)
+            writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
     finally:
         writer.release()
 

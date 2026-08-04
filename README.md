@@ -121,6 +121,8 @@ policy/<POLICY>/
 | `get_action_batch(env_idx_list=None)` | Return batched action chunks aligned with active environment indices. |
 | `reset()` | Clear model-side state between evaluation episodes. |
 
+The policy server decodes camera colors before `update_obs` / `update_obs_batch`, so `obs["vision"][<camera>]["color"]` always arrives as an image array — `model.py` never decodes.
+
 The default policy-server protocol is websocket (`protocol: ws` in `deploy.yml`). Keep `legacy_tcp` only for old adapters that have not migrated yet.
 
 ## 🛠️ Model Integration Guide
@@ -305,7 +307,7 @@ bash setup_eval_env_client.sh \
 
 XPolicyLab standardizes the observation and trajectory dictionaries passed between adapters, converters, and environment clients. Individual policies may convert this standard format into their upstream-native format.
 
-All pose values use `[x, y, z, qw, qx, qy, qz]`. Images are RGB unless a policy README states otherwise. Note one naming quirk: runtime observations carry camera extrinsics as `extrinsics_matrix`, while trajectory files store `extrinsic_matrix`.
+All pose values use `[x, y, z, qw, qx, qy, qz]`. Images are RGB end to end — stored image bits are encoded from RGB frames and no channel conversion happens anywhere in the pipeline (the only medium-adapter exceptions are listed with the converter helpers below). Note one naming quirk: runtime observations carry camera extrinsics as `extrinsics_matrix`, while trajectory files store `extrinsic_matrix`.
 
 <details>
 <summary>Observation Data Format</summary>
@@ -319,7 +321,7 @@ Observation Data Format
 │   └── frequency                              int, optional
 ├── vision/
 │   ├── cam_head/
-│   │   ├── color                              (H, W, 3), RGB
+│   │   ├── color                              (H, W, 3) RGB, decoded by the server
 │   │   ├── depth                              (H, W) or (H, W, 1), optional
 │   │   ├── intrinsic_matrix                   (3, 3), optional
 │   │   ├── extrinsics_matrix                  (4, 4), optional
@@ -403,9 +405,13 @@ from XPolicyLab.utils.load_file import load_hdf5
 from XPolicyLab.utils.process_data import decode_image_bit, get_robot_action_dim_info
 ```
 
-`decode_image_bit` handles encoded RGB image streams. `get_robot_action_dim_info(env_cfg_type)` returns robot-specific `arm_dim` and `ee_dim` lists, so adapters do not need to hard-code action dimensions.
+`decode_image_bit` turns encoded image streams into arrays and returns already-decoded values untouched. `get_robot_action_dim_info(env_cfg_type)` returns robot-specific `arm_dim` and `ee_dim` lists, so adapters do not need to hard-code action dimensions.
 
-> **Mandatory:** always decode image bits with `decode_image_bit` from `XPolicyLab.utils.process_data` — never write your own `cv2.imdecode` / `np.frombuffer` / PIL decoding in adapters, conversion scripts, or training dataloaders. RoboTwin and RoboDojo historical data store image bits in legacy layouts that only this function handles correctly; a hand-rolled decoder will silently decode wrong or fail on part of the data.
+> **`model.py` never decodes images.** The policy server runs `decode_obs_images` on every observation before calling `update_obs` / `update_obs_batch`, so `obs["vision"][<camera>]["color"]` always arrives as an image array. Depth maps, intrinsics and extrinsics are passed through untouched.
+
+> **Mandatory for offline code:** in conversion scripts and training dataloaders that read trajectory files, always decode with `decode_image_bit` — never write your own `cv2.imdecode` / `np.frombuffer` / PIL decoding. RoboTwin and RoboDojo historical data store image bits in legacy layouts that only this function handles correctly; a hand-rolled decoder will silently decode wrong or fail on part of the data.
+
+> **Everything is RGB, end to end.** Stored image bits were encoded from RGB frames, so `decode_image_bit` returns RGB and no channel conversion belongs anywhere in data conversion, training, or evaluation. The only legitimate conversions are adapters for a medium with a different convention: `cv2.VideoWriter` consumes BGR, so convert with `COLOR_RGB2BGR` right before `writer.write(...)`, and `cv2.VideoCapture` returns BGR, so convert with `COLOR_BGR2RGB` right after `cap.read()`. Writing `cv2.cvtColor(decode_image_bit(...), COLOR_BGR2RGB)` is always a bug: it trains the model on BGR while evaluation feeds it RGB.
 
 Robot action dimensions are registered in `utils/robot/_robot_info.json`: each top-level key is an `env_cfg_type` such as `arx_x5`, with `arm_dim` / `ee_dim` lists for per-arm joint and end-effector/gripper dimensions. Update it when adding a new robot configuration so conversion, training, and deployment code can infer action shapes consistently.
 
@@ -439,6 +445,8 @@ export EVAL_ENV_TYPE=debug
 bash eval.sh RoboDojo stack_bowls demo arx_x5 joint 0 0 0 \
   <policy_env_or_uv_path> <eval_env_conda_env>
 ```
+
+The debug client sends plain image arrays by default. Re-run with `DEBUG_OBS_ENCODED=1` to make it send encoded camera colors instead — a JPEG buffer, raw bytes, and a plain array across the three cameras — which exercises the server-side decode path that real environment clients rely on.
 
 For a quick smoke test, `policy/demo_policy` accepts placeholder env names such as `base`. Argument details live in [Common Workflow](#-common-workflow).
 

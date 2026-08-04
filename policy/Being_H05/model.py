@@ -4,7 +4,6 @@ import os
 import sys
 from typing import Any
 
-import cv2
 import numpy as np
 
 from XPolicyLab.model_template import ModelTemplate
@@ -235,13 +234,8 @@ def extract_image(observation, candidate_names):
 
 
 def ensure_hwc_uint8(image):
-    if isinstance(image, (bytes, bytearray, memoryview)):
-        image = decode_compressed_image(np.frombuffer(bytes(image), dtype=np.uint8))
-
     image = np.asarray(image)
 
-    if image.ndim == 1 and image.dtype == np.uint8:
-        image = decode_compressed_image(image)
 
     if image.ndim != 3:
         raise ValueError(f"Expected image ndim=3, got shape {image.shape}")
@@ -257,10 +251,3 @@ def ensure_hwc_uint8(image):
     if image.shape[0] in (1, 3):
         return np.transpose(image, (1, 2, 0))
     raise ValueError(f"Unsupported image shape: {image.shape}")
-
-
-def decode_compressed_image(image_buffer):
-    decoded = cv2.imdecode(np.asarray(image_buffer, dtype=np.uint8), cv2.IMREAD_COLOR)
-    if decoded is None:
-        raise ValueError("Failed to decode compressed image buffer.")
-    return decoded

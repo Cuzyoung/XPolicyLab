@@ -9,7 +9,6 @@ from typing import Any
 
 import numpy as np
 
-from XPolicyLab.utils.process_data import decode_image_bit
 
 _CUR_DIR = Path(__file__).resolve().parent
 _XPL_ROOT = _CUR_DIR.parents[2]
@@ -31,8 +30,11 @@ from XPolicyLab.utils.checkpoint_resolver import (
     candidate_checkpoint_roots,
     ckpt_name_is_path,
 )
-from XPolicyLab.utils.load_file import load_json, load_yaml
-from XPolicyLab.utils.process_data import pack_robot_state, unpack_robot_state
+from XPolicyLab.utils.process_data import (
+    get_robot_action_dim_info,
+    pack_robot_state,
+    unpack_robot_state,
+)
 
 
 def _parse_bool(value: Any, default: bool = False) -> bool:
@@ -61,13 +63,6 @@ def _as_path(value: str | None, base: Path = _CUR_DIR) -> Path | None:
     if not path.is_absolute():
         path = base / path
     return path.resolve()
-
-
-def _load_robot_action_dim_info(env_cfg_type: str) -> dict[str, list[int]]:
-    env_root = _CUR_DIR.parents[1] / "env_cfg"
-    env_cfg = load_yaml(str(env_root / f"{env_cfg_type}.yml"))
-    robot_name = env_cfg["config"]["robot"]
-    return load_json(str(env_root / "robot" / "_robot_info.json"))[robot_name]
 
 
 def _pad_or_trim_np(value: np.ndarray, dim: int) -> np.ndarray:
@@ -102,12 +97,8 @@ def _choose_checkpoint_file(path: Path, preferred_file: str) -> Path | None:
     return None
 
 
-def _image_to_uint8_hwc(image: Any, input_color_space: str = "rgb") -> np.ndarray:
-    if isinstance(image, (bytes, bytearray, memoryview)):
-        image = decode_image_bit(np.frombuffer(bytes(image), dtype=np.uint8))
+def _image_to_uint8_hwc(image: Any) -> np.ndarray:
     arr = np.asarray(image)
-    if arr.ndim == 1 and arr.dtype == np.uint8:
-        arr = decode_image_bit(arr)
     if arr.ndim != 3:
         raise ValueError(f"Expected image ndim=3, got shape {arr.shape}")
     if arr.shape[0] in (1, 3) and arr.shape[-1] not in (1, 3):
@@ -121,8 +112,6 @@ def _image_to_uint8_hwc(image: Any, input_color_space: str = "rgb") -> np.ndarra
         arr = np.repeat(arr, 3, axis=-1)
     if arr.shape[-1] != 3:
         raise ValueError(f"Unsupported image shape: {arr.shape}")
-    if input_color_space.lower() == "bgr":
-        arr = arr[..., ::-1]
     return np.ascontiguousarray(arr)
 
 
@@ -155,7 +144,7 @@ class Model(ModelTemplate):
         if not self.env_cfg_type:
             raise ValueError("env_cfg_type is required for GigaWorldPolicy.")
 
-        self.robot_action_dim_info = _load_robot_action_dim_info(self.env_cfg_type)
+        self.robot_action_dim_info = get_robot_action_dim_info(self.env_cfg_type)
         self.xpolicylab_action_dim = self._packed_dim()
         self.model_state_dim = int(self.model_cfg.get("model_state_dim") or self.model_cfg.get("state_dim") or self.xpolicylab_action_dim)
         self.model_action_dim = int(self.model_cfg.get("model_action_dim") or self.model_cfg.get("action_dim") or self.xpolicylab_action_dim)
@@ -169,7 +158,6 @@ class Model(ModelTemplate):
         self.delta_to_absolute = _parse_bool(self.model_cfg.get("delta_to_absolute"), True)
         self.num_frames = int(self.model_cfg.get("num_frames") or max(self.action_chunk, 24))
         self.load_model = _parse_bool(self.model_cfg.get("load_model"), True)
-        self.input_color_space = str(self.model_cfg.get("input_color_space") or "rgb")
         self.action_request_count = 0
 
         self.view_candidates = {
@@ -360,10 +348,10 @@ class Model(ModelTemplate):
                 if isinstance(item, dict):
                     for key in ("color", "rgb", "image"):
                         if key in item:
-                            return _image_to_uint8_hwc(item[key], self.input_color_space)
-                return _image_to_uint8_hwc(item, self.input_color_space)
+                            return _image_to_uint8_hwc(item[key])
+                return _image_to_uint8_hwc(item)
             if name in obs:
-                return _image_to_uint8_hwc(obs[name], self.input_color_space)
+                return _image_to_uint8_hwc(obs[name])
         raise KeyError(f"Could not find image for candidates: {candidates}")
 
     def _extract_prompt(self, obs: dict[str, Any]) -> str:

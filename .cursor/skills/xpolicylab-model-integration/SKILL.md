@@ -20,7 +20,7 @@ Add each policy as a self-contained `policy/<POLICY>/` adapter; keep upstream mo
    bash eval.sh RoboDojo stack_bowls <ckpt_name> arx_x5 joint 0 0 0 <policy_env> base
    ```
 
-   Fix import, server-startup, action-key, and shape errors until the loop completes.
+   Fix import, server-startup, action-key, and shape errors until the loop completes. Run once more with `DEBUG_OBS_ENCODED=1` so the debug client sends encoded camera colors and the server-side decode path is exercised.
 6. Static checks from the repo root: `bash -n policy/<POLICY>/*.sh` and `python -m py_compile policy/<POLICY>/model.py policy/<POLICY>/deploy.py`.
 7. Write `policy/<POLICY>/README.md`: install, data, train, and eval commands, supported `action_type` / `env_cfg_type`, checkpoint layout, known limitations.
 
@@ -40,9 +40,11 @@ Action dict keys: dual-arm uses `left_arm_joint_state` / `right_arm_joint_state`
 
 ## Conventions
 
-- **Image decoding is mandatory via `decode_image_bit`** from `XPolicyLab.utils.process_data` — never hand-roll `cv2.imdecode` / `np.frombuffer` / PIL decoding in `model.py`, data-conversion scripts, or training dataloaders. RoboTwin/RoboDojo legacy image-bit layouts are only handled correctly by this function; custom decoders silently decode wrong or fail on part of the data.
+- **`model.py` must not decode images.** The policy server decodes observations before `update_obs` / `update_obs_batch`, so `obs["vision"][<camera>]["color"]` is always a plain image array. Adapters only reshape / cast / resize.
+- **Offline code decodes only via `decode_image_bit`** from `XPolicyLab.utils.process_data` — in data-conversion scripts and training dataloaders, never hand-roll `cv2.imdecode` / `np.frombuffer` / PIL decoding. RoboTwin/RoboDojo legacy image-bit layouts are only handled correctly by this function; custom decoders silently decode wrong or fail on part of the data.
 - `eval.sh` positional args, same for all adapters: `bench_name task_name ckpt_name env_cfg_type action_type seed policy_gpu_id env_gpu_id policy_env_or_uv_path eval_env_conda_env`.
 - Checkpoints resolve to `checkpoints/<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>-<seed>/`; a full folder name or explicit path also works.
-- Observations carry the language prompt under `instruction` (string; fall back to `instructions`). Images are RGB; poses are `[x, y, z, qw, qx, qy, qz]`.
+- Observations carry the language prompt under `instruction` (string; fall back to `instructions`). Poses are `[x, y, z, qw, qx, qy, qz]`.
+- Images are RGB end to end — never add channel swaps in conversion, training, or eval code. The only exceptions are medium adapters: `COLOR_RGB2BGR` immediately before `cv2.VideoWriter.write(...)`, `COLOR_BGR2RGB` immediately after `cv2.VideoCapture.read()`.
 - Trajectory HDF5 files store a singular `instruction` string and camera extrinsics as `extrinsic_matrix`; runtime observations use `extrinsics_matrix`.
 - Full observation/trajectory format trees live in the repo README under "Standard Data Formats".

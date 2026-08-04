@@ -40,12 +40,18 @@ import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-import cv2
 import h5py
 import imageio
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 from tqdm import tqdm
+
+_XPOLICYLAB_ROOT = Path(__file__).resolve().parents[2]
+for _search_path in (str(_XPOLICYLAB_ROOT.parent), str(_XPOLICYLAB_ROOT)):
+    if _search_path not in sys.path:
+        sys.path.insert(0, _search_path)
+
+from XPolicyLab.utils.process_data import decode_image_bit
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -99,8 +105,8 @@ def build_arm_ee(ee_poses: np.ndarray, gripper: np.ndarray):
 # Video
 # ---------------------------------------------------------------------------
 
-def write_video(frames_bgr_list, out_path: Path, fps: float):
-    """Write a list of BGR frames to an H264 mp4 via imageio."""
+def write_video(frames_rgb_list, out_path: Path, fps: float):
+    """Write a list of RGB frames to an H264 mp4 via imageio."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     writer = imageio.get_writer(
         str(out_path),
@@ -112,24 +118,15 @@ def write_video(frames_bgr_list, out_path: Path, fps: float):
         output_params=["-crf", CRF],
     )
     try:
-        for bgr in frames_bgr_list:
-            writer.append_data(bgr)
+        for rgb in frames_rgb_list:
+            writer.append_data(rgb)
     finally:
         writer.close()
 
 
 def decode_camera_frames(colors_dataset) -> list:
-    """Decode a RoboDojo camera's colors (T,) JPEG byte-string dataset into a list of BGR frames."""
-    frames = []
-    for i in range(colors_dataset.shape[0]):
-        buf = colors_dataset[i]
-        if isinstance(buf, (bytes, bytearray, np.bytes_)):
-            buf = bytes(buf).rstrip(b"\x00")
-        img = cv2.imdecode(np.frombuffer(buf, np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
-            raise ValueError(f"JPEG decode failed at frame {i}")
-        frames.append(img)
-    return frames
+    """Decode a RoboDojo camera's colors (T,) dataset into a list of RGB frames."""
+    return list(decode_image_bit(colors_dataset))
 
 
 # ---------------------------------------------------------------------------

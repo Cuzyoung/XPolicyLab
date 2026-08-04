@@ -103,16 +103,7 @@ def _center_crop_pil(img: Image.Image, crop_ratio: float) -> Image.Image:
 
 def _ensure_hwc_uint8(image: Any) -> np.ndarray:
     """Convert observation image to HWC uint8 RGB ndarray."""
-    if isinstance(image, (bytes, bytearray, memoryview)):
-        import cv2
-        buf = np.frombuffer(bytes(image), dtype=np.uint8)
-        decoded = cv2.imdecode(buf, cv2.IMREAD_COLOR)
-        return cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB)
     image = np.asarray(image)
-    if image.ndim == 1 and image.dtype == np.uint8:
-        import cv2
-        decoded = cv2.imdecode(image, cv2.IMREAD_COLOR)
-        return cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB)
     if image.ndim == 3:
         if np.issubdtype(image.dtype, np.floating):
             image = (np.clip(image, 0.0, 1.0) * 255.0).astype(np.uint8)

@@ -15,9 +15,17 @@
 # ------------------------------------------------------------------------------
 
 from __future__ import annotations
-import io, numpy as np, pyarrow.parquet as pq, cv2
+import io, sys, numpy as np, pyarrow.parquet as pq, cv2
+from pathlib import Path
 from mmengine import fileio
 from PIL import Image
+
+_XPOLICYLAB_ROOT = Path(__file__).resolve().parents[4]
+for _search_path in (str(_XPOLICYLAB_ROOT.parent), str(_XPOLICYLAB_ROOT)):
+    if _search_path not in sys.path:
+        sys.path.insert(0, _search_path)
+
+from XPolicyLab.utils.process_data import decode_image_bit
 from scipy.spatial.transform import Rotation as R
 import h5py
 from typing import Sequence, Dict
@@ -56,31 +64,26 @@ def decode_image_from_bytes(x) -> Image.Image:
     if isinstance(x, Image.Image):
         return x
 
-    if isinstance(x, np.ndarray):
-        arr = x
-        if arr.ndim == 3 and arr.shape[-1] in (1, 3):
-            rgb = arr if arr.dtype == np.uint8 else np.clip(arr, 0, 255).astype(np.uint8)
-            return Image.fromarray(rgb)
-        if arr.ndim == 1:
-            x = arr.astype(np.uint8, copy=False)
-        else:
-            x = arr.astype(np.uint8, copy=False).reshape(-1)
-    elif isinstance(x, (bytes, bytearray)):
-        x = np.frombuffer(x, dtype=np.uint8)
-    else:
-        x = np.asarray(x, dtype=np.uint8).reshape(-1)
+    if isinstance(x, np.ndarray) and x.ndim == 3 and x.shape[-1] in (1, 3):
+        rgb = x if x.dtype == np.uint8 else np.clip(x, 0, 255).astype(np.uint8)
+        return Image.fromarray(rgb)
 
-    rgb = cv2.imdecode(x, cv2.IMREAD_COLOR)
-    if rgb is None:
-        if x.size == 2764800:
-            rgb = x.reshape(720, 1280, 3)
-        elif x.size == 921600:
-            rgb = x.reshape(480, 640, 3)
-        else:
-            raise ValueError(f"Could not decode image buffer of size {x.size}")
+    try:
+        return Image.fromarray(decode_image_bit(x))
+    except ValueError:
+        pass
+
+    # Uncompressed frames are stored as a flat buffer at one of two known resolutions.
+    if isinstance(x, (bytes, bytearray, memoryview)):
+        buffer = np.frombuffer(bytes(x), dtype=np.uint8)
     else:
-        rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
-    return Image.fromarray(rgb)
+        buffer = np.asarray(x, dtype=np.uint8).reshape(-1)
+
+    if buffer.size == 2764800:
+        return Image.fromarray(buffer.reshape(720, 1280, 3))
+    if buffer.size == 921600:
+        return Image.fromarray(buffer.reshape(480, 640, 3))
+    raise ValueError(f"Could not decode image buffer of size {buffer.size}")
 
 def quat_to_rotate6d(q: np.ndarray, scalar_first = False) -> np.ndarray:
     return R.from_quat(q, scalar_first = scalar_first).as_matrix()[..., :, :2].reshape(q.shape[:-1] + (6,))

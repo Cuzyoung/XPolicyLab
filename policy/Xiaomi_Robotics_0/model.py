@@ -5,7 +5,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 import torch
 from mmengine import Config
@@ -14,7 +13,7 @@ from transformers import AutoProcessor
 
 from XPolicyLab.model_template import ModelTemplate
 from XPolicyLab.utils.checkpoint_resolver import resolve_checkpoint_root
-from XPolicyLab.utils.process_data import decode_image_bit, get_robot_action_dim_info
+from XPolicyLab.utils.process_data import get_robot_action_dim_info
 
 _POLICY_DIR = Path(__file__).resolve().parent
 _XR0_ROOT = _POLICY_DIR / "xiaomi_robotics_0" / "xr0"
@@ -163,17 +162,9 @@ def _load_xr0_model(model_dir: Path, checkpoint_tag: str, device: torch.device):
     return cfg, model.eval().to(device), mean, std, action_mask, action_length
 
 
-def _decode_compressed_image(image_buffer: np.ndarray) -> np.ndarray:
-    return decode_image_bit(image_buffer)
-
-
 def _ensure_hwc_uint8(image: Any) -> np.ndarray:
-    if isinstance(image, (bytes, bytearray, memoryview)):
-        return _decode_compressed_image(np.frombuffer(bytes(image), dtype=np.uint8))
 
     image = np.asarray(image)
-    if image.ndim == 1 and image.dtype == np.uint8:
-        return _decode_compressed_image(image)
 
     if image.ndim != 3:
         raise ValueError(f"Expected image ndim=3, got shape {image.shape}")

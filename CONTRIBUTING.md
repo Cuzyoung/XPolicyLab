@@ -42,7 +42,11 @@ Define `class Model(ModelTemplate)` (`from XPolicyLab.model_template import Mode
 
 Action dictionaries use the standard keys (`left_arm_joint_state`, `right_ee_joint_state`, `ee_pose`, ...) with dimensions taken from `get_robot_action_dim_info(env_cfg_type)` in `XPolicyLab.utils.process_data` — never hard-coded. Register new robots in `utils/robot/_robot_info.json`. Observation and trajectory formats: README, [Standard Data Formats](README.md#-standard-data-formats).
 
-Decode image bits only with `decode_image_bit` from `XPolicyLab.utils.process_data` — never hand-roll `cv2.imdecode` / `np.frombuffer` / PIL decoding in adapters, conversion scripts, or training dataloaders. RoboTwin/RoboDojo legacy image-bit layouts are only handled correctly by this function.
+`model.py` never decodes images. The policy server decodes every observation before calling `update_obs` / `update_obs_batch`, so `obs["vision"][<camera>]["color"]` is always a plain image array.
+
+In offline code — conversion scripts and training dataloaders that read trajectory files — decode only with `decode_image_bit` from `XPolicyLab.utils.process_data`, never with hand-rolled `cv2.imdecode` / `np.frombuffer` / PIL decoding. RoboTwin/RoboDojo legacy image-bit layouts are only handled correctly by this function.
+
+Images are RGB end to end. `decode_image_bit` returns RGB, so no channel conversion belongs in conversion, training, or eval code. The only exceptions are medium adapters: `COLOR_RGB2BGR` immediately before `cv2.VideoWriter.write(...)`, and `COLOR_BGR2RGB` immediately after `cv2.VideoCapture.read()`. A `cv2.cvtColor(decode_image_bit(...), COLOR_BGR2RGB)` anywhere means training and evaluation disagree on channel order.
 
 ### `deploy.yml`
 

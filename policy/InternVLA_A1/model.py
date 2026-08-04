@@ -6,7 +6,6 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 import torch
 from huggingface_hub import snapshot_download
@@ -27,7 +26,6 @@ os.environ.setdefault("QWEN3_2B_PATH", str((_CHECKPOINTS_DIR / "shared" / "Qwen3
 from XPolicyLab.model_template import ModelTemplate
 from XPolicyLab.utils.checkpoint_resolver import resolve_checkpoint_root
 from XPolicyLab.utils.process_data import (
-    decode_image_bit,
     get_robot_action_dim_info,
     pack_robot_state,
     unpack_robot_state,
@@ -62,17 +60,9 @@ def extract_image(observation, candidate_names):
     raise KeyError(f"Could not find any image for candidates: {candidate_names}")
 
 
-def decode_compressed_image(image_buffer):
-    return decode_image_bit(image_buffer)
-
-
 def ensure_hwc_uint8(image):
-    if isinstance(image, (bytes, bytearray, memoryview)):
-        image = decode_compressed_image(np.frombuffer(bytes(image), dtype=np.uint8))
 
     image = np.asarray(image)
-    if image.ndim == 1 and image.dtype == np.uint8:
-        image = decode_compressed_image(image)
 
     if image.ndim != 3:
         raise ValueError(f"Expected image ndim=3, got shape {image.shape}")

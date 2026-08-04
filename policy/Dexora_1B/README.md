@@ -36,6 +36,8 @@ bash eval.sh RoboDojo stack_bowls RoboDojo-cotrain-arx_x5-joint-0 arx_x5 joint 0
 
 ## Configuration
 
-`deploy.yml` keys to check before evaluation: `dexora_root`, `checkpoint_path`, `config_path`, `stats_file`, `text_encoder_path`, `vision_encoder_path`, `hf_home`, `hf_hub_cache`, `hf_offline`, `local_files_only`, `allow_default_robot_dims`.
+`deploy.yml` keys to check before evaluation: `dexora_root`, `checkpoint_path`, `config_path`, `stats_file`, `text_encoder_path`, `vision_encoder_path`, `hf_home`, `hf_hub_cache`, `hf_offline`, `local_files_only`, `allow_default_robot_dims`, `input_color_order`.
+
+`input_color_order` defaults to `rgb` and should stay there for any checkpoint trained on XPolicyLab data, which is RGB end to end. Set it to `bgr` only if this adapter is loading a checkpoint trained on an externally prepared dataset that stores BGR frames — then, and only then, evaluation has to feed BGR to match training.
 
 Dexora-specific environment variables: `DEXORA_ROOT` (required; local Dexora checkout), `DEXORA_CKPT_PATH` (explicit checkpoint file), `DEXORA_CONFIG_PATH` (defaults to `<dexora_root>/configs/base.yaml`), `DEXORA_T5` (defaults to `google/t5-v1_1-xxl`), and `DEXORA_SIGLIP` (defaults to `google/siglip-so400m-patch14-384`).

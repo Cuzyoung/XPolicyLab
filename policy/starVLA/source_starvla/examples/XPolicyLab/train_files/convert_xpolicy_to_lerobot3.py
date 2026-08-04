@@ -39,11 +39,8 @@ def _read_instruction(h5_file: h5py.File, fallback: str) -> str:
     return str(_decode_scalar(h5_file["instruction"][()]) or fallback)
 
 
-def _decode_bgr_image(raw_bytes) -> np.ndarray:
-    image = decode_image_bit(raw_bytes)
-    if image is None:
-        raise ValueError("Failed to decode compressed image bytes.")
-    image = np.asarray(image)
+def _decode_rgb_image(raw_bytes) -> np.ndarray:
+    image = np.asarray(decode_image_bit(raw_bytes))
     if image.ndim != 3:
         raise ValueError(f"Expected image with 3 dims, got {image.shape}.")
     if image.shape[-1] != 3 and image.shape[0] == 3:
@@ -71,10 +68,11 @@ def _write_video_from_hdf5_camera(
     try:
         colors = h5_file["vision"][camera_name]["colors"]
         for frame_index in range(length):
-            image = _decode_bgr_image(colors[frame_index])
+            image = _decode_rgb_image(colors[frame_index])
             if image.shape[:2] != (height, width):
                 image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
-            writer.write(image)
+            # cv2.VideoWriter consumes BGR; the LeRobot loader decodes back to RGB.
+            writer.write(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
     finally:
         writer.release()
 

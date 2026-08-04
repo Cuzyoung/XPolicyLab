@@ -4,7 +4,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 import torch
 from PIL import Image
@@ -21,7 +20,7 @@ for _path in (str(_REPO_ROOT), str(_CUR_DIR), str(_XVLA_ROOT)):
 
 from XPolicyLab.model_template import ModelTemplate
 from XPolicyLab.utils.checkpoint_resolver import resolve_checkpoint_root
-from XPolicyLab.utils.process_data import decode_image_bit, get_robot_action_dim_info
+from XPolicyLab.utils.process_data import get_robot_action_dim_info
 
 from xvla.models.modeling_xvla import XVLA
 from xvla.models.processing_xvla import XVLAProcessor
@@ -43,12 +42,8 @@ def extract_image(observation, candidate_names):
 
 
 def ensure_hwc_uint8(image):
-    if isinstance(image, (bytes, bytearray, memoryview)):
-        image = decode_compressed_image(np.frombuffer(bytes(image), dtype=np.uint8))
 
     image = np.asarray(image)
-    if image.ndim == 1 and image.dtype == np.uint8:
-        image = decode_compressed_image(image)
 
     if image.ndim != 3:
         raise ValueError(f"Expected image ndim=3, got shape {image.shape}")
@@ -64,10 +59,6 @@ def ensure_hwc_uint8(image):
     if image.shape[0] in (1, 3):
         return np.transpose(image, (1, 2, 0))
     raise ValueError(f"Unsupported image shape: {image.shape}")
-
-
-def decode_compressed_image(image_buffer):
-    return decode_image_bit(image_buffer)
 
 
 def _normalize_prompt_value(value: Any) -> str | None:
@@ -261,8 +252,6 @@ def rotate6d_to_quat(vec6: np.ndarray) -> np.ndarray:
 
     quat = quat / np.clip(np.linalg.norm(quat, axis=-1, keepdims=True), 1e-8, None)
     return np.concatenate([quat[..., 3:4], quat[..., :3]], axis=-1).astype(np.float32)
-
-
 
 
 def build_xvla_proprio(observation: dict[str, Any]) -> np.ndarray:

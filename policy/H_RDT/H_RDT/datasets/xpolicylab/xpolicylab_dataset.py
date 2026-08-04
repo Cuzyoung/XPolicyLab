@@ -216,9 +216,6 @@ class XPolicyLabDataset:
 
     def _decode_xpolicy_image(self, image_bits):
         image = decode_image_bit(image_bits)
-        if image is None:
-            raise ValueError("Failed to decode XPolicyLab image bytes.")
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         if image.shape[:2] != (480, 640):
             image = cv2.resize(image, (640, 480), interpolation=cv2.INTER_AREA)
         return image

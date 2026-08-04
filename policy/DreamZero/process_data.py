@@ -181,11 +181,9 @@ def _decode_episode_images(data: dict[str, Any], num_steps: int) -> dict[str, np
             images[output_name] = np.zeros((num_steps, 240, 320, 3), dtype=np.uint8)
             continue
         raw = decode_image_bit(vision[source_name]["colors"])
-        processed = []
-        for img in raw:
-            img = cv2.resize(img, (320, 240), interpolation=cv2.INTER_AREA)
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            processed.append(img)
+        processed = [
+            cv2.resize(img, (320, 240), interpolation=cv2.INTER_AREA) for img in raw
+        ]
         images[output_name] = np.asarray(processed, dtype=np.uint8)
     return images
 
