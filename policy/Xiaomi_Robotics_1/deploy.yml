@@ -1,5 +1,7 @@
 # Basic experiment configuration
 policy_name: Xiaomi_Robotics_1
+protocol: ws
+host: localhost
 bench_name: null
 task_name: null
 ckpt_name: null

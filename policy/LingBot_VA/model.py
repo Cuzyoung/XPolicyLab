@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 
 _CUR_DIR = Path(__file__).resolve().parent
-_REPO_ROOT = _CUR_DIR.parents[3]
+_REPO_ROOT = _CUR_DIR.parents[2]
 
 for _path in (str(_REPO_ROOT),):
     if _path not in sys.path:
