@@ -16,7 +16,7 @@ framework:
     dino_backbone: dinov2_vits14
 
   action_model:
-    action_model_type: DiT-B
+    action_model_type: DiT-L
     hidden_size: 2560
     add_pos_embed: true
     max_seq_len: 1024
@@ -105,7 +105,7 @@ trainer:
   loss_scale:
     vla: 1.0
     vlm: 0.1
-  pretrained_checkpoint: ../checkpoints/LDA-small/LDA-small.pt
+  pretrained_checkpoint: ../checkpoints/LDA-pretrain/LDA-pretrain.pt
   repeated_diffusion_steps: 4
   max_grad_norm: 1.0
   warmup_ratio: 0.1

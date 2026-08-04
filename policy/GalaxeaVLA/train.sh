@@ -32,7 +32,7 @@ default_dataset_dir="$(xpolicylab_resolve_dataset_dir "${SCRIPT_DIR}" "${bench_n
 dataset_dir="${GALAXEA_DATASET_DIR:-${default_dataset_dir}}"
 if [[ ! -d "${dataset_dir}" ]]; then
     echo -e "\033[31m[train] dataset dir not found: ${dataset_dir}\033[0m" >&2
-    echo "  Run process_data.sh first, or set GALAXEA_DATASET_DIR." >&2
+    echo "  Set GALAXEA_DATASET_DIR to a LeRobot v3.0 dataset directory." >&2
     exit 1
 fi
 dataset_dir="$(cd "${dataset_dir}" && pwd)"

@@ -100,6 +100,10 @@ checkpoint_path="$(realpath "${checkpoint_path}")"
 echo "[SERVER] resolved StarVLA checkpoint: ${checkpoint_path}"
 starvla_server_port=$(bash "${UTILS_DIR}/get_free_port.sh")
 starvla_server_host="127.0.0.1"
+starvla_include_state="${STARVLA_INCLUDE_STATE:-auto}"
+starvla_unnorm_key="${STARVLA_UNNORM_KEY:-arx_x5}"
+starvla_execute_horizon="${STARVLA_EXECUTE_HORIZON:-16}"
+starvla_image_size="${STARVLA_IMAGE_SIZE:-[224,224]}"
 
 cleanup() {
     if [[ -n "${STARVLA_SERVER_PID:-}" ]]; then
@@ -110,6 +114,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "[SERVER] policy=${policy_name}, task=${task_name}, policy_server_port=${policy_server_port}, starvla_port=${starvla_server_port}"
+echo "[SERVER] starVLA overrides: include_state=${starvla_include_state}, unnorm_key=${starvla_unnorm_key}, execute_horizon=${starvla_execute_horizon}, image_size=${starvla_image_size}"
 
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "${policy_conda_env}"
@@ -144,6 +149,10 @@ python "${XPL_ROOT}/setup_policy_server.py" \
         policy_name="${policy_name}" \
         action_type="${action_type}" \
         action_dim="${action_dim}" \
+        include_state="${starvla_include_state}" \
+        unnorm_key="${starvla_unnorm_key}" \
+        execute_horizon="${starvla_execute_horizon}" \
+        image_size="${starvla_image_size}" \
         starvla_root="${STARVLA_ROOT}" \
         starvla_server_host="${starvla_server_host}" \
         starvla_server_port="${starvla_server_port}"

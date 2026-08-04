@@ -42,6 +42,8 @@ mkdir -p "${HF_HOME}"
 
 cd "${REPO_ROOT}"
 
+MAX_STEPS="${OPENVLA_MAX_STEPS:-100005}"
+
 torchrun --standalone --nnodes 1 --nproc-per-node "${NUM_GPUS}" vla-scripts/finetune.py \
   --vla_path "${MODEL_DIR}" \
   --data_root_dir "${DATA_ROOT}" \
@@ -53,10 +55,10 @@ torchrun --standalone --nnodes 1 --nproc-per-node "${NUM_GPUS}" vla-scripts/fine
   --use_film True \
   --num_images_in_input 3 \
   --use_proprio True \
-  --batch_size 2 \
+  --batch_size 16 \
   --learning_rate 5e-4 \
   --num_steps_before_decay 50000 \
-  --max_steps 100005 \
+  --max_steps "${MAX_STEPS}" \
   --use_val_set True \
   --val_freq 10000 \
   --save_freq 10000 \

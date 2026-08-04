@@ -16,9 +16,6 @@ model:
   num_history_frames: 0
   action_video_read_mode: current_only
   video_rope_frame_stride: ${data.train.action_video_freq_ratio}
-  detach_history_kv_during_training: true
-  prepend_episode_first_frame: false
-  prior_only_training: true
   loss:
     lambda_action_prior: 1.0
 

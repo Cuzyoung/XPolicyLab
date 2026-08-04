@@ -13,7 +13,7 @@ def main() -> None:
     parser.add_argument("stats_path", type=Path)
     parser.add_argument("output_path", type=Path)
     parser.add_argument("--json_dir", type=Path, required=True)
-    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--batch_size", type=int, default=32)
     args = parser.parse_args()
 
     stats = json.loads(args.stats_path.read_text(encoding="utf-8"))

@@ -55,6 +55,66 @@ class CheckpointWeightLoader(WeightLoader):
 
 
 @dataclasses.dataclass(frozen=True)
+class PartialCheckpointWeightLoader(WeightLoader):
+    """Loads weights from a checkpoint, skipping layers with shape mismatches.
+
+    Useful when loading pretrained weights into a model with a different action_dim
+    (e.g. 32-dim pi05_base into a 54-dim Tianji Marvin + Wuji Hand model). Mismatched
+    action_in_proj / action_out_proj / state_proj layers keep their randomly initialized values.
+
+    Compatible with:
+      trained checkpoints:
+        example: "./checkpoints/<config>/<exp>/<step>/params"
+      released checkpoints:
+        example: "gs://openpi-assets/checkpoints/<model>/params"
+    """
+
+    params_path: str
+    # Regex for layers that may be skipped on shape mismatch (default: action/state projections).
+    skip_on_mismatch_regex: str = ".*(action_in_proj|action_out_proj|state_proj).*"
+
+    def load(self, params: at.Params) -> at.Params:
+        loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
+
+        flat_ref = flax.traverse_util.flatten_dict(params, sep="/")
+        flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
+
+        skip_pattern = re.compile(self.skip_on_mismatch_regex)
+        result = {}
+        skipped_keys = []
+
+        for k, v in flat_loaded.items():
+            if k not in flat_ref:
+                continue
+            ref_shape = getattr(flat_ref[k], "shape", None)
+            loaded_shape = getattr(v, "shape", None)
+
+            if ref_shape == loaded_shape:
+                result[k] = v.astype(flat_ref[k].dtype) if v.dtype != flat_ref[k].dtype else v
+            elif skip_pattern.fullmatch(k):
+                skipped_keys.append(k)
+                logger.info(f"Skipping layer {k}: shape mismatch ({loaded_shape} -> {ref_shape})")
+            else:
+                raise ValueError(
+                    f"Shape mismatch at {k}: expected {ref_shape}, got {loaded_shape}. "
+                    f"Layer does not match skip_on_mismatch_regex pattern."
+                )
+
+        lora_pattern = re.compile(".*lora.*")
+        for k in flat_ref:
+            if k not in result and (lora_pattern.fullmatch(k) or k in skipped_keys):
+                result[k] = flat_ref[k]
+
+        if skipped_keys:
+            logger.warning(
+                f"Partially loaded checkpoint: skipped {len(skipped_keys)} layers with shape mismatches. "
+                f"These layers will use random initialization: {', '.join(skipped_keys)}"
+            )
+
+        return flax.traverse_util.unflatten_dict(result, sep="/")
+
+
+@dataclasses.dataclass(frozen=True)
 class PaliGemmaWeightLoader(WeightLoader):
     """Loads weights from the official PaliGemma checkpoint.
 

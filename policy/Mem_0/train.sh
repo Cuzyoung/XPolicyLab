@@ -93,7 +93,7 @@ run_execution_train() {
   local qwen_dir="${UPSTREAM_DIR}/checkpoints/Qwen3-VL-2B-Instruct"
   if [[ ! -d "${qwen_dir}" && "${ALLOW_NO_QWEN:-false}" != "true" ]]; then
     echo -e "\033[31m[train:execution] Qwen3-VL-2B backbone not found: ${qwen_dir}\033[0m" >&2
-    echo "Download it (cd Mem_0/checkpoints && python _download.py), or set ALLOW_NO_QWEN=true for a smoke run." >&2
+    echo "Download it (python scripts/_download.py --model 2b), or set ALLOW_NO_QWEN=true for a smoke run." >&2
     exit 1
   fi
 
@@ -255,7 +255,7 @@ PY
     shopt -u nullglob
     if [[ ${#safetensors[@]} -eq 0 ]]; then
       echo -e "\033[31m[train:planning] Qwen3-VL-8B weights not found under ${qwen8b_dir}\033[0m" >&2
-      echo "Download: cd Mem_0/checkpoints && python _download.py" >&2
+      echo "Download: python scripts/_download.py --model 8b" >&2
       echo "Smoke only: ALLOW_NO_QWEN8B=true DRY_RUN=true bash train.sh ... planning" >&2
       exit 1
     fi

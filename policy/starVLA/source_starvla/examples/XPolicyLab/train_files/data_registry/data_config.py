@@ -117,8 +117,15 @@ class XPolicyArxX5DataConfig:
         )
 
 
+class RoboDojoArxX5H50Q99DataConfig(XPolicyArxX5DataConfig):
+    """RoboDojo ARX X5 runtime schema for 50-step action chunks."""
+
+    action_indices = list(range(50))
+
+
 ROBOT_TYPE_CONFIG_MAP = {
     "xpolicylab_arx_x5": XPolicyArxX5DataConfig(),
+    "robodojo_arx_x5_h50_q99": RoboDojoArxX5H50Q99DataConfig(),
 }
 
 ROBOT_TYPE_TO_EMBODIMENT_TAG = {}
@@ -138,6 +145,12 @@ DATASET_NAMED_MIXTURES = {
     ],
     "xpolicylab_stack_bowls_arx_x5_50": [
         ("arx_x5", 1.0, "xpolicylab_arx_x5"),
+    ],
+    "robodojo_arx_x5_h50_q99": [
+        ("RoboDojo_lerobot_v21_video", 1.0, "robodojo_arx_x5_h50_q99"),
+    ],
+    "robodojo_v21_all_h50_q99": [
+        ("RoboDojo_lerobot_v21_video", 1.0, "robodojo_arx_x5_h50_q99"),
     ],
 }
 

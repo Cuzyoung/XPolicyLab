@@ -1,23 +1,20 @@
 #!/usr/bin/env bash
-# Download the RoboDojo dataset from ModelScope / HuggingFace to XPolicyLab/data/
+# Download the RoboDojo dataset from Hugging Face to XPolicyLab/data/
 #
 # Usage:
-#   bash scripts/RoboDojo/download_robodojo_data.sh <source> <type>
+#   bash scripts/RoboDojo/download_robodojo_data.sh <type>
 #
 # Example:
-#   bash scripts/RoboDojo/download_robodojo_data.sh modelscope lerobot_v3.0
-#   bash scripts/RoboDojo/download_robodojo_data.sh huggingface hdf5
+#   bash scripts/RoboDojo/download_robodojo_data.sh hdf5
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"  # XPolicyLab root directory
 DATA_ROOT="${PROJECT_ROOT}/../data"
 
-SOURCE="${1:-}"      # Download source: modelscope / huggingface
-DATA_TYPE="${2:-}"   # Data format: lerobot_v3.0 / lerobot_v2.1 / hdf5 / hdf5_w_depth / demo
+DATA_TYPE="${1:-}"   # Data format: lerobot_v3.0 / lerobot_v2.1 / hdf5 / demo / real
 
-MODELSCOPE_REPO="https://oauth2:ms-98d73e79-a89f-4cfa-ac03-039f2d26c7b4@www.modelscope.cn/datasets/niantianshinidie/RoboDojo_release.git"
-HF_REPO_ID="${HF_REPO_ID:-KailunSu/niantian}"
+HF_REPO_ID="${HF_REPO_ID:-RoboDojo-Benchmark/Robodojo}"
 HF_REVISION="${HF_REVISION:-main}"
 HF_MAX_WORKERS="${HF_MAX_WORKERS:-16}"
 HF_RETRY_WAIT="${HF_RETRY_WAIT:-60}"
@@ -26,25 +23,21 @@ HF_DOWNLOAD_TIMEOUT="${HF_DOWNLOAD_TIMEOUT:-300}"
 
 usage() {
 	cat <<'EOF'
-Usage: bash scripts/RoboDojo/download_robodojo_data.sh <source> <type>
-
-Sources:
-  modelscope
-  huggingface
+Usage: bash scripts/RoboDojo/download_robodojo_data.sh <type>
 
 Types:
   lerobot_v3.0   -> RoboDojo_lerobot_v30_video
   lerobot_v2.1   -> RoboDojo_lerobot_v21_video
   hdf5           -> RoboDojo
-  hdf5_w_depth   -> RoboDojo_w_depth
   demo           -> demo
+  real           -> RoboDojo_real
 
 Example:
-  bash scripts/RoboDojo/download_robodojo_data.sh modelscope lerobot_v3.0
-  bash scripts/RoboDojo/download_robodojo_data.sh huggingface hdf5
+  bash scripts/RoboDojo/download_robodojo_data.sh hdf5
+  bash scripts/RoboDojo/download_robodojo_data.sh real
 
-Environment (huggingface):
-  HF_REPO_ID            default: KailunSu/niantian
+Environment:
+  HF_REPO_ID            default: RoboDojo-Benchmark/Robodojo
   HF_REVISION           default: main
   HF_MAX_WORKERS        parallel file downloads (default: 16)
   HF_RETRY_WAIT         seconds to wait before retry (default: 60)
@@ -54,7 +47,7 @@ Environment (huggingface):
 EOF
 }
 
-if [[ -z "${SOURCE}" || -z "${DATA_TYPE}" ]]; then
+if [[ -z "${DATA_TYPE}" ]]; then
 	usage
 	exit 1
 fi
@@ -64,63 +57,28 @@ mkdir -p "${DATA_ROOT}"
 resolve_data_paths() {
 	case "${DATA_TYPE}" in
 		lerobot_v3.0)
-			REMOTE_DIR="RoboDojo_lerobot_v30_video"
-			TARGET_DIR="${DATA_ROOT}/RoboDojo_lerobot_v30_video"
+			DATA_DIR_NAME="RoboDojo_lerobot_v30_video"
 			;;
 		lerobot_v2.1)
-			REMOTE_DIR="RoboDojo_lerobot_v21_video"
-			TARGET_DIR="${DATA_ROOT}/RoboDojo_lerobot_v21_video"
+			DATA_DIR_NAME="RoboDojo_lerobot_v21_video"
 			;;
 		hdf5)
-			REMOTE_DIR="RoboDojo"
-			TARGET_DIR="${DATA_ROOT}/RoboDojo"
+			DATA_DIR_NAME="RoboDojo"
 			;;
 		demo)
-			REMOTE_DIR="demo"
-			TARGET_DIR="${DATA_ROOT}/demo"
+			DATA_DIR_NAME="demo"
 			;;
-		hdf5_w_depth)
-			REMOTE_DIR="RoboDojo_w_depth"
-			TARGET_DIR="${DATA_ROOT}/RoboDojo_w_depth"
+		real|RoboDojo_real)
+			DATA_DIR_NAME="RoboDojo_real"
 			;;
 		*)
 			echo "Invalid type: ${DATA_TYPE}" >&2
 			return 1
 			;;
 	esac
-}
 
-# ModelScope: git sparse-checkout fetch only the specified subdirectory
-clone_sparse_folder() {
-	local repo_url="$1"
-	local remote_dir="$2"
-	local target_dir="$3"
-	local tmp_dir
-
-	if [[ -d "${target_dir}" ]]; then
-		echo "==> Target already exists, skip: ${target_dir}"
-		return 0
-	fi
-
-	if ! command -v git >/dev/null 2>&1; then
-		echo "git not found" >&2
-		exit 1
-	fi
-
-	tmp_dir="$(mktemp -d)"
-	trap 'rm -rf "${tmp_dir}"' RETURN
-
-	echo "==> Downloading ${remote_dir} from ModelScope"
-	git clone --depth 1 --filter=blob:none --sparse "${repo_url}" "${tmp_dir}/repo"
-	git -C "${tmp_dir}/repo" sparse-checkout set "${remote_dir}"
-
-	if [[ ! -d "${tmp_dir}/repo/${remote_dir}" ]]; then
-		echo "Remote folder not found: ${remote_dir}" >&2
-		exit 1
-	fi
-
-	mv "${tmp_dir}/repo/${remote_dir}" "${target_dir}"
-	echo "==> Saved to ${target_dir}"
+	REMOTE_DIR="data/${DATA_DIR_NAME}"
+	TARGET_DIR="${DATA_ROOT}/${DATA_DIR_NAME}"
 }
 
 ensure_hf_deps() {
@@ -184,6 +142,7 @@ download_hf_folder() {
 	HF_REVISION="${HF_REVISION}" \
 	REMOTE_DIR="${remote_dir}" \
 	DATA_ROOT="${DATA_ROOT}" \
+	TARGET_DIR="${target_dir}" \
 	HF_MAX_WORKERS="${HF_MAX_WORKERS}" \
 	HF_RETRY_WAIT="${HF_RETRY_WAIT}" \
 	HF_MAX_RETRIES="${HF_MAX_RETRIES}" \
@@ -200,13 +159,14 @@ repo_id = os.environ["HF_REPO_ID"]
 revision = os.environ["HF_REVISION"]
 remote_dir = os.environ["REMOTE_DIR"]
 data_root = Path(os.environ["DATA_ROOT"])
-target_dir = data_root / remote_dir
+target_dir = Path(os.environ["TARGET_DIR"])
 complete_marker = target_dir / ".download_complete"
 max_workers = int(os.environ["HF_MAX_WORKERS"])
 retry_wait = int(os.environ["HF_RETRY_WAIT"])
 max_retries = int(os.environ["HF_MAX_RETRIES"])
 
 data_root.mkdir(parents=True, exist_ok=True)
+download_root = data_root.parent
 
 def is_retryable(exc: BaseException) -> bool:
 	err = str(exc).lower()
@@ -238,7 +198,7 @@ while True:
 				repo_id=repo_id,
 				repo_type="dataset",
 				revision=revision,
-				local_dir=str(data_root),
+				local_dir=str(download_root),
 				allow_patterns=[f"{remote_dir}/**"],
 				max_workers=max_workers,
 		)
@@ -273,16 +233,4 @@ if ! resolve_data_paths; then
 	exit 1
 fi
 
-case "${SOURCE}" in
-	modelscope)
-		clone_sparse_folder "${MODELSCOPE_REPO}" "${REMOTE_DIR}" "${TARGET_DIR}"
-		;;
-	huggingface)
-		download_hf_folder "${HF_REPO_ID}" "${REMOTE_DIR}" "${TARGET_DIR}"
-		;;
-	*)
-		echo "Invalid source: ${SOURCE}" >&2
-		usage
-		exit 1
-		;;
-esac
+download_hf_folder "${HF_REPO_ID}" "${REMOTE_DIR}" "${TARGET_DIR}"

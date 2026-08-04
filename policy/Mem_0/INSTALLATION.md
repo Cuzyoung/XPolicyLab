@@ -38,14 +38,14 @@ Mn eval serves merged planning weights via vLLM (`eval.sh` optional 11th arg `pl
 ## 4. Backbone checkpoints (not performed by install.sh)
 
 ```bash
-cd policy/Mem_0/Mem_0/checkpoints
-python _download.py
+cd policy/Mem_0
+python scripts/_download.py
 ```
 
 | Asset | Local path | Command |
 | --- | --- | --- |
-| Qwen3-VL-2B-Instruct (execution) | `Mem_0/checkpoints/Qwen3-VL-2B-Instruct` | `python _download.py --model 2b` |
-| Qwen3-VL-8B-Instruct (planning) | `Mem_0/checkpoints/Qwen3-VL-8B-Instruct` | `python _download.py --model 8b` |
-| Both | above dirs | `python _download.py` (default) |
+| Qwen3-VL-2B-Instruct (execution) | `Mem_0/checkpoints/Qwen3-VL-2B-Instruct` | `python scripts/_download.py --model 2b` |
+| Qwen3-VL-8B-Instruct (planning) | `Mem_0/checkpoints/Qwen3-VL-8B-Instruct` | `python scripts/_download.py --model 8b` |
+| Both | above dirs | `python scripts/_download.py` (default) |
 
 Requires `huggingface_hub` (`pip install huggingface_hub` if `_download.py` fails).

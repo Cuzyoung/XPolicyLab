@@ -7,7 +7,6 @@ cotrain_convert.log
 
 # Mem_0 upstream generated artifacts (regenerable; never commit)
 Mem_0/checkpoints/*
-!Mem_0/checkpoints/_download.py
 Mem_0/lerobot_datasets/
 Mem_0/llamafactory_data/
 Mem_0/datasets/

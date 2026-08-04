@@ -13,6 +13,7 @@ from XPolicyLab.utils.process_data import (
     pack_robot_state,
     unpack_robot_state,
 )
+from .runtime_config import resolve_include_state
 
 
 _CUR_DIR = Path(__file__).resolve().parent
@@ -104,11 +105,26 @@ class Model(ModelTemplate):
         )
         server_meta = self.client.get_server_metadata()
         self.action_chunk_size = int(server_meta["action_chunk_size"])
-        self.unnorm_key = self.model_cfg.get("unnorm_key", "new_embodiment")
+        execute_horizon = self.model_cfg.get("execute_horizon", self.action_chunk_size)
+        if execute_horizon in (None, "", "null", "None"):
+            execute_horizon = self.action_chunk_size
+        self.execute_horizon = int(execute_horizon)
+        if self.execute_horizon <= 0:
+            raise ValueError(f"execute_horizon must be positive, got {self.execute_horizon}.")
+        if self.execute_horizon > self.action_chunk_size:
+            raise ValueError(
+                f"execute_horizon={self.execute_horizon} exceeds action_chunk_size={self.action_chunk_size}."
+            )
+        self.unnorm_key = self.model_cfg.get("unnorm_key", "arx_x5")
+        if self.unnorm_key in (None, "", "null", "None", "auto"):
+            self.unnorm_key = None
         self.use_ddim = bool(self.model_cfg.get("use_ddim", True))
         self.num_ddim_steps = int(self.model_cfg.get("num_ddim_steps", 10))
         self.image_size = tuple(self.model_cfg.get("image_size", [224, 224]))
-        self.include_state = bool(self.model_cfg.get("include_state", False))
+        self.include_state = resolve_include_state(
+            self.model_cfg.get("include_state", "auto"),
+            self.model_cfg.get("checkpoint_path"),
+        )
 
         self.obs_by_env: dict[int, dict[str, Any]] = {}
         self.action_chunks_by_env: dict[int, np.ndarray] = {}
@@ -117,7 +133,8 @@ class Model(ModelTemplate):
 
         print(
             f"[starVLA] connected to StarVLA server, action_dim={self.action_dim}, "
-            f"chunk={self.action_chunk_size}, action_order=xpolicy, metadata={server_meta}"
+            f"chunk={self.action_chunk_size}, execute_horizon={self.execute_horizon}, "
+            f"include_state={self.include_state}, action_order=xpolicy, metadata={server_meta}"
         )
 
     def _convert_obs(self, observation: dict[str, Any]) -> dict[str, Any]:
@@ -148,6 +165,12 @@ class Model(ModelTemplate):
                 self.robot_action_dim_info,
                 source_type="obs",
             ).astype(np.float32)
+            if state.ndim == 1:
+                state = state[None, :]
+            if state.ndim != 2 or state.shape[-1] != self.action_dim:
+                raise ValueError(
+                    f"Expected state shape (T, {self.action_dim}), got {state.shape}."
+                )
             converted_obs["state"] = state
 
         return converted_obs
@@ -171,8 +194,9 @@ class Model(ModelTemplate):
             "do_sample": False,
             "use_ddim": self.use_ddim,
             "num_ddim_steps": self.num_ddim_steps,
-            "unnorm_key": self.unnorm_key,
         }
+        if self.unnorm_key is not None:
+            vla_input["unnorm_key"] = self.unnorm_key
         response = self.client.predict_action(vla_input)
         if not response.get("ok", False):
             raise RuntimeError(f"StarVLA inference failed: {response.get('error', response)}")
@@ -181,11 +205,11 @@ class Model(ModelTemplate):
     def _next_action_vector(self, env_idx: int) -> np.ndarray:
         step = self.step_by_env.get(env_idx, 0)
         chunk = self.action_chunks_by_env.get(env_idx)
-        if chunk is None or step % self.action_chunk_size == 0:
+        if chunk is None or step % self.execute_horizon == 0:
             chunk = self._infer_chunk(env_idx)
             self.action_chunks_by_env[env_idx] = chunk
 
-        action_idx = min(step % self.action_chunk_size, len(chunk) - 1)
+        action_idx = min(step % self.execute_horizon, len(chunk) - 1)
         self.step_by_env[env_idx] = step + 1
         action = np.asarray(chunk[action_idx], dtype=np.float32)
         if action.shape[-1] != self.action_dim:

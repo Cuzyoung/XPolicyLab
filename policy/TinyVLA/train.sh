@@ -64,7 +64,7 @@ deepspeed --master_port 29600 --include "localhost:${gpu_id}" "${POLICY_DIR}/tra
   --xpl_env_cfg_type                "${env_cfg_type}" \
   --xpl_action_type                 "${action_type}" \
   --xpl_seed                        "${seed}" \
-  --max_steps                       10000 \
+  --max_steps                       60000 \
   --per_device_train_batch_size     32 \
   --save_steps                      1000 \
   --save_total_limit                50 \

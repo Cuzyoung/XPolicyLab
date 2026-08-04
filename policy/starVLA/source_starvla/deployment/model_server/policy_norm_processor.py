@@ -218,23 +218,19 @@ def _build_dataset_metadata(
     state_combined = stats_for_key.get("state", {})
 
     action_stats, action_meta = _split_combined(action_combined, action_keys, action_key_dims)
-    state_stats, state_meta = _split_combined(state_combined, state_keys, state_key_dims)
 
-    # Pydantic accepts dict input with field validators
+    statistics: Dict[str, Any] = {"action": action_stats}
+    modalities: Dict[str, Any] = {"video": {}, "action": action_meta}
+    if state_combined:
+        state_stats, state_meta = _split_combined(state_combined, state_keys, state_key_dims)
+        statistics["state"] = state_stats
+        modalities["state"] = state_meta
+
     return DatasetMetadata.model_validate(
         {
-            "statistics": {
-                "state": state_stats,
-                "action": action_stats,
-            },
-            "modalities": {
-                "video": {},
-                "state": state_meta,
-                "action": action_meta,
-            },
-            "embodiment_tag": embodiment_tag.value
-            if hasattr(embodiment_tag, "value")
-            else embodiment_tag,
+            "statistics": statistics,
+            "modalities": modalities,
+            "embodiment_tag": embodiment_tag.value if hasattr(embodiment_tag, "value") else embodiment_tag,
         }
     )
 
@@ -351,7 +347,57 @@ class PolicyNormProcessor:
         return self._transform
 
     # ------------------------------------------------------------------
-    # Inverse path (model output → env action)
+    # Forward path (env state -> model input)
+    # ------------------------------------------------------------------
+    def apply_state(self, state: np.ndarray) -> np.ndarray:
+        """Normalize proprioceptive state using the training-time pipeline.
+
+        Args:
+            state: shape ``(T, D)`` or ``(D,)`` where
+                ``D == sum(state_key_dims.values())``.
+
+        Returns:
+            State with the same rank as the input, normalized in the format
+            expected by the framework at training time.
+        """
+        if not self._state_keys:
+            return np.asarray(state, dtype=np.float32)
+
+        # MessagePack/websocket decoders may return a read-only NumPy view.
+        # Training transforms convert slices to tensors, so keep this buffer
+        # writable to avoid undefined behavior in PyTorch.
+        state_arr = np.array(state, dtype=np.float32, copy=True)
+        original_ndim = state_arr.ndim
+        if state_arr.ndim == 1:
+            state_arr = state_arr[None, :]
+        if state_arr.ndim != 2:
+            raise ValueError(f"Expected state shape (T, D) or (D,), got {state_arr.shape}")
+
+        data: Dict[str, np.ndarray] = {}
+        cursor = 0
+        for full_key in self._state_keys:
+            dim_k = self._state_key_dims.get(full_key, 1)
+            data[full_key] = state_arr[..., cursor : cursor + dim_k]
+            cursor += dim_k
+
+        if cursor != state_arr.shape[-1]:
+            raise ValueError(
+                f"Sum of per-key dims ({cursor}) != state_dim ({state_arr.shape[-1]}). "
+                f"state_keys={self._state_keys}, state_key_dims={self._state_key_dims}"
+            )
+
+        out = self._transform.apply(data)
+        parts: List[np.ndarray] = []
+        for full_key in self._state_keys:
+            v = out[full_key]
+            if isinstance(v, torch.Tensor):
+                v = v.detach().cpu().numpy()
+            parts.append(np.asarray(v, dtype=np.float32))
+        normalized = np.concatenate(parts, axis=-1)
+        return normalized[0] if original_ndim == 1 else normalized
+
+    # ------------------------------------------------------------------
+    # Inverse path (model output -> env action)
     # ------------------------------------------------------------------
     def unapply_actions(self, normalized_actions: np.ndarray) -> np.ndarray:
         """Invert action normalization using the training-time pipeline.

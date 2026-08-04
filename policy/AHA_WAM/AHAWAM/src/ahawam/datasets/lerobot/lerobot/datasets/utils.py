@@ -30,6 +30,7 @@ import datasets
 import jsonlines
 import numpy as np
 import packaging.version
+import pyarrow.parquet as pq
 import torch
 from datasets.table import embed_table_storage
 from huggingface_hub import DatasetCard, DatasetCardData, HfApi
@@ -55,6 +56,9 @@ EPISODES_PATH = "meta/episodes.jsonl"
 STATS_PATH = "meta/stats.json"
 EPISODES_STATS_PATH = "meta/episodes_stats.jsonl"
 TASKS_PATH = "meta/tasks.jsonl"
+TASKS_PARQUET_PATH = "meta/tasks.parquet"
+EPISODES_PARQUET_GLOB = "meta/episodes/chunk-*/file-*.parquet"
+EPISODES_STATS_PARQUET_GLOB = "meta/episodes_stats/chunk-*/file-*.parquet"
 
 ANNOTATION_PATHS = {
     "subtask": "annotations/subtask_annotations.jsonl",
@@ -226,8 +230,31 @@ def write_task(task_index: int, task: dict, local_dir: Path):
 
 
 def load_tasks(local_dir: Path) -> tuple[dict, dict]:
-    tasks = load_jsonlines(local_dir / TASKS_PATH)
-    tasks = {item["task_index"]: item["task"] for item in sorted(tasks, key=lambda x: x["task_index"])}
+    tasks_path = local_dir / TASKS_PATH
+    if not tasks_path.exists():
+        tasks_parquet_path = local_dir / TASKS_PARQUET_PATH
+        if not tasks_parquet_path.exists():
+            raise FileNotFoundError(
+                f"Missing tasks metadata: expected {tasks_path} or {tasks_parquet_path}"
+            )
+        table = pq.read_table(str(tasks_parquet_path))
+        tasks = table.to_pylist()
+    else:
+        tasks = load_jsonlines(tasks_path)
+
+    def _get_task(item: dict):
+        for key in ("task", "name", "description", "__index_level_0__"):
+            if key in item:
+                return item[key]
+        raise KeyError(
+            "Could not find task text in task metadata item. "
+            f"Available keys: {sorted(item.keys())}"
+        )
+
+    tasks = {
+        item["task_index"]: _get_task(item)
+        for item in sorted(tasks, key=lambda x: x["task_index"])
+    }
     task_to_task_index = {task: task_index for task_index, task in tasks.items()}
     return tasks, task_to_task_index
 
@@ -244,7 +271,18 @@ def write_episode(episode: dict, local_dir: Path):
 
 
 def load_episodes(local_dir: Path) -> dict:
-    episodes = load_jsonlines(local_dir / EPISODES_PATH)
+    episodes_path = local_dir / EPISODES_PATH
+    if not episodes_path.exists():
+        parquet_files = sorted(local_dir.glob(EPISODES_PARQUET_GLOB))
+        if not parquet_files:
+            raise FileNotFoundError(
+                f"Missing episodes metadata: expected {episodes_path} or {EPISODES_PARQUET_GLOB}"
+            )
+        episodes = []
+        for parquet_file in parquet_files:
+            episodes.extend(pq.read_table(str(parquet_file)).to_pylist())
+    else:
+        episodes = load_jsonlines(episodes_path)
     return {item["episode_index"]: item for item in sorted(episodes, key=lambda x: x["episode_index"])}
 
 
@@ -256,7 +294,18 @@ def write_episode_stats(episode_index: int, episode_stats: dict, local_dir: Path
 
 
 def load_episodes_stats(local_dir: Path) -> dict:
-    episodes_stats = load_jsonlines(local_dir / EPISODES_STATS_PATH)
+    episodes_stats_path = local_dir / EPISODES_STATS_PATH
+    if not episodes_stats_path.exists():
+        parquet_files = sorted(local_dir.glob(EPISODES_STATS_PARQUET_GLOB))
+        if not parquet_files:
+            stats = load_stats(local_dir)
+            episodes = load_episodes(local_dir)
+            return backward_compatible_episodes_stats(stats, episodes)
+        episodes_stats = []
+        for parquet_file in parquet_files:
+            episodes_stats.extend(pq.read_table(str(parquet_file)).to_pylist())
+    else:
+        episodes_stats = load_jsonlines(episodes_stats_path)
     return {
         item["episode_index"]: cast_stats_to_numpy(item["stats"])
         for item in sorted(episodes_stats, key=lambda x: x["episode_index"])

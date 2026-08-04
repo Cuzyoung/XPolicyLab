@@ -28,5 +28,5 @@ pip install openai opencv-python
 pip install -e "${ROOT_DIR}/XPolicyLab"
 
 echo "[install] ${policy_conda_env} ready."
-echo "[install] Download backbones:  cd ${UPSTREAM_DIR}/checkpoints && python _download.py"
+echo "[install] Download backbones:  python ${POLICY_DIR}/scripts/_download.py"
 echo "[install] Planning module (Mn): bash install_planning.sh — see INSTALLATION.md."

@@ -14,7 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import contextlib
+import hashlib
 import logging
+import re
 import shutil
 from pathlib import Path
 from typing import Callable, List, Literal
@@ -28,6 +30,7 @@ import torch
 import torch.utils
 import pyarrow.parquet as pq
 from datasets import concatenate_datasets, load_dataset
+from datasets.features import features as hf_features
 from huggingface_hub import HfApi, snapshot_download
 from huggingface_hub.constants import REPOCARD_NAME
 from huggingface_hub.errors import RevisionNotFoundError
@@ -78,6 +81,24 @@ from .datasets.video_utils import (
 import traceback
 
 CODEBASE_VERSION = "v2.1"
+
+if "List" not in hf_features._FEATURE_TYPES:
+    hf_features._FEATURE_TYPES["List"] = datasets.Sequence
+
+
+def get_lerobot_repo_id_for_root(repo_id: str, root: str | Path | None = None) -> str:
+    """Create a stable Hub-valid id for a local absolute LeRobot dataset root."""
+    if root is None:
+        return str(repo_id)
+    root_path = Path(root)
+    repo_id_str = str(repo_id)
+    if not root_path.is_absolute() and not repo_id_str.startswith("/"):
+        return repo_id_str
+
+    name = root_path.name or "dataset"
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip(".-") or "dataset"
+    digest = hashlib.sha1(str(root_path).encode("utf-8")).hexdigest()[:10]
+    return f"local_lerobot/{name}-{digest}"
 
 
 class LeRobotDatasetMetadata:
@@ -139,13 +160,30 @@ class LeRobotDatasetMetadata:
         return packaging.version.parse(self.info["codebase_version"])
 
     def get_data_file_path(self, ep_index: int) -> Path:
-        ep_chunk = self.get_episode_chunk(ep_index)
-        fpath = self.data_path.format(episode_chunk=ep_chunk, episode_index=ep_index)
+        episode = self.episodes.get(ep_index, {})
+        ep_chunk = episode.get("data/chunk_index", self.get_episode_chunk(ep_index))
+        file_index = episode.get("data/file_index", ep_chunk)
+        fpath = self.data_path.format(
+            episode_chunk=ep_chunk,
+            episode_index=ep_index,
+            chunk_index=ep_chunk,
+            file_index=file_index,
+        )
         return Path(fpath)
 
     def get_video_file_path(self, ep_index: int, vid_key: str) -> Path:
-        ep_chunk = self.get_episode_chunk(ep_index)
-        fpath = self.video_path.format(episode_chunk=ep_chunk, video_key=vid_key, episode_index=ep_index)
+        episode = self.episodes.get(ep_index, {})
+        chunk_key = f"videos/{vid_key}/chunk_index"
+        file_key = f"videos/{vid_key}/file_index"
+        ep_chunk = episode.get(chunk_key, self.get_episode_chunk(ep_index))
+        file_index = episode.get(file_key, ep_chunk)
+        fpath = self.video_path.format(
+            episode_chunk=ep_chunk,
+            video_key=vid_key,
+            episode_index=ep_index,
+            chunk_index=ep_chunk,
+            file_index=file_index,
+        )
         return Path(fpath)
 
     def get_episode_chunk(self, ep_index: int) -> int:
@@ -458,11 +496,11 @@ class LeRobotDataset(torch.utils.data.Dataset):
                 You can also use the 'pyav' decoder used by Torchvision, which used to be the default option, or 'video_reader' which is another decoder of Torchvision.
         """
         super().__init__()
-        self.repo_id = repo_id
         self.root = Path(root) if root else HF_LEROBOT_HOME / repo_id
+        self.repo_id = get_lerobot_repo_id_for_root(repo_id, self.root if root else None)
         self.image_transforms = image_transforms
         self.delta_timestamps = delta_timestamps
-        self.episodes = episodes
+        self.episodes = sorted(episodes) if episodes is not None else None
         self.tolerance_s = tolerance_s
         self.revision = revision if revision else CODEBASE_VERSION
         self.video_backend = video_backend if video_backend else get_safe_default_codec()
@@ -606,7 +644,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             ]
             fpaths += video_files
 
-        return fpaths
+        return list(dict.fromkeys(fpaths))
 
     def load_hf_dataset(self) -> datasets.Dataset:
         """hf_dataset contains all the observations, states, actions, rewards, etc."""
@@ -614,8 +652,19 @@ class LeRobotDataset(torch.utils.data.Dataset):
             path = str(self.root / "data")
             hf_dataset = load_dataset("parquet", data_dir=path, split="train")
         else:
-            files = [str(self.root / self.meta.get_data_file_path(ep_idx)) for ep_idx in self.episodes]
+            files = list(
+                dict.fromkeys(
+                    str(self.root / self.meta.get_data_file_path(ep_idx))
+                    for ep_idx in self.episodes
+                )
+            )
             hf_dataset = load_dataset("parquet", data_files=files, split="train")
+            selected_episodes = set(int(ep_idx) for ep_idx in self.episodes)
+            hf_dataset = hf_dataset.filter(
+                lambda ep_idx: int(ep_idx) in selected_episodes,
+                input_columns=["episode_index"],
+                desc="Filtering selected episodes",
+            )
 
         # TODO(aliberts): hf_dataset.set_format("torch")
         hf_dataset.set_transform(hf_transform_to_torch)
@@ -1095,7 +1144,10 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         super().__init__()
         self.dataset_dirs = dataset_dirs
         ds_roots = [Path(ds_dir) for ds_dir in dataset_dirs]
-        ds_names = [ds_dir for ds_dir in dataset_dirs]
+        ds_names = [
+            get_lerobot_repo_id_for_root(ds_dir, ds_root)
+            for ds_dir, ds_root in zip(dataset_dirs, ds_roots, strict=True)
+        ]
         self.ds_names = ds_names
         self.ds_roots = ds_roots
         self.tolerances_s = tolerances_s if tolerances_s else dict.fromkeys(ds_names, 0.0001)

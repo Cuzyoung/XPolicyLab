@@ -53,6 +53,12 @@ print(str(data.get("eval_batch", False)).lower())
 PY
 )
 
+if [[ "${eval_batch}" == "true" ]]; then
+    echo "[ERROR] AHA-WAM eval_batch=true is unsupported: one model instance has a single mutable rollout/history state." >&2
+    echo "[ERROR] Use one policy-server process per environment instead." >&2
+    exit 1
+fi
+
 # shellcheck source=../../utils/resolve_eval_env_type.sh
 source "${UTILS_DIR}/resolve_eval_env_type.sh"
 eval_env_mode="$(resolve_eval_env_type)" || exit 1

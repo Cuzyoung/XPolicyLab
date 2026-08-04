@@ -17,8 +17,9 @@ starvla_root: source_starvla
 checkpoint_path: null
 starvla_server_host: 127.0.0.1
 starvla_server_port: 5694
-unnorm_key: new_embodiment
+unnorm_key: arx_x5
 use_ddim: true
 num_ddim_steps: 10
 image_size: [224, 224]
-include_state: false
+execute_horizon: 16
+include_state: auto

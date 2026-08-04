@@ -15,28 +15,9 @@ env_gpu_id="${11}"
 policy_server_ip="${12:-localhost}"
 protocol="${13:-ws}"
 
-if ! command -v conda >/dev/null 2>&1; then
-    for conda_sh in \
-        "${HOME}/miniconda3/etc/profile.d/conda.sh" \
-        "${HOME}/anaconda3/etc/profile.d/conda.sh" \
-        "/opt/conda/etc/profile.d/conda.sh"
-    do
-        if [[ -f "${conda_sh}" ]]; then
-            # shellcheck source=/dev/null
-            source "${conda_sh}"
-            break
-        fi
-    done
-fi
-
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda deactivate || true
 conda activate "${eval_env_conda_env}"
-
-export OMNI_KIT_ACCEPT_EULA=YES
-export ISAACSIM_ACCEPT_EULA=YES
-export ACCEPT_EULA=Y
-export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_NVIDIA_CUROBO="${SETUPTOOLS_SCM_PRETEND_VERSION_FOR_NVIDIA_CUROBO:-0.0.0}"
 
 echo -e "\033[34m[CLIENT] Activating Conda environment: ${eval_env_conda_env}\033[0m"
 echo -e "\033[34m[CLIENT] Connecting to server ${policy_server_ip}:${policy_server_port}...\033[0m"

@@ -34,6 +34,6 @@ pip install -e "${LF_DIR}"
 pip install -r "${LF_DIR}/requirements/metrics.txt" wandb
 
 echo "[install_planning] ${planning_conda_env} ready."
-echo "[install_planning] Download Qwen3-VL-8B:  cd ${UPSTREAM_DIR}/checkpoints && python _download.py"
+echo "[install_planning] Download Qwen3-VL-8B:  python ${POLICY_DIR}/scripts/_download.py --model 8b"
 echo "[install_planning] wandb login (optional, for planning train logging)."
 echo "[install_planning] Train/eval workflow: see policy/Mem_0/README.md"

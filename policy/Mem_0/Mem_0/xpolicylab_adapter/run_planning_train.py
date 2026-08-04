@@ -209,7 +209,7 @@ def step_train(cfg: dict, dataset_name: str) -> str:
     if not base_model_path.is_dir():
         raise SystemExit(
             f"[planning] Base model dir not found: {base_model_path}\n"
-            "Download Qwen3-VL-8B-Instruct (cd Mem_0/checkpoints && python _download.py)."
+            "Download Qwen3-VL-8B-Instruct (python scripts/_download.py --model 8b)."
         )
 
     output_dir = _adapter_dir(cfg)
