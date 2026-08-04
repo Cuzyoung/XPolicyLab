@@ -198,7 +198,11 @@ Policy-specific `deploy.yml` keys worth checking before evaluation:
 | `img_history_interval` | Runtime or checkpoint option consumed by this adapter. |
 | `policy_uv_env_path` | Runtime or checkpoint option consumed by this adapter. |
 
+<<<<<<< Updated upstream
 Frequently used environment variables detected in the adapter scripts:
+=======
+Additional keys consumed by the adapter: `with_absolute`, `blend_mode`, `exc_action_size`, `exc_action_interval`, `history_cadence`, `img_history_size`, `img_history_interval`, `policy_uv_env_path`.
+>>>>>>> Stashed changes
 
 | Variable | Notes |
 |---|---|

@@ -51,6 +51,10 @@ exc_action_size: 10
 exc_action_interval: 1
 
 # --- MEM video-encoder cadence (use_video_encoder=true in the ckpt) ---
+# step  : append a history frame on every update_obs call.
+# chunk : append one history frame per network-forward/action chunk. The
+#   img_history_interval below remains expressed in action steps.
+history_cadence: chunk
 img_history_size: 6
 img_history_interval: 20
 

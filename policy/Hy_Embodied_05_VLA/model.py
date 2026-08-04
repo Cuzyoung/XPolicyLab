@@ -244,16 +244,27 @@ class Model(ModelTemplate):
         blend_mode = model_cfg.get("blend_mode", "rel_only")
         self.exc_action_size = int(model_cfg.get("exc_action_size", 25))
         self.exc_action_interval = int(model_cfg.get("exc_action_interval", 1))
+        self.history_cadence = str(model_cfg.get("history_cadence", "step")).lower()
         self.img_history_size = int(model_cfg.get("img_history_size", 6))
         self.img_history_interval = int(model_cfg.get("img_history_interval", 5))
 
         assert self.exc_action_interval >= 1, "exc_action_interval must be >= 1"
+        if self.history_cadence not in ("step", "chunk"):
+            raise ValueError(
+                "history_cadence must be 'step' or 'chunk', got "
+                f"{self.history_cadence!r}"
+            )
+        history_step_span = (
+            self.exc_action_size * self.exc_action_interval
+            if self.history_cadence == "chunk"
+            else self.exc_action_interval
+        )
         assert (
-            self.img_history_interval % self.exc_action_interval == 0
+            self.img_history_interval % history_step_span == 0
         ), (
             f"img_history_interval ({self.img_history_interval}) must be divisible "
-            f"by exc_action_interval ({self.exc_action_interval}) for strict "
-            f"temporal alignment"
+            f"by the {self.history_cadence} history span ({history_step_span} "
+            f"action steps) for strict temporal alignment"
         )
 
         self.weight_dtype = torch.bfloat16
@@ -324,6 +335,7 @@ class Model(ModelTemplate):
         print(f"[hy_vla] model ready (video_encoder={self.use_video_encoder}, "
               f"blend={self.blend_mode}, exc={self.exc_action_size}, "
               f"exc_interval={self.exc_action_interval}, "
+              f"history_cadence={self.history_cadence}, "
               f"umi_coord_frame={self.umi_coord_frame}, "
               f"umi_gripper_space={self.umi_gripper_space}).", flush=True)
 
@@ -367,21 +379,21 @@ class Model(ModelTemplate):
         self.update_obs_batch([obs])
 
     def update_obs_batch(self, obs_list):
-        """Encode and store the latest observation for each env, and append the
-        raw frames to that env's own MEM history buffer.
+        """Encode and store the latest observation for each env.
 
         Per-env keying is what makes batched inference correct: with one shared
         buffer the video-encoder history of every env would be dominated by
-        whichever env happened to be updated last.
+        whichever env happened to be updated last. Step-cadence history is
+        appended here; chunk-cadence history is appended immediately before
+        each network forward so intermediate observations do not create extra
+        history entries.
         """
         self._latest_env_idx_list = [obs.get("env_idx", i) for i, obs in enumerate(obs_list)]
         for env_idx, obs in zip(self._latest_env_idx_list, obs_list):
             batch = self.encode_obs(obs)
             self._obs_by_env[env_idx] = batch
-            if self.use_video_encoder:
-                self._top_imgs_by_env.setdefault(env_idx, []).append(batch["raw_images.top_head"])
-                self._left_imgs_by_env.setdefault(env_idx, []).append(batch["raw_images.hand_left"])
-                self._right_imgs_by_env.setdefault(env_idx, []).append(batch["raw_images.hand_right"])
+            if self.use_video_encoder and self.history_cadence == "step":
+                self._append_history_frames(env_idx, batch)
 
     # ------------------------------------------------------------------
     # Action generation
@@ -428,6 +440,9 @@ class Model(ModelTemplate):
         """Run one flow-matching forward for a single env; return a
         (exc_action_size, 16) dual-arm PosQuat chunk in RoboTwin wxyz layout."""
         batch = self._obs_by_env[env_idx]
+
+        if self.use_video_encoder and self.history_cadence == "chunk":
+            self._append_history_frames(env_idx, batch)
 
         # Initial EE pose: wxyz -> xyzw -> optional UMI frame, matching the
         # coordinate frame used by the training norm stats.
@@ -536,6 +551,11 @@ class Model(ModelTemplate):
         return _blend_dual_arm_pose_quat(p1, p2)
 
     # --- MEM video-encoder history helpers (mirror robotwin_eval) -------
+    def _append_history_frames(self, env_idx: int, batch: dict) -> None:
+        self._top_imgs_by_env.setdefault(env_idx, []).append(batch["raw_images.top_head"])
+        self._left_imgs_by_env.setdefault(env_idx, []).append(batch["raw_images.hand_left"])
+        self._right_imgs_by_env.setdefault(env_idx, []).append(batch["raw_images.hand_right"])
+
     @staticmethod
     def _eval_history_indices(step_id: int, K: int, S: int) -> list[int]:
         out = [max(step_id - (K - 1 - k) * S, 0) for k in range(K)]
@@ -545,10 +565,13 @@ class Model(ModelTemplate):
     def _inject_history_stacks(self, batch: dict, env_idx: int) -> None:
         K = self.img_history_size
         S_raw = self.img_history_interval
-        N = self.exc_action_interval
-        # Each buffer step = N raw env steps. Scale S to buffer-index units
-        # so the absolute temporal coverage stays close to training.
-        S_buf = max(1, S_raw // N)
+        history_step_span = self.exc_action_interval
+        if self.history_cadence == "chunk":
+            history_step_span *= self.exc_action_size
+        # Convert the action-step interval used during training into indices of
+        # the selected history cadence. For the deployed 10-action chunks,
+        # img_history_interval=20 therefore selects every second chunk.
+        S_buf = S_raw // history_step_span
         top_buf = self._top_imgs_by_env[env_idx]
         left_buf = self._left_imgs_by_env[env_idx]
         right_buf = self._right_imgs_by_env[env_idx]
