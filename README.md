@@ -115,11 +115,13 @@ policy/<POLICY>/
 | Method | Contract |
 | --- | --- |
 | `__init__(model_cfg)` | Load model config, checkpoints, processors, and runtime overrides from `deploy.yml`. |
-| `update_obs(obs)` | Update model state from one observation dictionary. Camera colors arrive already decoded. |
-| `update_obs_batch(obs_list)` | Update model state from a list of observation dictionaries. Camera colors arrive already decoded. |
+| `update_obs(obs)` | Update model state from one observation dictionary. |
+| `update_obs_batch(obs_list)` | Update model state from a list of observation dictionaries. |
 | `get_action()` | Return one action chunk as a list of action dictionaries. |
 | `get_action_batch(env_idx_list=None)` | Return batched action chunks aligned with active environment indices. |
 | `reset()` | Clear model-side state between evaluation episodes. |
+
+The policy server decodes camera colors before `update_obs` / `update_obs_batch`, so `obs["vision"][<camera>]["color"]` always arrives as an image array — `model.py` never decodes.
 
 The default policy-server protocol is websocket (`protocol: ws` in `deploy.yml`). Keep `legacy_tcp` only for old adapters that have not migrated yet.
 
@@ -305,7 +307,7 @@ bash setup_eval_env_client.sh \
 
 XPolicyLab standardizes the observation and trajectory dictionaries passed between adapters, converters, and environment clients. Individual policies may convert this standard format into their upstream-native format.
 
-All pose values use `[x, y, z, qw, qx, qy, qz]`. Images are RGB unless a policy README states otherwise. Note one naming quirk: runtime observations carry camera extrinsics as `extrinsics_matrix`, while trajectory files store `extrinsic_matrix`.
+All pose values use `[x, y, z, qw, qx, qy, qz]`. Images are RGB end to end — stored image bits are encoded from RGB frames and no channel conversion happens anywhere in the pipeline (the only medium-adapter exceptions are listed with the converter helpers below). Note one naming quirk: runtime observations carry camera extrinsics as `extrinsics_matrix`, while trajectory files store `extrinsic_matrix`.
 
 <details>
 <summary>Observation Data Format</summary>
@@ -319,7 +321,7 @@ Observation Data Format
 │   └── frequency                              int, optional
 ├── vision/
 │   ├── cam_head/
-│   │   ├── color                              (H, W, 3), decoded by the server
+│   │   ├── color                              (H, W, 3) RGB, decoded by the server
 │   │   ├── depth                              (H, W) or (H, W, 1), optional
 │   │   ├── intrinsic_matrix                   (3, 3), optional
 │   │   ├── extrinsics_matrix                  (4, 4), optional
@@ -443,6 +445,8 @@ export EVAL_ENV_TYPE=debug
 bash eval.sh RoboDojo stack_bowls demo arx_x5 joint 0 0 0 \
   <policy_env_or_uv_path> <eval_env_conda_env>
 ```
+
+The debug client sends plain image arrays by default. Re-run with `DEBUG_OBS_ENCODED=1` to make it send encoded camera colors instead — a JPEG buffer, raw bytes, and a plain array across the three cameras — which exercises the server-side decode path that real environment clients rely on.
 
 For a quick smoke test, `policy/demo_policy` accepts placeholder env names such as `base`. Argument details live in [Common Workflow](#-common-workflow).
 
