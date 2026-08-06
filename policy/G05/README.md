@@ -29,6 +29,23 @@ export G05_CKPT_PATH=/path/to/g05_robodojo_real_checkpoint/checkpoint/checkpoint
 export ROBODOJO_G05_ACTION_SOURCE=fm
 ```
 
+## Training base assets
+
+To reproduce G05 RoboDojo training, download the base model and tokenizer assets separately from the evaluation checkpoint:
+
+```bash
+huggingface-cli download OpenGalaxea/g05-robodojo \
+  g05_robodojo_train_base_assets.tar \
+  g05_robodojo_train_base_assets.tar.sha256 \
+  --local-dir ./checkpoints/g05_train_assets
+
+cd ./checkpoints/g05_train_assets
+sha256sum -c g05_robodojo_train_base_assets.tar.sha256
+tar -xf g05_robodojo_train_base_assets.tar
+```
+
+These assets include the base checkpoint, HF processor, and action tokenizer required by the G05 training configs. RoboDojo datasets should be downloaded from the official RoboDojo data source separately.
+
 ## Runtime requirements
 
 Install the XPolicyLab-side adapter dependencies:
@@ -46,7 +63,7 @@ export G05_ROOT=/path/to/GalaxeaVLA_or_G05_checkout
 export G05_PYTHON=/path/to/python
 ```
 
-`G05_ROOT` must contain the G05 model/inference code used by the adapter.
+`G05_ROOT` must contain the G05 model/inference code compatible with the real checkpoint. The real checkpoint was produced with the private/current G05 training stack, so evaluators should use the matching G05 runtime provided for official real evaluation.
 `G05_PYTHON` must point to a Python environment with the G05 runtime
 dependencies installed.
 
