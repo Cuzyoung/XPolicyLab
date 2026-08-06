@@ -18,8 +18,9 @@ import yaml
 from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 
-from client_server.ws.protocol.codec import decode_envelope, encode_frame
+from client_server.ws.protocol.codec import decode_envelope, decode_frame, encode_frame
 from client_server.ws.protocol.exceptions import ErrorCode, WsError
+from client_server.ws.protocol.keepalive import normalize_ws_ping
 from client_server.ws.protocol.messages import MessageType
 from client_server.ws.protocol.schemas import Frame
 from XPolicyLab.utils.process_data import decode_obs_images
@@ -27,14 +28,20 @@ from XPolicyLab.utils.process_data import decode_obs_images
 logger = logging.getLogger(__name__)
 
 # Bound on cached responses kept for duplicate-request replay. The client
-# retries a request at most once, so a few hundred entries is far more than
-# the retry window needs; the cap only guards memory on long-running servers.
-_RESPONSE_CACHE_SIZE = 1024
+# retries a request at most once and immediately, so the replay window is a
+# handful of in-flight requests; keep the cap small because each entry holds
+# a full response frame (potentially a whole action-chunk result).
+_RESPONSE_CACHE_SIZE = 256
 
 # Bound on concurrently processed frames per connection. The bundled client
 # is synchronous (one outstanding request), so this only protects against
 # misbehaving peers flooding frames faster than the model can answer.
 _MAX_INFLIGHT_RESPONSES = 128
+
+# How long shutdown paths wait for still-running model calls before giving
+# up. A hung model must not be able to block stop() (or a disconnecting
+# client's connection handler) forever.
+_SHUTDOWN_DRAIN_TIMEOUT_S = 30.0
 
 
 def _ok_payload(result: Any = None) -> dict[str, Any]:
@@ -42,21 +49,6 @@ def _ok_payload(result: Any = None) -> dict[str, Any]:
     if result is not None:
         payload["result"] = result
     return payload
-
-
-def _normalize_ws_ping(value: Any, *, field_name: str) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(
-            f"{field_name} must be null or a positive number, got {value!r}"
-        )
-    seconds = float(value)
-    if seconds <= 0:
-        raise ValueError(
-            f"{field_name} must be null or a positive number, got {value!r}"
-        )
-    return seconds
 
 
 @dataclass
@@ -67,10 +59,10 @@ class PolicyServerConfig:
     ws_ping_timeout_s: float | None = 20.0
 
     def __post_init__(self) -> None:
-        self.ws_ping_interval_s = _normalize_ws_ping(
+        self.ws_ping_interval_s = normalize_ws_ping(
             self.ws_ping_interval_s, field_name="ws_ping_interval_s"
         )
-        self.ws_ping_timeout_s = _normalize_ws_ping(
+        self.ws_ping_timeout_s = normalize_ws_ping(
             self.ws_ping_timeout_s, field_name="ws_ping_timeout_s"
         )
 
@@ -110,6 +102,11 @@ class PolicyServer:
             self.config.host,
             self.config.port,
             max_size=None,
+            # An observation frame is multi-MB of camera pixels (or already
+            # JPEG-compressed buffers). Deflating that on every step costs
+            # real CPU on the event loop thread for almost no size win, and
+            # the stall delays the keepalive pongs.
+            compression=None,
             ping_interval=self.config.ws_ping_interval_s,
             ping_timeout=self.config.ws_ping_timeout_s,
         )
@@ -123,15 +120,30 @@ class PolicyServer:
         self._server = None
         # Executions are shielded from their waiters' cancellation, so closing
         # the server can leave them running; drain them instead of letting the
-        # loop tear down pending tasks.
+        # loop tear down pending tasks. Bounded: a model call that hangs must
+        # not turn stop() into a hang too.
         inflight = [task for _type, task in self._inflight.values()]
         if inflight:
-            await asyncio.gather(*inflight, return_exceptions=True)
+            _done, still_running = await asyncio.wait(
+                inflight, timeout=_SHUTDOWN_DRAIN_TIMEOUT_S
+            )
+            if still_running:
+                logger.warning(
+                    "%d model call(s) still running %ss after stop(); abandoning them",
+                    len(still_running),
+                    _SHUTDOWN_DRAIN_TIMEOUT_S,
+                )
 
     async def serve_forever(self) -> None:
         await self.start()
         assert self._server is not None
-        await self._server.serve_forever()
+        try:
+            await self._server.serve_forever()
+        finally:
+            # Runs on cancellation too (e.g. Ctrl-C under asyncio.run), so
+            # shielded model calls get their bounded drain instead of being
+            # torn down mid-execution by loop shutdown.
+            await self.stop()
 
     @property
     def url(self) -> str:
@@ -150,8 +162,26 @@ class PolicyServer:
                 if response is None:
                     await websocket.close()
                     return
+                try:
+                    data = encode_frame(response)
+                except Exception as exc:
+                    # A result the codec cannot serialize (e.g. a torch tensor
+                    # returned by the model) must fail loudly: without a reply
+                    # the client would stall for its full request timeout. The
+                    # unencodable response was already cached, so overwrite it
+                    # too, or retries would replay the same poisoned entry.
+                    logger.exception("policy server response is not serializable")
+                    response = self._error_reply(
+                        frame,
+                        ErrorCode.INTERNAL,
+                        f"response is not msgpack-serializable: {exc}",
+                    )
+                    self._cache_response(
+                        frame.request_id, frame.message_type, response
+                    )
+                    data = encode_frame(response)
                 async with send_lock:
-                    await websocket.send(encode_frame(response))
+                    await websocket.send(data)
             except asyncio.CancelledError:
                 raise
             except ConnectionClosed as exc:
@@ -169,6 +199,11 @@ class PolicyServer:
                     frame = decode_envelope(bytes(raw))
                 except WsError as exc:
                     logger.error("invalid request frame: %s", exc)
+                    # Best-effort ERROR reply: without one the client stalls
+                    # for its full request timeout instead of failing fast.
+                    await self._reject_invalid_frame(
+                        websocket, send_lock, bytes(raw), exc
+                    )
                     continue
                 if len(pending) >= _MAX_INFLIGHT_RESPONSES:
                     # Backpressure: process inline instead of queuing yet
@@ -183,7 +218,55 @@ class PolicyServer:
             logger.debug("policy client disconnected")
         finally:
             if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
+                # Let responses finish so their results land in the replay
+                # cache for the client's retry — but bounded, so a hung model
+                # cannot pin this connection handler forever.
+                _done, still_running = await asyncio.wait(
+                    pending, timeout=_SHUTDOWN_DRAIN_TIMEOUT_S
+                )
+                for task in still_running:
+                    # Cancelling a respond task only detaches the waiter; the
+                    # shielded execution keeps running and its result is still
+                    # cached for a retry. stop() drains (or abandons) it.
+                    task.cancel()
+
+    async def _reject_invalid_frame(
+        self,
+        websocket: ServerConnection,
+        send_lock: asyncio.Lock,
+        raw: bytes,
+        exc: WsError,
+    ) -> None:
+        """Answer an undecodable request with an ERROR frame when possible.
+
+        The envelope failed validation, but the raw msgpack map often still
+        carries a usable message_id (e.g. unknown message_type, missing
+        evaluation_id). Without a reply the client waits out its full
+        request timeout; a truly unparseable blob is silently dropped.
+        """
+        try:
+            wire = decode_frame(raw)
+            message_id = wire.get("message_id")
+            if message_id is None:
+                return
+            error = Frame(
+                message_type=MessageType.ERROR,
+                request_id=str(message_id),
+                evaluation_id=str(wire.get("evaluation_id") or ""),
+                payload={
+                    "code": exc.code.value,
+                    "message": exc.message,
+                    "details": exc.details,
+                },
+            )
+            data = encode_frame(error)
+        except Exception:
+            return
+        try:
+            async with send_lock:
+                await websocket.send(data)
+        except Exception:
+            logger.debug("failed to send invalid-frame error reply", exc_info=True)
 
     def _cache_response(
         self, request_id: str, msg_type: MessageType, response: Frame
@@ -252,6 +335,16 @@ class PolicyServer:
         try:
             response = await self._dispatch_frame(frame)
         except WsError as exc:
+            # The client only receives str(exc), so a model failure wrapped in
+            # CALL_FAILED/RESET_FAILED/INFER_FAILED would otherwise leave no
+            # traceback anywhere. Protocol rejections carry no cause and stay
+            # a one-liner.
+            logger.error(
+                "policy server %s request failed: %s",
+                frame.message_type.value,
+                exc.message,
+                exc_info=exc.__cause__ is not None,
+            )
             response = self._error_reply(frame, exc.code, exc.message, exc.details)
         except Exception as exc:
             logger.exception("policy server request failed")
@@ -353,6 +446,11 @@ class PolicyServer:
         method = getattr(self.model, "reset", None)
         if not callable(method):
             raise WsError(ErrorCode.RESET_FAILED, "model.reset is not callable")
+        # reset() takes no arguments (see ModelTemplate.reset). The legacy TCP
+        # server appeared to support reset(obs) only because it dispatched every
+        # command through one generic `method(obs) if obs is not None` line; no
+        # caller ever sent one. A policy that needs a first observation should
+        # reset() and then take a normal update_obs.
         try:
             result = await self._call_model_method(method)
         except Exception as exc:
@@ -375,13 +473,19 @@ class PolicyServer:
             )
 
         obs = frame.payload.get("obs")
-        if func_name in {"update_obs", "update_obs_batch"}:
+        # `infer` is included so a generic CALL to model.infer gets the same
+        # image decoding as the dedicated INFER message type.
+        if func_name in {"update_obs", "update_obs_batch", "infer"}:
             if obs is None:
                 raise WsError(
                     ErrorCode.INVALID_FRAME, f"{func_name} payload missing obs"
                 )
             try:
-                obs = decode_obs_images(obs)
+                # JPEG decode is CPU-bound (a batched obs can be N envs x M
+                # cameras); run it off the event loop for the same reason
+                # compression is disabled — a blocked loop delays keepalive
+                # pongs and every other connection.
+                obs = await asyncio.to_thread(decode_obs_images, obs)
             except ValueError as exc:
                 raise WsError(ErrorCode.INVALID_FRAME, str(exc)) from exc
 
@@ -404,7 +508,8 @@ class PolicyServer:
             raise WsError(ErrorCode.INVALID_FRAME, "infer payload missing observation")
 
         try:
-            observation = decode_obs_images(observation)
+            # Off the event loop: see _handle_call — JPEG decode is CPU-bound.
+            observation = await asyncio.to_thread(decode_obs_images, observation)
         except ValueError as exc:
             raise WsError(ErrorCode.INVALID_FRAME, str(exc)) from exc
 
@@ -419,6 +524,10 @@ class PolicyServer:
                     ) and not inspect.iscoroutinefunction(get_action):
                         # Keep the sync pair on ONE worker thread: some models
                         # carry thread-affine state between the two calls.
+                        # NOTE: this only holds WITHIN one INFER request;
+                        # across requests the default executor may pick a
+                        # different thread, so threading.local model state is
+                        # not supported.
                         def run_legacy_infer() -> Any:
                             update_result = update_obs(observation)
                             if inspect.isawaitable(update_result):
@@ -510,7 +619,11 @@ def main() -> None:
             ws_ping_timeout_s=deploy_cfg.get("ws_ping_timeout_s", 20.0),
         ),
     )
-    asyncio.run(server.serve_forever())
+    try:
+        asyncio.run(server.serve_forever())
+    except KeyboardInterrupt:
+        # serve_forever's finally already drained in-flight model calls.
+        logger.info("policy server interrupted; shut down cleanly")
 
 
 if __name__ == "__main__":

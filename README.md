@@ -119,7 +119,7 @@ policy/<POLICY>/
 | `update_obs_batch(obs_list)` | Update model state from a list of observation dictionaries. |
 | `get_action()` | Return one action chunk as a list of action dictionaries. |
 | `get_action_batch(env_idx_list=None)` | Return batched action chunks aligned with active environment indices. |
-| `reset()` | Clear model-side state between evaluation episodes. |
+| `reset()` | Clear model-side state between evaluation episodes. It takes no arguments — a policy that needs a first observation should `reset()` and then take a normal `update_obs`. |
 
 The policy server decodes camera colors before `update_obs` / `update_obs_batch`, so `obs["vision"][<camera>]["color"]` always arrives as an image array — `model.py` never decodes.
 
@@ -127,10 +127,12 @@ The default policy-server protocol is websocket (`protocol: ws` in `deploy.yml`)
 
 Websocket reliability semantics:
 
-- **Exactly-once calls**: every request carries a `request_id`; the client reuses it when a reconnect forces a retry, and the server answers duplicates from a response cache (or attaches to the still-running execution) instead of executing twice. This matters because `update_obs` / `get_action` are not idempotent for stateful policies.
+- **Exactly-once calls**: every request carries a `request_id`; the client reuses it when a reconnect forces a retry, and the server answers duplicates from a response cache (or attaches to the still-running execution) instead of executing twice. This matters because `update_obs` / `get_action` are not idempotent for stateful policies. The guarantee only covers transport-level retries with the *same* `request_id`: after a `timeout` error the server may still be executing the call, so treat the timeout as fatal for the trial — re-issuing the logical call (which gets a fresh `request_id`) would execute it a second time.
 - **Restart detection**: the server stamps `HELLO_ACK` with a per-process `server_instance_id`. If a reconnect lands on a different server process, the client raises `ServerRestartedError` and aborts — a fresh server lost the model state, so continuing would silently corrupt the evaluation.
-- **Keepalive**: both sides run websocket ping/pong (`ws_ping_interval_s` / `ws_ping_timeout_s`, default 20 s each; `null` disables), so a dead connection is detected within ~2 intervals rather than hanging until the 120 s request timeout.
-- **Cold start**: the policy server constructs the model *before* it opens its port, so a client that starts first sees connection refused and retries — model loading is covered by `max_connect_attempts` x `connect_retry_delay_s` (default 180 x 5 s = 15 min, the same budget as the legacy TCP client), not by any request timeout. `eval.sh` additionally gates the client behind `wait_for_policy_server.sh` (1200 s).
+- **Keepalive**: both sides run websocket ping/pong (`ws_ping_interval_s` / `ws_ping_timeout_s`, default 20 s each; `null` disables), so a dead connection is detected within ~2 intervals rather than hanging until the 120 s request timeout. The client's event loop runs on a background thread, so pings are answered even while the environment does long blocking work (scene resets, video encoding) between policy calls.
+- **Serialization**: payloads are msgpack with numpy support; `torch.Tensor` results are converted to numpy automatically (bfloat16 widens to float32). Anything else non-serializable makes the call fail loudly instead of stalling the client. Websocket compression is disabled on both ends — an observation frame is multi-MB of camera pixels (often already JPEG-encoded), so deflate costs event-loop CPU for almost no size win. Three wire-format details to keep in mind, all matching the legacy JSON codec: msgpack has no tuple type, so a `tuple` arrives as a `list`; numpy arrays are decoded as views over the receive buffer, so they are read-only — copy before any in-place edit; and int dict keys (e.g. env-idx-keyed maps) arrive as strings (`{0: ...}` decodes as `{"0": ...}`), exactly as `json.dumps` delivered them over TCP.
+- **Failure reporting**: the client receives `str(exc)` in the error frame; the full traceback of a model failure is logged on the *policy server* side, so look there first when a `call_failed` / `reset_failed` / `infer_failed` message is not self-explanatory.
+- **Cold start**: the policy server constructs the model *before* it opens its port, so a client that starts first sees connection refused and retries — model loading is covered by `max_connect_attempts` x `connect_retry_delay_s` (default 180 x 5 s = 15 min, the same budget as the legacy TCP client), capped by the `max_connect_seconds` wall clock, and not by any request timeout. `eval.sh` additionally gates the client behind `wait_for_policy_server.sh` (1200 s).
 
 These client-side knobs are optional `deploy.yml` keys; omit them to keep the defaults:
 
@@ -138,9 +140,11 @@ These client-side knobs are optional `deploy.yml` keys; omit them to keep the de
 | --- | --- | --- |
 | `max_connect_attempts` | `180` | Cold-start retries while the server is still loading. |
 | `connect_retry_delay_s` | `5.0` | Delay between those retries. |
+| `max_connect_seconds` | `900.0` | Wall-clock cap on the whole retry loop, so a server that accepts the socket but hangs cannot stretch the attempts into hours. `0` disables the cap. |
 | `connect_timeout_s` | `30.0` | Timeout for one TCP/websocket connect. |
 | `handshake_timeout_s` | `60.0` | Timeout for the HELLO round-trip (the server answers it without touching the model). |
 | `request_timeout_s` | `120.0` | Timeout for one `update_obs` / `get_action` call — raise it for slow inference. |
+| `close_timeout_s` | `10.0` | Cap on the closing handshake, so an unresponsive peer cannot hang `close()` when keepalive is disabled. |
 
 ## 🛠️ Model Integration Guide
 

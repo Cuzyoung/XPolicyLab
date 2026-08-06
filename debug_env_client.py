@@ -38,6 +38,8 @@ class TestEnv:
                 request_timeout_s=deploy_cfg.get("request_timeout_s"),
                 max_connect_attempts=deploy_cfg.get("max_connect_attempts"),
                 connect_retry_delay_s=deploy_cfg.get("connect_retry_delay_s"),
+                max_connect_seconds=deploy_cfg.get("max_connect_seconds"),
+                close_timeout_s=deploy_cfg.get("close_timeout_s"),
             )
         else:
             self.model_client = ModelClient(host=deploy_cfg['host'], port=deploy_cfg['port'])

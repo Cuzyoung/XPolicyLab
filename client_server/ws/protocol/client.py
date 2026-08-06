@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import sys
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
@@ -18,6 +19,7 @@ from client_server.ws.protocol.exceptions import (
     ServerRestartedError,
     WsError,
 )
+from client_server.ws.protocol.keepalive import normalize_ws_ping
 from client_server.ws.protocol.messages import REQUEST_RESPONSE_PAIRS, MessageType
 from client_server.ws.protocol.schemas import Frame
 
@@ -33,6 +35,33 @@ _RESET = "\033[0m"
 
 def _status(level: str, color: str, message: str) -> None:
     print(f"{color}{_BOLD}[{level}]{_RESET} {message}", flush=True)
+
+
+def _body_with(
+    field: str, value: str, extra: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Merge a caller payload with one protocol field it must not shadow.
+
+    Spreading the payload over the field would let a stray `trial_id` in a
+    trial result silently retarget the request; spreading it under would
+    silently discard the caller's value. Refuse the ambiguity instead.
+    """
+    body = dict(extra or {})
+    if body.get(field, value) != value:
+        raise ValueError(
+            f"payload key {field!r}={body[field]!r} conflicts with the "
+            f"request's {field}={value!r}"
+        )
+    body[field] = value
+    return body
+
+
+class _ClosedDuringConnect(ConnectionError):
+    """close() completed while a connect attempt was mid-flight.
+
+    The attempt may have opened a connection close() never saw; the connect
+    loop must tear it down and stop retrying instead of reviving the client.
+    """
 
 
 def _compact_exception(exc: BaseException, max_len: int = 180) -> str:
@@ -54,21 +83,6 @@ class WebSocketConnection(Protocol):
     def __aiter__(self) -> AsyncIterator[bytes | str]: ...
 
 
-def _normalize_ws_ping(value: Any, *, field_name: str) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(
-            f"{field_name} must be null or a positive number, got {value!r}"
-        )
-    seconds = float(value)
-    if seconds <= 0:
-        raise ValueError(
-            f"{field_name} must be null or a positive number, got {value!r}"
-        )
-    return seconds
-
-
 @dataclass
 class PolicyEvalClientConfig:
     url: str
@@ -87,17 +101,50 @@ class PolicyEvalClientConfig:
     # tolerate the same slow model load.
     max_connect_attempts: int = 180
     connect_retry_delay_s: float = 5.0
+    # Wall-clock cap on the whole retry loop. The attempt count alone assumes
+    # each attempt fails fast (connection refused). A server that accepts the
+    # socket but hangs makes every attempt cost connect_timeout_s +
+    # handshake_timeout_s, which would stretch 180 attempts into hours.
+    max_connect_seconds: float = 900.0
+    # Cap on the websocket closing handshake plus TCP teardown. websockets'
+    # asyncio implementation waits indefinitely on its own.
+    close_timeout_s: float = 10.0
     ws_ping_interval_s: float | None = 20.0
     ws_ping_timeout_s: float | None = 20.0
     proxy: str | Literal[True] | None = None
 
     def __post_init__(self) -> None:
-        self.ws_ping_interval_s = _normalize_ws_ping(
+        self.ws_ping_interval_s = normalize_ws_ping(
             self.ws_ping_interval_s, field_name="ws_ping_interval_s"
         )
-        self.ws_ping_timeout_s = _normalize_ws_ping(
+        self.ws_ping_timeout_s = normalize_ws_ping(
             self.ws_ping_timeout_s, field_name="ws_ping_timeout_s"
         )
+        # These all feed timeouts / sleep loops; nan or a negative value
+        # would silently break the retry math (max_connect_seconds=0 is the
+        # documented "no wall-clock cap", so 0 stays allowed everywhere).
+        for name in (
+            "connect_timeout_s",
+            "request_timeout_s",
+            "handshake_timeout_s",
+            "connect_retry_delay_s",
+            "max_connect_seconds",
+            "close_timeout_s",
+        ):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                raise ValueError(
+                    f"{name} must be a non-negative finite number, got {value!r}"
+                )
+        if self.max_connect_attempts < 1:
+            raise ValueError(
+                f"max_connect_attempts must be >= 1, got {self.max_connect_attempts!r}"
+            )
 
 
 @dataclass
@@ -111,22 +158,47 @@ class PolicyEvalClient:
     _server_instance_id: str | None = field(default=None, init=False)
 
     async def _sleep_with_countdown(self, seconds: float, label: str) -> None:
-        remaining = max(0, int(seconds))
-        if remaining <= 0:
+        # Keep fractional delays intact: truncating 0.5 s to 0 would turn the
+        # connect-retry loop into a hot loop hammering the server.
+        if seconds <= 0:
             return
-        if not sys.stdout.isatty():
+        interactive = sys.stdout.isatty()
+        if not interactive:
             # Avoid flooding redirected logs with carriage-return updates.
-            _status("RECONNECT", _YELLOW, f"{label}; retry in {remaining}s")
-            await asyncio.sleep(remaining)
-            return
-        for left in range(remaining, 0, -1):
-            print(
-                f"\r{_YELLOW}{_BOLD}[RECONNECT]{_RESET} {label}; retry in {left:2d}s",
-                end="",
-                flush=True,
+            _status("RECONNECT", _YELLOW, f"{label}; retry in {seconds:g}s")
+        # Sleep in <=1 s slices so close() interrupts the wait promptly
+        # instead of the retry loop napping through a full delay.
+        remaining = seconds
+        while remaining > 0 and not self._closed:
+            if interactive:
+                print(
+                    f"\r{_YELLOW}{_BOLD}[RECONNECT]{_RESET} {label}; retry in {remaining:4.1f}s",
+                    end="",
+                    flush=True,
+                )
+            step = min(1.0, remaining)
+            await asyncio.sleep(step)
+            remaining -= step
+        if interactive:
+            print("\r" + " " * 96 + "\r", end="", flush=True)
+
+    async def _close_ws(self, ws: WebSocketConnection) -> None:
+        """Close one connection without letting an unresponsive peer hang us.
+
+        The websockets asyncio implementation waits for the peer to complete
+        the closing handshake and for TCP teardown, with no close timeout of
+        its own. Keepalive normally aborts a half-open peer, but that safety
+        net is gone when ws_ping_interval_s is set to null.
+        """
+        try:
+            await asyncio.wait_for(ws.close(), timeout=self.config.close_timeout_s)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "websocket close timed out after %ss; abandoning the connection",
+                self.config.close_timeout_s,
             )
-            await asyncio.sleep(1)
-        print("\r" + " " * 96 + "\r", end="", flush=True)
+        except Exception:
+            pass
 
     async def _reset_connection_state(self) -> None:
         # Detach first: the cancelled recv task's cleanup checks identity
@@ -142,10 +214,7 @@ class PolicyEvalClient:
         if recv_task is not None:
             recv_task.cancel()
         if ws is not None:
-            try:
-                await ws.close()
-            except Exception:
-                pass
+            await self._close_ws(ws)
         if recv_task is not None:
             # Wait for the recv task to actually finish; otherwise its
             # finally block may run after a new connection is installed.
@@ -153,6 +222,15 @@ class PolicyEvalClient:
                 await recv_task
             except BaseException:
                 pass
+
+    def _raise_if_closed_during_connect(self) -> None:
+        # Re-check after every await inside a connect attempt: close() may
+        # have completed in between, and it cannot see (or close) a
+        # connection this attempt is still in the middle of establishing.
+        if self._closed:
+            raise _ClosedDuringConnect(
+                "client closed while a connect attempt was in flight"
+            )
 
     async def connect(
         self,
@@ -162,9 +240,15 @@ class PolicyEvalClient:
     ) -> Frame | None:
         if self._ws is not None:
             return None
-        self._closed = False
+        # close() is terminal: do NOT clear _closed here. Clearing it would
+        # let a connect racing with close() (or called after it) silently
+        # revive the client and leak a connection close() never saw; the
+        # loop below refuses instead.
         connect_kwargs: dict[str, Any] = {
             "max_size": None,
+            # Must match the server: deflating multi-MB observation frames
+            # burns CPU on the loop thread for almost no size win.
+            "compression": None,
             "ping_interval": self.config.ws_ping_interval_s,
             "ping_timeout": self.config.ws_ping_timeout_s,
         }
@@ -174,7 +258,19 @@ class PolicyEvalClient:
         if self.config.proxy is not None:
             connect_kwargs["proxy"] = self.config.proxy
         last_err: Exception | None = None
-        for attempt in range(1, self.config.max_connect_attempts + 1):
+        deadline = (
+            asyncio.get_running_loop().time() + self.config.max_connect_seconds
+            if self.config.max_connect_seconds > 0
+            else None
+        )
+        attempt = 0
+        while attempt < self.config.max_connect_attempts:
+            attempt += 1
+            if self._closed:
+                # close() ran while we were retrying (e.g. an orphaned
+                # background reconnect after the caller gave up); stop
+                # hammering the server instead of retrying for minutes.
+                raise ConnectionError("client closed; aborting connect retries")
             _status(
                 "CONNECTING",
                 _BLUE,
@@ -190,50 +286,57 @@ class PolicyEvalClient:
                     timeout=self.config.connect_timeout_s,
                 )
                 self._recv_task = asyncio.create_task(self._recv_loop(self._ws))
+                self._raise_if_closed_during_connect()
                 logger.info("websocket connected: %s", self.config.url)
                 _status("CONNECTED", _GREEN, f"websocket policy server connected: {self.config.url}")
                 if handshake:
                     ack = await self.hello(evaluation_plan=evaluation_plan)
                     self._check_server_identity(ack)
+                    self._raise_if_closed_during_connect()
                     return ack
                 return None
-            except ServerRestartedError:
-                # Not a transient connect failure: the server came back as a
-                # different process and lost the model state. Do not retry.
+            except (ServerRestartedError, _ClosedDuringConnect):
+                # Not transient connect failures: either the server came back
+                # as a different process and lost the model state, or close()
+                # finished while this attempt was in flight. Tear down whatever
+                # this attempt opened and do not retry.
                 await self._reset_connection_state()
                 raise
             except Exception as exc:
                 last_err = exc
                 await self._reset_connection_state()
-                if attempt < self.config.max_connect_attempts:
-                    # During policy cold-start the port may not be ready yet. Keep
-                    # this quiet unless debug logging is enabled; the final failure
-                    # below is the actionable communication error.
-                    logger.debug("connect attempt %s failed", attempt, exc_info=True)
-                    _status(
-                        "WAITING",
-                        _YELLOW,
-                        "policy server not ready "
-                        f"(attempt {attempt}/{self.config.max_connect_attempts}): {_compact_exception(exc)}",
-                    )
-                    await self._sleep_with_countdown(
-                        self.config.connect_retry_delay_s,
-                        f"reconnecting to {self.config.url}",
-                    )
-                else:
+                out_of_time = (
+                    deadline is not None
+                    and asyncio.get_running_loop().time() >= deadline
+                )
+                if attempt >= self.config.max_connect_attempts or out_of_time:
                     logger.warning(
                         "final connect attempt %s/%s failed: %s",
                         attempt,
                         self.config.max_connect_attempts,
                         _compact_exception(exc),
                     )
-        _status(
-            "ERROR",
-            _RED,
-            f"failed to connect to {self.config.url} after {self.config.max_connect_attempts} attempts",
-        )
+                    break
+                # During policy cold-start the port may not be ready yet. Keep
+                # this quiet unless debug logging is enabled; the final failure
+                # below is the actionable communication error.
+                logger.debug("connect attempt %s failed", attempt, exc_info=True)
+                _status(
+                    "WAITING",
+                    _YELLOW,
+                    "policy server not ready "
+                    f"(attempt {attempt}/{self.config.max_connect_attempts}): {_compact_exception(exc)}",
+                )
+                await self._sleep_with_countdown(
+                    self.config.connect_retry_delay_s,
+                    f"reconnecting to {self.config.url}",
+                )
+        give_up = f"after {attempt} attempts"
+        if deadline is not None and asyncio.get_running_loop().time() >= deadline:
+            give_up += f" / {self.config.max_connect_seconds:g}s"
+        _status("ERROR", _RED, f"failed to connect to {self.config.url} {give_up}")
         raise ConnectionError(
-            f"failed to connect after {self.config.max_connect_attempts} attempts: {last_err}"
+            f"failed to connect {give_up}: {last_err}"
         ) from last_err
 
     def _check_server_identity(self, ack: Frame) -> None:
@@ -304,6 +407,10 @@ class PolicyEvalClient:
                 self._fail_pending(
                     close_exc or WsError(ErrorCode.INTERNAL, "connection closed")
                 )
+                # Reaching here means nobody else detached this connection, so
+                # nobody else will close it either. Safe to await: the cancel
+                # path returns above with self._ws already detached.
+                await self._close_ws(ws)
 
     def _dispatch_incoming(self, frame: Frame) -> None:
         if frame.message_type == MessageType.ERROR:
@@ -318,8 +425,12 @@ class PolicyEvalClient:
                 details=err.get("details"),
             )
             req_id = frame.request_id
-            if req_id in self._pending:
-                self._pending.pop(req_id).set_exception(exc)
+            fut = self._pending.pop(req_id, None)
+            # done() guard: wait_for() cancels the future on timeout before
+            # request() pops it from _pending; set_exception on a cancelled
+            # future raises InvalidStateError and would kill the recv loop.
+            if fut is not None and not fut.done():
+                fut.set_exception(exc)
             return
 
         req_id = frame.request_id
@@ -348,6 +459,11 @@ class PolicyEvalClient:
                 raise RuntimeError("not connected; client is closed")
             if msg_type == MessageType.HELLO:
                 raise RuntimeError("not connected; call connect() first")
+            if msg_type == MessageType.CLOSE:
+                # CLOSE is a courtesy notification; burning the full connect
+                # retry budget just to say goodbye would be absurd. No
+                # connection means there is nothing to close.
+                raise RuntimeError("not connected; nothing to close")
             _status(
                 "RECONNECT",
                 _YELLOW,
@@ -370,15 +486,19 @@ class PolicyEvalClient:
             step=step,
             payload=payload,
         )
+        # Encode before touching the connection: a payload the codec rejects
+        # is a caller error and must surface directly, not masquerade as a
+        # connection failure and trigger a pointless reconnect + retry.
+        data = encode_frame(frame)
         if expected is None:
-            await self._ws.send(encode_frame(frame))
+            await self._ws.send(data)
             return frame
 
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[Frame] = loop.create_future()
         self._pending[request_id] = fut
         try:
-            await self._ws.send(encode_frame(frame))
+            await self._ws.send(data)
         except Exception:
             self._pending.pop(request_id, None)
             if not _reconnect_attempted and not self._closed and msg_type != MessageType.HELLO:
@@ -402,6 +522,11 @@ class PolicyEvalClient:
             response = await asyncio.wait_for(fut, timeout=timeout)
         except asyncio.TimeoutError as exc:
             self._pending.pop(request_id, None)
+            # The server may STILL be executing this request. Dedup only
+            # covers retries with the SAME request_id, so callers must treat
+            # a timeout as fatal for the trial — re-issuing the logical call
+            # under a fresh request_id would execute it a second time
+            # (update_obs/get_action are not idempotent for stateful models).
             raise WsError(ErrorCode.TIMEOUT, f"timeout waiting for {expected}") from exc
         except asyncio.CancelledError:
             # Outer cancellation (e.g. KeyboardInterrupt around
@@ -458,7 +583,7 @@ class PolicyEvalClient:
         *,
         repeat_index: int | None = None,
     ) -> Frame:
-        body = {"action_case_id": action_case_id, **(case_meta or {})}
+        body = _body_with("action_case_id", action_case_id, case_meta)
         return await self.request(
             MessageType.PREPARE_CASE,
             body,
@@ -472,12 +597,12 @@ class PolicyEvalClient:
         trial_id: str,
         action_case_id: str | None = None,
         repeat_index: int | None = None,
-        payload: dict[str, Any] | None = None,
     ) -> Frame:
-        body = {"trial_id": trial_id, **(payload or {})}
+        # No caller payload: model.reset() takes no arguments, so anything
+        # sent here would only be dropped by the server.
         return await self.request(
             MessageType.RESET,
-            body,
+            {"trial_id": trial_id},
             action_case_id=action_case_id,
             trial_id=trial_id,
             repeat_index=repeat_index,
@@ -531,7 +656,7 @@ class PolicyEvalClient:
         action_case_id: str | None = None,
         repeat_index: int | None = None,
     ) -> Frame:
-        body = {"trial_id": trial_id, **(result or {})}
+        body = _body_with("trial_id", trial_id, result)
         return await self.request(
             MessageType.TRIAL_END,
             body,
