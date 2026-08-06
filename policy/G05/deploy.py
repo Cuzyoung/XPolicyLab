@@ -23,7 +23,7 @@ def eval_one_episode_batch(TASK_ENV, model_client):
         env_idx_list = TASK_ENV.get_running_env_idx_list()
         obs_list = TASK_ENV.get_obs_batch(env_idx_list)
         model_client.call(func_name="update_obs_batch", obs=obs_list)
-        actions = model_client.call(func_name="get_action_batch", env_idx_list=env_idx_list)
+        actions = model_client.call(func_name="get_action_batch", obs=env_idx_list)
 
         chunk_size = len(actions[0])
         for action_idx in range(chunk_size):

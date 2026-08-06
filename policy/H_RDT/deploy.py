@@ -24,7 +24,7 @@ def eval_one_episode_batch(TASK_ENV, model_client):
         obs_list = TASK_ENV.get_obs_batch(env_idx_list) # Get Batch Observation
 
         model_client.call(func_name="update_obs_batch", obs=obs_list)  # Update Observation, `update_obs` here can be modified
-        actions = model_client.call(func_name="get_action_batch", env_idx_list=env_idx_list) # Get Action according to observation chunk
+        actions = model_client.call(func_name="get_action_batch", obs=env_idx_list) # Get Action according to observation chunk
 
         chunk_size = len(actions[0])
         for action_idx in range(chunk_size):

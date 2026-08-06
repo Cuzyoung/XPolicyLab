@@ -52,7 +52,7 @@ class Model(ModelTemplate):
         else:
             raise NotImplementedError(f"Unsupported number of arms: {num_arms}")
 
-        steps = 1  # current exampleonlygenerate 1 action, by
+        steps = 2  # current exampleonlygenerate 2 action, by
         action_list = []
 
         for _ in range(steps):

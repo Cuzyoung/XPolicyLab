@@ -12,7 +12,7 @@ class TestEnv:
         self.success_num, self.episode_num = 0, 0
         self._stop_check = None
         self.deploy_cfg = deploy_cfg
-        self.episode_step_limit = 5
+        self.episode_step_limit = 20
         self.obs_encoded = deploy_cfg.get('obs_encoded', False)
         env_cfg_type = deploy_cfg['env_cfg_type']
         self.robot_action_dim_info = get_robot_action_dim_info(env_cfg_type)

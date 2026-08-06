@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import warnings
 from typing import Any
 
 from client_server.ws.protocol.client import PolicyEvalClient, PolicyEvalClientConfig
@@ -37,6 +38,18 @@ class WsModelClient:
         self._loop.run_until_complete(self._client.connect(handshake=True))
 
     def call(self, func_name: str | None = None, obs: Any = None, **kwargs: Any) -> Any:
+        # Payload channel is only `obs` (legacy TCP compatibility). Extra kwargs
+        # such as env_idx_list=... are not forwarded — reject them loudly.
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs))
+            message = (
+                f"WsModelClient.call() only accepts func_name and obs; "
+                f"unsupported keyword argument(s): {unexpected}. "
+                f"For get_action_batch, pass env indices as obs=env_idx_list."
+            )
+            warnings.warn(message, UserWarning, stacklevel=2)
+            raise TypeError(message)
+
         if func_name == "prepare_case":
             if self.action_case_id is None:
                 raise ValueError("prepare_case requires action_case_id")
