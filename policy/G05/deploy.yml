@@ -11,7 +11,7 @@ action_type: joint
 action_dim: 14
 eval_batch: true
 
-g05_root: /efm-nas/efm-nas/group-jt/haoyu.zhang/GalaxeaVLA_github_port
+g05_root: null
 ckpt_path: null
 eval_embodiment: robodojo
 action_steps: 16

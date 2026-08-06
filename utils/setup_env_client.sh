@@ -20,7 +20,15 @@ protocol_override="${14:-}"
 source "${UTILS_DIR}/resolve_eval_env_type.sh"
 eval_env_mode="$(resolve_eval_env_type)" || exit 1
 
-read eval_batch yaml_protocol < <(python - <<PY
+conda_exe="$(command -v conda)"
+conda_base="$(cd "$(dirname "${conda_exe}")/.." && pwd)"
+eval_python="${conda_base}/envs/${eval_env_conda_env}/bin/python"
+if [[ ! -x "${eval_python}" ]]; then
+    echo "[ERROR] Eval Python not found: ${eval_python}" >&2
+    exit 1
+fi
+
+read eval_batch yaml_protocol < <("${eval_python}" - <<PY
 import yaml
 with open("${yaml_file}", "r") as f:
     data = yaml.safe_load(f)
