@@ -12,7 +12,7 @@ simulation remains on the evaluator/client side.
 Download the G05 RoboDojo-real checkpoint package from the OpenGalaxea Hugging Face organization. Access to the real checkpoint may be gated until evaluation is finalized. The archive and the extracted checkpoint intentionally do not expose the training step.
 
 ```bash
-huggingface-cli download OpenGalaxea/g05 \
+huggingface-cli download OpenGalaxea/g05-robodojo \
   g05_robodojo_real_checkpoint.tar \
   g05_robodojo_real_checkpoint.tar.sha256 \
   --local-dir ./checkpoints/g05_real
