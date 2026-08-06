@@ -7,6 +7,15 @@ description: Integrate a robot policy into XPolicyLab as a policy/<POLICY>/ adap
 
 Add each policy as a self-contained `policy/<POLICY>/` adapter; keep upstream model code unchanged where possible. `policy/demo_policy/` is the minimal reference — mirror it unless the model truly needs more.
 
+## Before starting
+
+Confirm with the user, or state the assumption explicitly in your first reply:
+
+- Where the upstream model code and checkpoints live (repo URL, local path, or "not available yet").
+- Which `env_cfg_type` (robot) and `action_type` (`joint` / `ee`) the model supports.
+- Whether this is a full integration or eval-only (no `process_data.sh` / `train.sh`).
+- Which conda/uv environment to use for the policy side.
+
 ## Workflow
 
 1. Read `policy/demo_policy/` (`model.py`, `deploy.py`, `deploy.yml`, `eval.sh`, `README.md`), then the upstream model's inference API, dependencies, and checkpoint layout.
@@ -48,3 +57,17 @@ Action dict keys: dual-arm uses `left_arm_joint_state` / `right_arm_joint_state`
 - Images are RGB end to end — never add channel swaps in conversion, training, or eval code. The only exceptions are medium adapters: `COLOR_RGB2BGR` immediately before `cv2.VideoWriter.write(...)`, `COLOR_BGR2RGB` immediately after `cv2.VideoCapture.read()`.
 - Trajectory HDF5 files store a singular `instruction` string and camera extrinsics as `extrinsic_matrix`; runtime observations use `extrinsics_matrix`.
 - Full observation/trajectory format trees live in the repo README under "Standard Data Formats".
+
+## Debug-mode troubleshooting
+
+| Symptom | Usual cause |
+| --- | --- |
+| `ModuleNotFoundError` for the policy | Missing `policy/<POLICY>/__init__.py`, or `install.sh` did not install into the env passed as `<policy_env>`. |
+| Client retries connect, then gives up | The server crashed during model loading — read the policy-server log, not the client log; model tracebacks are only printed server-side. |
+| Action rejected for wrong keys/dims | Action dict keys must match `action_type` and the arm count; take dims from `get_robot_action_dim_info(env_cfg_type)`. |
+| Works plain, fails with `DEBUG_OBS_ENCODED=1` | `model.py` is decoding images itself, or assumes writable arrays — decoded arrays are read-only views, so copy first. |
+| Call times out | Inference is slower than `request_timeout_s` (default 120 s); raise it in `deploy.yml`. |
+
+## Reporting back
+
+Finish with: what was created or changed, the exact eval command you ran and its result, supported `action_type` / `env_cfg_type`, expected checkpoint layout, and anything still unverified (e.g. training untested, no real checkpoint available). Never claim the debug loop passed if you could not run it.

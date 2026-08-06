@@ -123,28 +123,31 @@ policy/<POLICY>/
 
 The policy server decodes camera colors before `update_obs` / `update_obs_batch`, so `obs["vision"][<camera>]["color"]` always arrives as an image array — `model.py` never decodes.
 
-The default policy-server protocol is websocket (`protocol: ws` in `deploy.yml`). Keep `legacy_tcp` only for old adapters that have not migrated yet.
+The default policy-server protocol is websocket (`protocol: ws` in `deploy.yml`); `legacy_tcp` exists only for adapters that have not migrated yet. The transport handles reconnects, retries, keepalive, and long model-loading cold starts for you — a normal adapter never touches it.
 
-Websocket reliability semantics:
+<details>
+<summary>Transport details and timeout tuning (only if evaluation hangs or drops)</summary>
 
-- **Exactly-once calls**: every request carries a `request_id`; the client reuses it when a reconnect forces a retry, and the server answers duplicates from a response cache (or attaches to the still-running execution) instead of executing twice. This matters because `update_obs` / `get_action` are not idempotent for stateful policies. The guarantee only covers transport-level retries with the *same* `request_id`: after a `timeout` error the server may still be executing the call, so treat the timeout as fatal for the trial — re-issuing the logical call (which gets a fresh `request_id`) would execute it a second time.
-- **Restart detection**: the server stamps `HELLO_ACK` with a per-process `server_instance_id`. If a reconnect lands on a different server process, the client raises `ServerRestartedError` and aborts — a fresh server lost the model state, so continuing would silently corrupt the evaluation.
-- **Keepalive**: both sides run websocket ping/pong (`ws_ping_interval_s` / `ws_ping_timeout_s`, default 20 s each; `null` disables), so a dead connection is detected within ~2 intervals rather than hanging until the 120 s request timeout. The client's event loop runs on a background thread, so pings are answered even while the environment does long blocking work (scene resets, video encoding) between policy calls.
-- **Serialization**: payloads are msgpack with numpy support; `torch.Tensor` results are converted to numpy automatically (bfloat16 widens to float32). Anything else non-serializable makes the call fail loudly instead of stalling the client. Websocket compression is disabled on both ends — an observation frame is multi-MB of camera pixels (often already JPEG-encoded), so deflate costs event-loop CPU for almost no size win. Three wire-format details to keep in mind, all matching the legacy JSON codec: msgpack has no tuple type, so a `tuple` arrives as a `list`; numpy arrays are decoded as views over the receive buffer, so they are read-only — copy before any in-place edit; and int dict keys (e.g. env-idx-keyed maps) arrive as strings (`{0: ...}` decodes as `{"0": ...}`), exactly as `json.dumps` delivered them over TCP.
-- **Failure reporting**: the client receives `str(exc)` in the error frame; the full traceback of a model failure is logged on the *policy server* side, so look there first when a `call_failed` / `reset_failed` / `infer_failed` message is not self-explanatory.
-- **Cold start**: the policy server constructs the model *before* it opens its port, so a client that starts first sees connection refused and retries — model loading is covered by `max_connect_attempts` x `connect_retry_delay_s` (default 180 x 5 s = 15 min, the same budget as the legacy TCP client), capped by the `max_connect_seconds` wall clock, and not by any request timeout. `eval.sh` additionally gates the client behind `wait_for_policy_server.sh` (1200 s).
+- **Retries are safe**: each request carries a `request_id` that the client reuses across reconnects, and the server answers duplicates from a cache instead of running a non-idempotent call twice. A `timeout` error is the exception — the server may still be running the call, so treat it as fatal for that trial rather than retrying.
+- **Server restarts abort the run**: if a reconnect lands on a different server process, the client raises `ServerRestartedError`, because the fresh server lost the model state.
+- **Cold start**: the server loads the model before opening its port, so an early client just retries (default budget 15 min). `eval.sh` also gates the client behind `wait_for_policy_server.sh`.
+- **Errors**: the client only sees `str(exc)`; the full traceback of a model failure is logged on the *policy server* side, so look there first.
+- **Serialization** is msgpack with numpy support (`torch.Tensor` auto-converts). Three quirks: `tuple` arrives as `list`, decoded numpy arrays are read-only views (copy before in-place edits), and int dict keys arrive as strings.
 
-These client-side knobs are optional `deploy.yml` keys; omit them to keep the defaults:
+Optional `deploy.yml` keys — omit them to keep the defaults:
 
 | Key | Default | Purpose |
 | --- | --- | --- |
+| `request_timeout_s` | `120.0` | Timeout for one `update_obs` / `get_action` call — raise it for slow inference. |
 | `max_connect_attempts` | `180` | Cold-start retries while the server is still loading. |
 | `connect_retry_delay_s` | `5.0` | Delay between those retries. |
-| `max_connect_seconds` | `900.0` | Wall-clock cap on the whole retry loop, so a server that accepts the socket but hangs cannot stretch the attempts into hours. `0` disables the cap. |
-| `connect_timeout_s` | `30.0` | Timeout for one TCP/websocket connect. |
-| `handshake_timeout_s` | `60.0` | Timeout for the HELLO round-trip (the server answers it without touching the model). |
-| `request_timeout_s` | `120.0` | Timeout for one `update_obs` / `get_action` call — raise it for slow inference. |
-| `close_timeout_s` | `10.0` | Cap on the closing handshake, so an unresponsive peer cannot hang `close()` when keepalive is disabled. |
+| `max_connect_seconds` | `900.0` | Wall-clock cap on the whole retry loop; `0` disables it. |
+| `connect_timeout_s` | `30.0` | Timeout for one connect attempt. |
+| `handshake_timeout_s` | `60.0` | Timeout for the HELLO round-trip. |
+| `ws_ping_interval_s` / `ws_ping_timeout_s` | `20.0` | Keepalive ping/pong; `null` disables. |
+| `close_timeout_s` | `10.0` | Cap on the closing handshake. |
+
+</details>
 
 ## 🛠️ Model Integration Guide
 
@@ -208,21 +211,7 @@ demo_env/
 └── XPolicyLab/
 ```
 
-You can also pull HDF5 or LeRobot exports for RoboDojo and other benchmark-backed experiments:
-
-```bash
-# RoboDojo HDF5 data, saved to ../data/RoboDojo
-bash scripts/RoboDojo/download_robodojo_data.sh hdf5
-
-# RoboDojo LeRobot v3.0 video data, saved to ../data/RoboDojo_lerobot_v30_video
-bash scripts/RoboDojo/download_robodojo_data.sh lerobot_v3.0
-
-# RoboDojo LeRobot v2.1 video data, saved to ../data/RoboDojo_lerobot_v21_video
-bash scripts/RoboDojo/download_robodojo_data.sh lerobot_v2.1
-
-# RoboDojo real-world HDF5 data, saved to ../data/RoboDojo_real
-bash scripts/RoboDojo/download_robodojo_data.sh real
-```
+The same script pulls the full exports — `hdf5`, `lerobot_v3.0`, `lerobot_v2.1`, and `real` (real-world HDF5) — each into its own `../data/` folder.
 
 With this setup, you can test data conversion, model loading, training scripts, and debug-mode evaluation before connecting to a simulator-backed benchmark.
 
@@ -428,11 +417,11 @@ from XPolicyLab.utils.process_data import decode_image_bit, get_robot_action_dim
 
 `decode_image_bit` turns encoded image streams into arrays and returns already-decoded values untouched. `get_robot_action_dim_info(env_cfg_type)` returns robot-specific `arm_dim` and `ee_dim` lists, so adapters do not need to hard-code action dimensions.
 
-> **`model.py` never decodes images.** The policy server runs `decode_obs_images` on every observation before calling `update_obs` / `update_obs_batch`, so `obs["vision"][<camera>]["color"]` always arrives as an image array. Depth maps, intrinsics and extrinsics are passed through untouched.
+Three image rules that cause silent, hard-to-debug bugs when broken:
 
-> **Mandatory for offline code:** in conversion scripts and training dataloaders that read trajectory files, always decode with `decode_image_bit` — never write your own `cv2.imdecode` / `np.frombuffer` / PIL decoding. RoboTwin and RoboDojo historical data store image bits in legacy layouts that only this function handles correctly; a hand-rolled decoder will silently decode wrong or fail on part of the data.
-
-> **Everything is RGB, end to end.** Stored image bits were encoded from RGB frames, so `decode_image_bit` returns RGB and no channel conversion belongs anywhere in data conversion, training, or evaluation. The only legitimate conversions are adapters for a medium with a different convention: `cv2.VideoWriter` consumes BGR, so convert with `COLOR_RGB2BGR` right before `writer.write(...)`, and `cv2.VideoCapture` returns BGR, so convert with `COLOR_BGR2RGB` right after `cap.read()`. Writing `cv2.cvtColor(decode_image_bit(...), COLOR_BGR2RGB)` is always a bug: it trains the model on BGR while evaluation feeds it RGB.
+> - **`model.py` never decodes.** The policy server decodes every observation before `update_obs` / `update_obs_batch`, so `obs["vision"][<camera>]["color"]` already is an image array.
+> - **Offline code decodes only via `decode_image_bit`.** In conversion scripts and training dataloaders, never hand-roll `cv2.imdecode` / `np.frombuffer` / PIL decoding — RoboTwin and RoboDojo store image bits in legacy layouts that only this function reads correctly.
+> - **Everything is RGB, end to end.** No channel conversion belongs in conversion, training, or evaluation. The only exceptions are medium adapters: `COLOR_RGB2BGR` right before `cv2.VideoWriter.write(...)`, and `COLOR_BGR2RGB` right after `cv2.VideoCapture.read()`.
 
 Robot action dimensions are registered in `utils/robot/_robot_info.json`: each top-level key is an `env_cfg_type` such as `arx_x5`, with `arm_dim` / `ee_dim` lists for per-arm joint and end-effector/gripper dimensions. Update it when adding a new robot configuration so conversion, training, and deployment code can infer action shapes consistently.
 

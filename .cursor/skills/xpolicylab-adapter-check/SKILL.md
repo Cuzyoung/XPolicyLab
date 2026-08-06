@@ -7,6 +7,8 @@ description: Audit a policy/<POLICY>/ adapter for XPolicyLab standard compliance
 
 Audit `policy/<POLICY>/` against the submission standard and report pass/fail per item with concrete fixes. The full standard lives in `CONTRIBUTING.md` at the repo root — read it before auditing; the list below is the executable summary. `policy/demo_policy/` is the reference implementation.
 
+This is a **read-only audit**: report the fixes, do not apply them unless the user asks. If the user did not name a policy, list the adapters that changed on the current branch and ask which to audit.
+
 ## Checks
 
 Run commands from the repo root unless noted.
@@ -41,3 +43,6 @@ Run commands from the repo root unless noted.
 - One line per check: ✅ pass / ❌ fail / ⚠️ not run, with a short reason.
 - For each ❌: name the file and the exact change, pointing to `policy/demo_policy` where useful.
 - End with a verdict: **ready for PR** or **needs fixes** (list blocking items first).
+- Then offer to apply the fixes.
+
+Keep the report short — checks that pass need one line, not an explanation. Never mark an item ✅ based on reading code alone when the check is a command you did not run.
