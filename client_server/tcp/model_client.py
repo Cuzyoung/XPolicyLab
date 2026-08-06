@@ -15,6 +15,13 @@ def _status(level, color, message):
     print(f"{color}{BOLD}[{level}]{RESET} {message}", flush=True)
 
 
+# Cold-start budget: a policy server loading a large checkpoint has not opened
+# its port yet, so the client sees connection refused and retries.
+# 180 x 5 s = 15 min, matching the websocket client.
+CONNECT_MAX_ATTEMPTS = 180
+CONNECT_RETRY_DELAY_S = 5
+
+
 class ModelClient:
     def __init__(self, host="localhost", port=9999, timeout=30):
         self.host = host
@@ -25,8 +32,8 @@ class ModelClient:
 
     def _connect(self):
         attempts = 0
-        max_attempts = 1000
-        retry_delay = 5
+        max_attempts = CONNECT_MAX_ATTEMPTS
+        retry_delay = CONNECT_RETRY_DELAY_S
 
         while attempts < max_attempts:
             try:

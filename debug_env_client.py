@@ -31,6 +31,13 @@ class TestEnv:
                 repeat_index=deploy_cfg["repeat_index"],
                 ws_ping_interval_s=deploy_cfg.get("ws_ping_interval_s", 20.0),
                 ws_ping_timeout_s=deploy_cfg.get("ws_ping_timeout_s", 20.0),
+                # Omitted keys keep the client defaults; a slow-loading policy
+                # server mainly needs max_connect_attempts / request_timeout_s.
+                connect_timeout_s=deploy_cfg.get("connect_timeout_s"),
+                handshake_timeout_s=deploy_cfg.get("handshake_timeout_s"),
+                request_timeout_s=deploy_cfg.get("request_timeout_s"),
+                max_connect_attempts=deploy_cfg.get("max_connect_attempts"),
+                connect_retry_delay_s=deploy_cfg.get("connect_retry_delay_s"),
             )
         else:
             self.model_client = ModelClient(host=deploy_cfg['host'], port=deploy_cfg['port'])

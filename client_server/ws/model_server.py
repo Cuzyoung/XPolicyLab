@@ -8,12 +8,15 @@ import importlib
 import inspect
 import logging
 import time
+from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import uuid4
 
 import yaml
 from websockets.asyncio.server import Server, ServerConnection, serve
+from websockets.exceptions import ConnectionClosed
 
 from client_server.ws.protocol.codec import decode_envelope, encode_frame
 from client_server.ws.protocol.exceptions import ErrorCode, WsError
@@ -22,6 +25,16 @@ from client_server.ws.protocol.schemas import Frame
 from XPolicyLab.utils.process_data import decode_obs_images
 
 logger = logging.getLogger(__name__)
+
+# Bound on cached responses kept for duplicate-request replay. The client
+# retries a request at most once, so a few hundred entries is far more than
+# the retry window needs; the cap only guards memory on long-running servers.
+_RESPONSE_CACHE_SIZE = 1024
+
+# Bound on concurrently processed frames per connection. The bundled client
+# is synchronous (one outstanding request), so this only protects against
+# misbehaving peers flooding frames faster than the model can answer.
+_MAX_INFLIGHT_RESPONSES = 128
 
 
 def _ok_payload(result: Any = None) -> dict[str, Any]:
@@ -72,6 +85,22 @@ class PolicyServer:
         init=False,
         repr=False,
     )
+    # Identifies this server process in HELLO_ACK; the client pins it and
+    # refuses to continue if a reconnect lands on a different process (a
+    # restarted server lost the model state and this cache).
+    _instance_id: str = field(default_factory=lambda: uuid4().hex, init=False)
+    # request_id -> (request type, response frame), for exactly-once semantics
+    # across client reconnect retries (the client reuses the request_id when
+    # retrying). The request type is kept to detect id reuse across types.
+    _response_cache: OrderedDict[str, tuple[MessageType, Frame]] = field(
+        default_factory=OrderedDict, init=False, repr=False
+    )
+    # request_id -> (request type, running execution). A retry can arrive while
+    # the original attempt is STILL executing (e.g. long inference on the old
+    # connection); the duplicate awaits the same task instead of running twice.
+    _inflight: dict[str, tuple[MessageType, asyncio.Task[Frame | None]]] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     async def start(self) -> None:
         if self._server is not None:
@@ -92,6 +121,12 @@ class PolicyServer:
         self._server.close()
         await self._server.wait_closed()
         self._server = None
+        # Executions are shielded from their waiters' cancellation, so closing
+        # the server can leave them running; drain them instead of letting the
+        # loop tear down pending tasks.
+        inflight = [task for _type, task in self._inflight.values()]
+        if inflight:
+            await asyncio.gather(*inflight, return_exceptions=True)
 
     async def serve_forever(self) -> None:
         await self.start()
@@ -119,6 +154,10 @@ class PolicyServer:
                     await websocket.send(encode_frame(response))
             except asyncio.CancelledError:
                 raise
+            except ConnectionClosed as exc:
+                # Expected when the original attempt's connection died
+                # mid-request; the response is cached for the client's retry.
+                logger.warning("response undeliverable, client gone: %s", exc)
             except Exception:
                 logger.exception("failed to send policy server response")
 
@@ -131,21 +170,95 @@ class PolicyServer:
                 except WsError as exc:
                     logger.error("invalid request frame: %s", exc)
                     continue
+                if len(pending) >= _MAX_INFLIGHT_RESPONSES:
+                    # Backpressure: process inline instead of queuing yet
+                    # another task for an overwhelmed connection.
+                    await respond(frame)
+                    continue
                 task = asyncio.create_task(respond(frame))
                 pending.add(task)
                 task.add_done_callback(pending.discard)
+        except ConnectionClosed:
+            # Routine for dropped/restarted clients; not a handler failure.
+            logger.debug("policy client disconnected")
         finally:
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
 
+    def _cache_response(
+        self, request_id: str, msg_type: MessageType, response: Frame
+    ) -> None:
+        cache = self._response_cache
+        cache[request_id] = (msg_type, response)
+        cache.move_to_end(request_id)
+        while len(cache) > _RESPONSE_CACHE_SIZE:
+            cache.popitem(last=False)
+
+    def _reused_id_error(self, frame: Frame, original: MessageType) -> Frame:
+        logger.error(
+            "request_id %s reused for %s after %s; refusing to answer",
+            frame.request_id,
+            frame.message_type.value,
+            original.value,
+        )
+        return self._error_reply(
+            frame,
+            ErrorCode.INVALID_FRAME,
+            f"request_id already used for a {original.value} request; "
+            f"request ids must be unique per request",
+        )
+
     async def process_frame(self, frame: Frame) -> Frame | None:
+        # Exactly-once replay: a client that lost the response to a request
+        # (connection dropped mid-flight) retries with the SAME request_id;
+        # answer from the cache instead of executing the call a second time.
+        cached = self._response_cache.get(frame.request_id)
+        if cached is not None:
+            original_type, response = cached
+            if original_type != frame.message_type:
+                # Replaying a mismatched response would be worse than failing.
+                return self._reused_id_error(frame, original_type)
+            self._response_cache.move_to_end(frame.request_id)
+            logger.info(
+                "duplicate request %s (%s); replaying cached response",
+                frame.request_id,
+                frame.message_type.value,
+            )
+            return response
+        return await self._execute_once(frame)
+
+    async def _execute_once(self, frame: Frame) -> Frame | None:
+        entry = self._inflight.get(frame.request_id)
+        if entry is not None:
+            original_type, task = entry
+            if original_type != frame.message_type:
+                return self._reused_id_error(frame, original_type)
+            logger.info(
+                "request %s (%s) already in flight; awaiting its result",
+                frame.request_id,
+                frame.message_type.value,
+            )
+        else:
+            task = asyncio.create_task(self._execute_frame(frame))
+            self._inflight[frame.request_id] = (frame.message_type, task)
+            task.add_done_callback(
+                lambda _t, rid=frame.request_id: self._inflight.pop(rid, None)
+            )
+        # Shield: a cancellation of THIS waiter (e.g. its connection died)
+        # must not kill the shared execution for the other waiter.
+        return await asyncio.shield(task)
+
+    async def _execute_frame(self, frame: Frame) -> Frame | None:
         try:
-            return await self._dispatch_frame(frame)
+            response = await self._dispatch_frame(frame)
         except WsError as exc:
-            return self._error_reply(frame, exc.code, exc.message, exc.details)
+            response = self._error_reply(frame, exc.code, exc.message, exc.details)
         except Exception as exc:
             logger.exception("policy server request failed")
-            return self._error_reply(frame, ErrorCode.INTERNAL, str(exc))
+            response = self._error_reply(frame, ErrorCode.INTERNAL, str(exc))
+        if response is not None:
+            self._cache_response(frame.request_id, frame.message_type, response)
+        return response
 
     def _reply(
         self,
@@ -200,7 +313,8 @@ class PolicyServer:
                 MessageType.HELLO_ACK,
                 {
                     "ok": True,
-                    "server": "demo_policy_server",
+                    "server": "xpolicylab_policy_server",
+                    "server_instance_id": self._instance_id,
                 },
             )
         if frame.message_type == MessageType.PREPARE_CASE:
@@ -300,16 +414,11 @@ class PolicyServer:
                 update_obs = getattr(self.model, "update_obs", None)
                 get_action = getattr(self.model, "get_action", None)
                 if callable(update_obs) and callable(get_action):
-                    if inspect.iscoroutinefunction(
+                    if not inspect.iscoroutinefunction(
                         update_obs
-                    ) or inspect.iscoroutinefunction(get_action):
-                        update_result = update_obs(observation)
-                        if inspect.isawaitable(update_result):
-                            await update_result
-                        result = get_action()
-                        if inspect.isawaitable(result):
-                            result = await result
-                    else:
+                    ) and not inspect.iscoroutinefunction(get_action):
+                        # Keep the sync pair on ONE worker thread: some models
+                        # carry thread-affine state between the two calls.
                         def run_legacy_infer() -> Any:
                             update_result = update_obs(observation)
                             if inspect.isawaitable(update_result):
@@ -324,6 +433,12 @@ class PolicyServer:
                             return result
 
                         result = await asyncio.to_thread(run_legacy_infer)
+                    else:
+                        # Mixed/async pair: _invoke_method keeps sync halves
+                        # off the event loop (running a blocking sync call
+                        # inline here would stall every connection).
+                        await self._invoke_method(update_obs, observation)
+                        result = await self._invoke_method(get_action)
                 else:
                     infer = getattr(self.model, "infer", None)
                     if not callable(infer):
@@ -383,11 +498,14 @@ def main() -> None:
     model_class = getattr(module, "Model")
     model = model_class(deploy_cfg)
 
+    # deploy.yml may carry an explicit `port: null`; treat it as "unset"
+    # instead of crashing in int(None).
+    port = deploy_cfg.get("port")
     server = PolicyServer(
         model,
         PolicyServerConfig(
-            host=deploy_cfg.get("host", "0.0.0.0"),
-            port=int(deploy_cfg.get("port", 19000)),
+            host=deploy_cfg.get("host") or "0.0.0.0",
+            port=int(port) if port is not None else 19000,
             ws_ping_interval_s=deploy_cfg.get("ws_ping_interval_s", 20.0),
             ws_ping_timeout_s=deploy_cfg.get("ws_ping_timeout_s", 20.0),
         ),

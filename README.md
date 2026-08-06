@@ -125,6 +125,23 @@ The policy server decodes camera colors before `update_obs` / `update_obs_batch`
 
 The default policy-server protocol is websocket (`protocol: ws` in `deploy.yml`). Keep `legacy_tcp` only for old adapters that have not migrated yet.
 
+Websocket reliability semantics:
+
+- **Exactly-once calls**: every request carries a `request_id`; the client reuses it when a reconnect forces a retry, and the server answers duplicates from a response cache (or attaches to the still-running execution) instead of executing twice. This matters because `update_obs` / `get_action` are not idempotent for stateful policies.
+- **Restart detection**: the server stamps `HELLO_ACK` with a per-process `server_instance_id`. If a reconnect lands on a different server process, the client raises `ServerRestartedError` and aborts — a fresh server lost the model state, so continuing would silently corrupt the evaluation.
+- **Keepalive**: both sides run websocket ping/pong (`ws_ping_interval_s` / `ws_ping_timeout_s`, default 20 s each; `null` disables), so a dead connection is detected within ~2 intervals rather than hanging until the 120 s request timeout.
+- **Cold start**: the policy server constructs the model *before* it opens its port, so a client that starts first sees connection refused and retries — model loading is covered by `max_connect_attempts` x `connect_retry_delay_s` (default 180 x 5 s = 15 min, the same budget as the legacy TCP client), not by any request timeout. `eval.sh` additionally gates the client behind `wait_for_policy_server.sh` (1200 s).
+
+These client-side knobs are optional `deploy.yml` keys; omit them to keep the defaults:
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `max_connect_attempts` | `180` | Cold-start retries while the server is still loading. |
+| `connect_retry_delay_s` | `5.0` | Delay between those retries. |
+| `connect_timeout_s` | `30.0` | Timeout for one TCP/websocket connect. |
+| `handshake_timeout_s` | `60.0` | Timeout for the HELLO round-trip (the server answers it without touching the model). |
+| `request_timeout_s` | `120.0` | Timeout for one `update_obs` / `get_action` call — raise it for slow inference. |
+
 ## 🛠️ Model Integration Guide
 
 The fastest way to add a model is to copy the reference adapter, keep the XPolicyLab boundary small, and debug the adapter before touching a real simulator.

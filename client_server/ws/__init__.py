@@ -6,7 +6,11 @@ from typing import Any
 
 from client_server.ws.model_client import WsModelClient
 from client_server.ws.protocol.client import PolicyEvalClient, PolicyEvalClientConfig
-from client_server.ws.protocol.exceptions import ErrorCode, WsError
+from client_server.ws.protocol.exceptions import (
+    ErrorCode,
+    ServerRestartedError,
+    WsError,
+)
 from client_server.ws.protocol.messages import MessageType
 from client_server.ws.protocol.schemas import Frame
 
@@ -18,6 +22,7 @@ __all__ = [
     "PolicyEvalClientConfig",
     "PolicyServer",
     "PolicyServerConfig",
+    "ServerRestartedError",
     "WsError",
     "WsModelClient",
 ]
