@@ -8,6 +8,7 @@ class ErrorCode(str, Enum):
     INVALID_FRAME = "invalid_frame"
     UNKNOWN_MESSAGE_TYPE = "unknown_message_type"
     TIMEOUT = "timeout"
+    CALL_FAILED = "call_failed"
     INFER_FAILED = "infer_failed"
     RESET_FAILED = "reset_failed"
     INTERNAL = "internal"

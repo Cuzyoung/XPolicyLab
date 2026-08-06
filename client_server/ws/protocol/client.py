@@ -395,6 +395,26 @@ class PolicyEvalClient:
             repeat_index=repeat_index,
         )
 
+    async def call(
+        self,
+        func_name: str,
+        obs: Any = None,
+        *,
+        trial_id: str | None = None,
+        action_case_id: str | None = None,
+        step: int = 0,
+    ) -> Frame:
+        payload: dict[str, Any] = {"func_name": func_name}
+        if obs is not None:
+            payload["obs"] = obs
+        return await self.request(
+            MessageType.CALL,
+            payload,
+            trial_id=trial_id,
+            action_case_id=action_case_id,
+            step=step,
+        )
+
     async def infer(
         self,
         observation: dict[str, Any],

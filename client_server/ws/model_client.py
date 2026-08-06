@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, cast
+from typing import Any
 
 from client_server.ws.protocol.client import PolicyEvalClient, PolicyEvalClientConfig
 
@@ -25,8 +25,6 @@ class WsModelClient:
         self.trial_id = trial_id
         self.repeat_index = repeat_index
         self._step = 0
-        self._latest_obs: Any | None = None
-        self._latest_obs_batch: list[Any] | None = None
         self._loop = asyncio.new_event_loop()
         self._client = client or PolicyEvalClient(
             PolicyEvalClientConfig(
@@ -52,8 +50,6 @@ class WsModelClient:
 
         if func_name == "reset":
             self._step = 0
-            self._latest_obs = None
-            self._latest_obs_batch = None
             response = self._loop.run_until_complete(
                 self._client.reset(
                     trial_id=self.trial_id,
@@ -64,50 +60,27 @@ class WsModelClient:
             )
             return response.payload.get("result")
 
-        if func_name == "update_obs":
-            self._latest_obs = obs
-            return None
-
-        if func_name == "get_action":
-            observation = obs if obs is not None else self._latest_obs
-            if observation is None:
-                raise ValueError(
-                    "get_action requires obs or a previous update_obs call"
-                )
+        if func_name in {
+            "update_obs",
+            "update_obs_batch",
+            "get_action",
+            "get_action_batch",
+        }:
+            # Same semantics as the legacy TCP client: obs is shipped with
+            # update_obs/update_obs_batch (obs list) and get_action_batch
+            # (env_idx_list); get_action sends no obs.
             response = self._loop.run_until_complete(
-                self._client.infer(
-                    cast(dict[str, Any], observation),
+                self._client.call(
+                    func_name,
+                    obs,
                     trial_id=self.trial_id,
                     action_case_id=self.action_case_id,
                     step=self._step,
                 )
             )
-            self._step += 1
-            return response.payload.get("actions")
-
-        if func_name == "update_obs_batch":
-            self._latest_obs_batch = list(obs) if obs is not None else []
-            return None
-
-        if func_name == "get_action_batch":
-            observations = self._latest_obs_batch
-            if observations is None:
-                raise ValueError(
-                    "get_action_batch requires a previous update_obs_batch call"
-                )
-            actions = []
-            for observation in observations:
-                response = self._loop.run_until_complete(
-                    self._client.infer(
-                        cast(dict[str, Any], observation),
-                        trial_id=self.trial_id,
-                        action_case_id=self.action_case_id,
-                        step=self._step,
-                    )
-                )
-                actions.append(response.payload.get("actions"))
-            self._step += 1
-            return actions
+            if func_name in {"get_action", "get_action_batch"}:
+                self._step += 1
+            return response.payload.get("result")
 
         if func_name == "trial_end":
             response = self._loop.run_until_complete(

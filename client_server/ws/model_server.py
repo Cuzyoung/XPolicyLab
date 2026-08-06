@@ -207,6 +207,8 @@ class PolicyServer:
             return await self._handle_prepare_case(frame)
         if frame.message_type == MessageType.RESET:
             return await self._handle_reset(frame)
+        if frame.message_type == MessageType.CALL:
+            return await self._handle_call(frame)
         if frame.message_type == MessageType.INFER:
             return await self._handle_infer(frame)
         if frame.message_type == MessageType.TRIAL_END:
@@ -242,6 +244,45 @@ class PolicyServer:
         except Exception as exc:
             raise WsError(ErrorCode.RESET_FAILED, str(exc)) from exc
         return self._reply(frame, MessageType.RESET_RESULT, _ok_payload(result))
+
+    async def _handle_call(self, frame: Frame) -> Frame:
+        # Generic model-method dispatch, mirroring the legacy TCP server:
+        # call method(obs) when obs is provided, method() otherwise.
+        func_name = frame.payload.get("func_name")
+        if not isinstance(func_name, str) or not func_name or func_name.startswith("_"):
+            raise WsError(
+                ErrorCode.INVALID_FRAME,
+                f"call payload has invalid func_name: {func_name!r}",
+            )
+        method = getattr(self.model, func_name, None)
+        if not callable(method):
+            raise WsError(
+                ErrorCode.INVALID_FRAME, f"no model method named {func_name!r}"
+            )
+
+        obs = frame.payload.get("obs")
+        if func_name in {"update_obs", "update_obs_batch"}:
+            if obs is None:
+                raise WsError(
+                    ErrorCode.INVALID_FRAME, f"{func_name} payload missing obs"
+                )
+            try:
+                obs = decode_obs_images(obs)
+            except ValueError as exc:
+                raise WsError(ErrorCode.INVALID_FRAME, str(exc)) from exc
+
+        start = time.perf_counter()
+        try:
+            if obs is None:
+                result = await self._call_model_method(method)
+            else:
+                result = await self._call_model_method(method, obs)
+        except Exception as exc:
+            raise WsError(ErrorCode.CALL_FAILED, str(exc)) from exc
+
+        payload = _ok_payload(result)
+        payload["latency_ms"] = (time.perf_counter() - start) * 1000.0
+        return self._reply(frame, MessageType.CALL_RESULT, payload)
 
     async def _handle_infer(self, frame: Frame) -> Frame:
         observation = frame.payload.get("observation")
