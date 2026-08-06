@@ -19,15 +19,13 @@ UTILS_DIR="${XPL_ROOT}/utils"
 policy_name="$(basename "${SCRIPT_DIR}")"
 yaml_file="${SCRIPT_DIR}/deploy.yml"
 
-G05_ROOT="${G05_ROOT:-/efm-nas/efm-nas/group-jt/haoyu.zhang/GalaxeaVLA_github_port}"
+G05_ROOT="${G05_ROOT:-}"
 PYTHON_BIN="${G05_PYTHON:-}"
 if [[ -z "${PYTHON_BIN}" ]]; then
   if [[ "${policy_env}" == /* && -x "${policy_env}/bin/python" ]]; then
     PYTHON_BIN="${policy_env}/bin/python"
   elif [[ -x "${policy_env}" ]]; then
     PYTHON_BIN="${policy_env}"
-  elif [[ -x "/mlplatform/haoyu.zhang/g05_runtime/g05_venv_nas/bin/python" ]]; then
-    PYTHON_BIN="/mlplatform/haoyu.zhang/g05_runtime/g05_venv_nas/bin/python"
   else
     PYTHON_BIN="$(command -v python3)"
   fi
@@ -50,7 +48,6 @@ resolve_ckpt_path() {
       "${SCRIPT_DIR}/checkpoints/${run_dir_name}"
       "${SCRIPT_DIR}/checkpoints/${raw}"
       "${G05_ROOT}/outputs/${run_dir_name}"
-      "/efm-nas/efm-nas/group-jt/haoyu.zhang/experiments_compare/results/robodojo/g05/github_robodojo_arx_x5_joint/robodojo_arx_x5_joint/${run_dir_name}"
     )
   fi
 
@@ -71,6 +68,11 @@ resolve_ckpt_path() {
 if [[ "${action_type}" != "joint" ]]; then
   echo "G05 adapter currently supports action_type=joint, got ${action_type}" >&2
   exit 2
+fi
+
+if [[ -z "${G05_ROOT}" ]]; then
+  echo "Set G05_ROOT to a G05 checkout before launching the G05 adapter." >&2
+  exit 3
 fi
 
 if [[ ! -d "${G05_ROOT}" ]]; then

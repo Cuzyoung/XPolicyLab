@@ -1,49 +1,111 @@
-# G05 RoboDojo Adapter
+# G05 RoboDojo Real Adapter
 
-This adapter integrates the GitHub G0.5 checkout at
-`/efm-nas/efm-nas/group-jt/haoyu.zhang/GalaxeaVLA_github_port` with XPolicyLab. It does not use the vendored
-`policy/GalaxeaVLA/GalaxeaVLA` code.
+This directory contains the G05 policy adapter for RoboDojo evaluation through
+XPolicyLab.
 
-## Training
-
-Default training uses G0.5 task config:
-
-```bash
-cd /efm-nas/efm-nas/group-jt/haoyu.zhang/external/robodojo/XPolicyLab/policy/G05
-export ROBODOJO_LEROBOT_V30_ROOT=/efm-nas/efm-nas/group-jt/haoyu.zhang/external/robodojo/data/RoboDojo_lerobot_v30_video
-bash train.sh RoboDojo cotrain arx_x5 joint 0 0,1,2,3,4,5,6,7
-```
-
-For the GitHub G0.5 launcher, use
-`/efm-nas/efm-nas/group-jt/haoyu.zhang/GalaxeaVLA_github_port/scripts/run/finetune_robodojo_arx_x5_joint.sh`.
-
-## Evaluation
-
-Set `G05_CKPT_PATH` to a G0.5 run directory or `.pt` checkpoint. Debug mode
-validates websocket wiring and action schema without the simulator:
-
-```bash
-cd /efm-nas/efm-nas/group-jt/haoyu.zhang/external/robodojo/XPolicyLab/policy/G05
-export EVAL_ENV_TYPE=debug
-export G05_CKPT_PATH=/path/to/g05/run/or/checkpoints/checkpoint
-bash eval.sh RoboDojo stack_bowls cotrain arx_x5 joint 0 0 0 \
-  /mlplatform/haoyu.zhang/g05_runtime/g05_venv_nas base
-```
-
-For simulator evaluation, unset `EVAL_ENV_TYPE` or set it to `sim` and make
-sure the RoboDojo evaluator-side repo with `env_cfg/`, `scripts/`, `src/`, and
-`task/` is mounted next to `XPolicyLab`.
+The adapter loads a G05 policy implementation from an external G05 checkout and
+serves it through the XPolicyLab websocket policy-server interface. RoboDojo
+simulation remains on the evaluator/client side.
 
 ## Checkpoint
 
-The submitted FM-only RoboDojo ARX X5 joint checkpoint and inference assets are hosted at:
+Download the G05 RoboDojo-real checkpoint package from Hugging Face. The archive and the extracted checkpoint intentionally do not expose the training step.
 
-https://huggingface.co/XZHY528/g05
+```bash
+huggingface-cli download XZHY528/g05 \
+  g05_robodojo_real_checkpoint.tar \
+  g05_robodojo_real_checkpoint.tar.sha256 \
+  --local-dir ./checkpoints/g05_real
 
-Download and extract `xpolicylab_g05_fm_only_checkpoint_20260724.tar`, then set `G05_CKPT_PATH` to the extracted `XPolicyLab/policy/G05/checkpoints/checkpoint` path before evaluation.
+cd ./checkpoints/g05_real
+sha256sum -c g05_robodojo_real_checkpoint.tar.sha256
+tar -xf g05_robodojo_real_checkpoint.tar
+```
 
-Required sidecars included in the archive:
+Set the checkpoint path for evaluation:
 
-- `.hydra/config.yaml`
-- `dataset_stats.json`
-- `action_tokenizer.pt`
+```bash
+export G05_CKPT_PATH=/path/to/g05_robodojo_real_checkpoint/checkpoint/checkpoints/checkpoint.pt
+export ROBODOJO_G05_ACTION_SOURCE=fm
+```
+
+## Runtime requirements
+
+Install the XPolicyLab-side adapter dependencies:
+
+```bash
+cd policy/G05
+export G05_PYTHON=/path/to/python
+bash install.sh
+```
+
+Then set these paths before training or evaluation:
+
+```bash
+export G05_ROOT=/path/to/GalaxeaVLA_or_G05_checkout
+export G05_PYTHON=/path/to/python
+```
+
+`G05_ROOT` must contain the G05 model/inference code used by the adapter.
+`G05_PYTHON` must point to a Python environment with the G05 runtime
+dependencies installed.
+
+The checkpoint package does not include a full Python runtime. Keep the G05
+runtime as a normal external checkout/environment and point the adapter to it
+with `G05_ROOT` and `G05_PYTHON`.
+
+## Evaluation
+
+Debug mode validates policy-server wiring and action schema without launching
+Isaac Sim:
+
+```bash
+cd policy/G05
+export EVAL_ENV_TYPE=debug
+export G05_CKPT_PATH=/path/to/extracted/g05/checkpoint
+bash eval.sh RoboDojo stack_bowls checkpoint arx_x5 joint 0 0 0 \
+  "$G05_PYTHON" base
+```
+
+Simulator-backed evaluation uses the same adapter entrypoint. Example:
+
+```bash
+cd policy/G05
+export G05_ROOT=/path/to/G05_checkout
+export G05_PYTHON=/path/to/python
+export G05_CKPT_PATH=/path/to/extracted/g05/checkpoint
+export ROBODOJO_G05_ACTION_SOURCE=fm
+
+bash eval.sh RoboDojo stack_bowls checkpoint arx_x5 joint 0 0 0 \
+  "$G05_PYTHON" sim
+```
+
+The positional arguments are:
+
+```text
+eval.sh <bench_name> <task_name> <ckpt_name> <env_cfg_type> <action_type> \
+  <seed> <policy_gpu_id> <env_gpu_id> <policy_python_or_env> <eval_env>
+```
+
+Use `ROBODOJO_G05_ACTION_SOURCE=fm` for FM-style continuous action inference,
+or `ROBODOJO_G05_ACTION_SOURCE=ar` for AR-style action decoding when evaluating
+a compatible checkpoint.
+
+For simulator evaluation, unset `EVAL_ENV_TYPE` or set it to `sim`, and run from
+a RoboDojo checkout where the evaluator-side directories `env_cfg/`, `scripts/`,
+`src/`, `task/`, and `Assets/` are available next to `XPolicyLab`.
+
+## Training
+
+Training is optional for evaluation. If training is needed, set the RoboDojo
+LeRobot v3.0 joint-action dataset path explicitly:
+
+```bash
+export ROBODOJO_LEROBOT_V30_ROOT=/path/to/RoboDojo_lerobot_v30_video
+export G05_ROOT=/path/to/G05_checkout
+export G05_PYTHON=/path/to/python
+cd policy/G05
+bash train.sh RoboDojo cotrain arx_x5 joint 0 0,1,2,3,4,5,6,7
+```
+
+The adapter currently targets RoboDojo `arx_x5` with `joint` actions.
