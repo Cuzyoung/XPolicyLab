@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-import collections
-import inspect
 import os
 import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import torch
 
 from XPolicyLab.model_template import ModelTemplate
 from XPolicyLab.utils.process_data import (
-    decode_image_bit,
     get_batch_size,
     get_robot_action_dim_info,
     pack_robot_state,
@@ -26,8 +22,6 @@ IMAGE_CANDIDATES = {
     "cam_right_wrist": ("cam_right_wrist",),
 }
 BATCH_OBSERVATIONS_KEY = "__xpolicylab_batch_observations__"
-BATCH_ENV_INDICES_KEY = "__xpolicylab_batch_env_indices__"
-G05_HISTORY_OBSERVATIONS_KEY = "__g05_history_observations__"
 
 
 class Model(ModelTemplate):
@@ -53,13 +47,12 @@ class Model(ModelTemplate):
         self.batch_size = self._resolve_batch_size()
         self._obs: dict[str, Any] | None = None
         self._obs_batch: list[dict[str, Any]] = []
-        self._obs_batch_env_keys: list[Any] | None = None
-        self._history_buffers: dict[Any, dict[str, Any]] = {}
 
-        raw_g05_root = model_cfg.get("g05_root") or os.environ.get("G05_ROOT")
-        if not raw_g05_root:
-            raise ValueError("G05_ROOT or deploy.yml g05_root must be set to a G05 checkout")
-        g05_root = Path(str(raw_g05_root)).expanduser().resolve()
+        g05_root = Path(
+            model_cfg.get("g05_root")
+            or os.environ.get("G05_ROOT")
+            or "/efm-nas/efm-nas/group-jt/haoyu.zhang/GalaxeaVLA_github_port"
+        ).expanduser().resolve()
         if not g05_root.exists():
             raise FileNotFoundError(f"G0.5 repo not found: {g05_root}")
         for path in (g05_root / "src", g05_root):
@@ -116,7 +109,6 @@ class Model(ModelTemplate):
             filter_embodiment(cfg, self.embodiment_type)
 
         self._build_obs_dict = build_obs_dict
-        self._build_obs_accepts_buffers = _call_accepts_history_buffers(build_obs_dict)
         device = "cuda"
         self.policy, self.processor = setup(cfg, device=device)
         self.discrete_action = bool(
@@ -145,7 +137,6 @@ class Model(ModelTemplate):
             f"[G05] loaded ckpt={ckpt_path} run_dir={run_dir} "
             f"embodiment={self.embodiment_type} "
             f"inference_batch_size={self.inference_batch_size} "
-            f"num_obs_steps={getattr(self.processor, 'num_obs_steps', 1)} "
             f"action_source={self.action_source} "
             f"discrete_action={self.discrete_action} "
             f"continuous_action={self.continuous_action}"
@@ -197,28 +188,12 @@ class Model(ModelTemplate):
                 raise TypeError(f"{BATCH_OBSERVATIONS_KEY} must contain a list")
             self._obs = None
             self._obs_batch = list(observations)
-            env_keys = obs.get(BATCH_ENV_INDICES_KEY)
-            if env_keys is not None:
-                if not isinstance(env_keys, (list, tuple)):
-                    raise TypeError(f"{BATCH_ENV_INDICES_KEY} must contain a list")
-                if len(env_keys) != len(self._obs_batch):
-                    raise ValueError(
-                        f"{BATCH_ENV_INDICES_KEY} length={len(env_keys)} does not match "
-                        f"batch size={len(self._obs_batch)}"
-                    )
-                self._obs_batch_env_keys = list(env_keys)
-            else:
-                self._obs_batch_env_keys = None
             return
         self._obs = obs
         self._obs_batch = []
-        self._obs_batch_env_keys = None
 
     def update_obs_batch(self, obs_list):
         self._obs_batch = list(obs_list)
-        self._obs_batch_env_keys = [
-            self._env_key_from_obs(obs, fallback_idx=i) for i, obs in enumerate(self._obs_batch)
-        ]
 
     def get_action(self):
         if self._obs_batch:
@@ -234,194 +209,41 @@ class Model(ModelTemplate):
         if not obs_list:
             size = len(env_idx_list) if env_idx_list is not None else self.batch_size
             return [self.get_action() for _ in range(size)]
-        env_keys = (
-            list(env_idx_list)
-            if env_idx_list is not None
-            else self._obs_batch_env_keys
-        )
-        if env_keys is None:
-            env_keys = [
-                self._env_key_from_obs(obs, fallback_idx=i) for i, obs in enumerate(obs_list)
-            ]
-        else:
-            env_keys = list(env_keys)[: len(obs_list)]
-        return self._predict_chunks(obs_list, env_keys=env_keys)
+        return self._predict_chunks(obs_list)
 
     def reset(self):
         self._obs = None
         self._obs_batch = []
-        self._obs_batch_env_keys = None
-        self._history_buffers.clear()
 
     def _predict_chunk(self, obs: dict[str, Any]) -> list[dict[str, np.ndarray]]:
-        return self._predict_chunks([obs], env_keys=[self._env_key_from_obs(obs, fallback_idx=0)])[0]
+        return self._predict_chunks([obs])[0]
 
     def _predict_chunks(
-        self, observations: list[dict[str, Any]], env_keys: list[Any] | None = None
+        self, observations: list[dict[str, Any]]
     ) -> list[list[dict[str, np.ndarray]]]:
-        if env_keys is None:
-            env_keys = [
-                self._env_key_from_obs(obs, fallback_idx=i) for i, obs in enumerate(observations)
-            ]
-        obs_dicts = []
-        for i, obs in enumerate(observations):
-            raw_obs = self._to_g05_raw_obs(obs)
-            explicit_history = self._explicit_history_buffers_from_obs(obs, raw_obs)
-            if explicit_history is None:
-                frame_buffers, state_buffers = self._update_history_buffers(env_keys[i], raw_obs)
-            else:
-                frame_buffers, state_buffers = explicit_history
-            if self._build_obs_accepts_buffers:
-                obs_dicts.append(
-                    self._build_obs_dict(
-                        raw_obs,
-                        self.processor,
-                        frame_buffers=frame_buffers,
-                        state_buffers=state_buffers,
-                    )
-                )
-            else:
-                if frame_buffers is not None or state_buffers is not None:
-                    raise RuntimeError(
-                        "G05 mem/history evaluation requires a G05_ROOT whose "
-                        "scripts.serve_policy.build_obs_dict accepts frame_buffers/state_buffers; "
-                        "use GalaxeaVLA_Private or another updated G0.5 repo."
-                    )
-                obs_dicts.append(self._build_obs_dict(raw_obs, self.processor))
+        obs_dicts = [
+            self._build_obs_dict(self._to_g05_raw_obs(obs), self.processor)
+            for obs in observations
+        ]
         batch_size = max(1, int(getattr(self, "inference_batch_size", len(obs_dicts))))
         actions = []
         for start in range(0, len(obs_dicts), batch_size):
             actions.extend(self.inferencer.infer(obs_dicts[start : start + batch_size]))
         return [self._format_action_chunk(action) for action in actions]
 
-    def _explicit_history_buffers_from_obs(
-        self, obs: dict[str, Any], current_raw_obs: dict[str, Any]
-    ) -> tuple[dict[str, list[torch.Tensor]], dict[str, list[torch.Tensor]]] | None:
-        history = obs.get(G05_HISTORY_OBSERVATIONS_KEY) if isinstance(obs, dict) else None
-        num_obs_steps = int(getattr(self.processor, "num_obs_steps", 1))
-        if num_obs_steps <= 1 or not history:
-            return None
-
-        shape_meta = getattr(self.processor, "shape_meta", {}) or {}
-        expected_img_keys = {m["key"] for m in shape_meta.get("images", [])}
-        expected_state_keys = {m["key"] for m in shape_meta.get("state", [])}
-        if not expected_img_keys or not expected_state_keys:
-            return None
-
-        raw_history = [self._to_g05_raw_obs(item) for item in list(history)[-num_obs_steps:]]
-        if not raw_history:
-            raw_history = [current_raw_obs]
-        while len(raw_history) < num_obs_steps:
-            raw_history.insert(0, raw_history[0])
-
-        frames = {k: [] for k in expected_img_keys}
-        states = {k: [] for k in expected_state_keys}
-        for raw in raw_history[-num_obs_steps:]:
-            for k in expected_img_keys:
-                if k in raw["images"]:
-                    frames[k].append(torch.from_numpy(np.array(raw["images"][k], copy=True)))
-            for k in expected_state_keys:
-                if k in raw["state"]:
-                    states[k].append(torch.from_numpy(np.array(raw["state"][k], copy=True)).float())
-
-        if any(len(v) != num_obs_steps for v in frames.values()) or any(
-            len(v) != num_obs_steps for v in states.values()
-        ):
-            return None
-        return frames, states
-
-    def _env_key_from_obs(self, obs: dict[str, Any], fallback_idx: int | None = None) -> Any:
-        for key in ("env_idx", "env_id", "env_index"):
-            if isinstance(obs, dict) and key in obs:
-                return obs[key]
-        additional_info = obs.get("additional_info") if isinstance(obs, dict) else None
-        if isinstance(additional_info, dict):
-            for key in ("env_idx", "env_id", "env_index"):
-                if key in additional_info:
-                    return additional_info[key]
-        return "single" if fallback_idx is None else f"batch:{fallback_idx}"
-
-    def _update_history_buffers(
-        self, env_key: Any, raw_obs: dict[str, Any]
-    ) -> tuple[dict[str, collections.deque] | None, dict[str, collections.deque] | None]:
-        num_obs_steps = int(getattr(self.processor, "num_obs_steps", 1))
-        if num_obs_steps <= 1:
-            return None, None
-
-        shape_meta = getattr(self.processor, "shape_meta", {}) or {}
-        expected_img_keys = {m["key"] for m in shape_meta.get("images", [])}
-        expected_state_keys = {m["key"] for m in shape_meta.get("state", [])}
-        if not expected_img_keys or not expected_state_keys:
-            return None, None
-
-        entry = self._history_buffers.get(env_key)
-        if entry is None:
-            entry = {
-                "frames": {
-                    k: collections.deque(maxlen=num_obs_steps) for k in expected_img_keys
-                },
-                "states": {
-                    k: collections.deque(maxlen=num_obs_steps) for k in expected_state_keys
-                },
-                "initialized": False,
-                "num_obs_steps": num_obs_steps,
-            }
-            self._history_buffers[env_key] = entry
-        elif entry.get("num_obs_steps") != num_obs_steps:
-            entry["frames"] = {
-                k: collections.deque(maxlen=num_obs_steps) for k in expected_img_keys
-            }
-            entry["states"] = {
-                k: collections.deque(maxlen=num_obs_steps) for k in expected_state_keys
-            }
-            entry["initialized"] = False
-            entry["num_obs_steps"] = num_obs_steps
-
-        img_tensors = {
-            k: torch.from_numpy(np.array(v, copy=True))
-            for k, v in raw_obs["images"].items()
-            if k in expected_img_keys
-        }
-        state_tensors = {
-            k: torch.from_numpy(np.array(v, copy=True)).float()
-            for k, v in raw_obs["state"].items()
-            if k in expected_state_keys
-        }
-
-        if not entry["initialized"]:
-            for _ in range(num_obs_steps):
-                for k, t in img_tensors.items():
-                    entry["frames"][k].append(t.clone())
-                for k, t in state_tensors.items():
-                    entry["states"][k].append(t.clone())
-            entry["initialized"] = True
-        else:
-            for k, t in img_tensors.items():
-                entry["frames"][k].append(t)
-            for k, t in state_tensors.items():
-                entry["states"][k].append(t)
-
-        return entry["frames"], entry["states"]
-
     def _format_action_chunk(self, action) -> list[dict[str, np.ndarray]]:
         action.pop("_cot_text", None)
         action.pop("_absent_keys", None)
 
         parts = {key: _to_horizon_array(value) for key, value in action.items()}
-        left_key = "left_arm" if "left_arm" in parts else "left_control"
-        right_key = "right_arm" if "right_arm" in parts else "right_control"
-        required = [left_key, "left_gripper", right_key, "right_gripper"]
-        missing = [key for key in required if key not in parts]
-        if missing:
-            raise KeyError(f"G05 action output missing keys {missing}; available={sorted(parts)}")
-        horizon = min(self.action_steps, min(parts[key].shape[0] for key in required))
+        horizon = min(self.action_steps, min(arr.shape[0] for arr in parts.values()))
         result = []
         for t in range(horizon):
             packed = np.concatenate(
                 [
-                    parts[left_key][t],
+                    parts["left_arm"][t],
                     parts["left_gripper"][t],
-                    parts[right_key][t],
+                    parts["right_arm"][t],
                     parts["right_gripper"][t],
                 ],
                 axis=-1,
@@ -450,54 +272,21 @@ class Model(ModelTemplate):
             instruction = instruction[0] if instruction else ""
 
         additional_info = obs.get("additional_info") or {}
-        images = self._build_raw_images(obs)
-        state = self._build_raw_state(packed_state)
         return {
-            "images": images,
-            "state": state,
+            "images": {
+                "cam_high": self._extract_image(obs, "cam_high"),
+                "cam_left_wrist": self._extract_image(obs, "cam_left_wrist"),
+                "cam_right_wrist": self._extract_image(obs, "cam_right_wrist"),
+            },
+            "state": {
+                "left_arm": packed_state[0:6],
+                "left_gripper": packed_state[6:7],
+                "right_arm": packed_state[7:13],
+                "right_gripper": packed_state[13:14],
+            },
             "task": str(instruction),
             "frequency": float(additional_info.get("frequency", self.default_frequency)),
             "embodiment_type": self.embodiment_type,
-        }
-
-    def _build_raw_state(self, packed_state: np.ndarray) -> dict[str, np.ndarray]:
-        """Map RoboDojo joint-state names to the state keys expected by the active G05 processor."""
-        shape_meta = getattr(self.processor, "shape_meta", {}) or {}
-        expected = {m.get("key") for m in shape_meta.get("state", []) if isinstance(m, dict)}
-        if {"left_control", "left_gripper", "right_control", "right_gripper"}.issubset(expected):
-            return {
-                "left_control": packed_state[0:6],
-                "left_gripper": packed_state[6:7],
-                "right_control": packed_state[7:13],
-                "right_gripper": packed_state[13:14],
-            }
-        return {
-            "left_arm": packed_state[0:6],
-            "left_gripper": packed_state[6:7],
-            "right_arm": packed_state[7:13],
-            "right_gripper": packed_state[13:14],
-        }
-
-    def _build_raw_images(self, obs: dict[str, Any]) -> dict[str, np.ndarray]:
-        """Map RoboDojo camera names to the image keys expected by the active G05 processor.
-
-        Older G05 runs used RoboDojo-native keys:
-          cam_high, cam_left_wrist, cam_right_wrist
-        GalaxeaVLA_Private uses canonical schema keys:
-          exterior_rgb, left_wrist_rgb, right_wrist_rgb
-        """
-        shape_meta = getattr(self.processor, "shape_meta", {}) or {}
-        expected = {m.get("key") for m in shape_meta.get("images", []) if isinstance(m, dict)}
-        if {"exterior_rgb", "left_wrist_rgb", "right_wrist_rgb"}.issubset(expected):
-            return {
-                "exterior_rgb": self._extract_image(obs, "cam_high"),
-                "left_wrist_rgb": self._extract_image(obs, "cam_left_wrist"),
-                "right_wrist_rgb": self._extract_image(obs, "cam_right_wrist"),
-            }
-        return {
-            "cam_high": self._extract_image(obs, "cam_high"),
-            "cam_left_wrist": self._extract_image(obs, "cam_left_wrist"),
-            "cam_right_wrist": self._extract_image(obs, "cam_right_wrist"),
         }
 
     def _extract_image(self, obs: dict[str, Any], g05_key: str) -> np.ndarray:
@@ -524,20 +313,7 @@ def _step_sort_key(path: Path) -> int:
     return -1
 
 
-def _call_accepts_history_buffers(fn) -> bool:
-    try:
-        sig = inspect.signature(fn)
-    except (TypeError, ValueError):
-        return False
-    params = sig.parameters
-    if "frame_buffers" in params and "state_buffers" in params:
-        return True
-    return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
-
-
 def _as_chw_uint8(value) -> np.ndarray:
-    if not isinstance(value, np.ndarray):
-        value = decode_image_bit(value)
     arr = np.asarray(value)
     if arr.ndim == 4:
         arr = arr[0]
