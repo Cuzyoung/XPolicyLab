@@ -131,13 +131,14 @@ Simulation training example:
 export G05_PYTHON=/path/to/python
 export ROBODOJO_LEROBOT_V30_ROOT=/path/to/RoboDojo_lerobot_v30_video
 export G05_TRAIN_MODE=fm_only
+export G05_MAX_STEPS=<num_training_steps>
 
 cd XPolicyLab/policy/G05
 bash train.sh RoboDojo cotrain arx_x5 joint 0 0,1,2,3,4,5,6,7 \
   <g05_training_overrides>
 ```
 
-Supported `G05_TRAIN_MODE` values are `fm_only`, `ar_only`, and `ar_fm`. Trailing arguments are passed through as Hydra overrides to the G05 training script.
+Supported `G05_TRAIN_MODE` values are `fm_only`, `ar_only`, and `ar_fm`. Training length is intentionally user-defined: set `G05_MAX_STEPS`, `G05_MAX_EPOCHS`, or pass `model.max_steps=...` / `model.max_epochs=...` as a Hydra override. Trailing arguments are passed through to the G05 training script.
 
 RoboDojo-real training code is not included in this release. For official RoboDojo-real evaluation, use the released real checkpoint with this adapter.
 

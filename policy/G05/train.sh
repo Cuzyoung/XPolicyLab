@@ -84,6 +84,26 @@ fi
 
 cd "${G05_ROOT}"
 
+schedule_overrides=()
+has_schedule_override=0
+for arg in "$@"; do
+  case "${arg}" in
+    model.max_steps=*|model.max_epochs=*) has_schedule_override=1 ;;
+  esac
+done
+if [[ -n "${G05_MAX_STEPS:-}" ]]; then
+  schedule_overrides+=("model.max_steps=${G05_MAX_STEPS}" "model.max_epochs=null")
+  has_schedule_override=1
+fi
+if [[ -n "${G05_MAX_EPOCHS:-}" ]]; then
+  schedule_overrides+=("model.max_epochs=${G05_MAX_EPOCHS}" "model.max_steps=null")
+  has_schedule_override=1
+fi
+if [[ "${has_schedule_override}" != "1" ]]; then
+  echo "Set G05_MAX_STEPS/G05_MAX_EPOCHS or pass model.max_steps=... / model.max_epochs=... ." >&2
+  exit 3
+fi
+
 case "${train_mode}" in
   fm_only)
     action_overrides=(
@@ -126,5 +146,6 @@ exec bash scripts/run/finetune.sh \
   "logger.project=${WANDB_PROJECT}" \
   "model.batch_size=${G05_BATCH_SIZE:-8}" \
   "model.grad_accumulation_steps=${G05_GRAD_ACCUM:-1}" \
+  "${schedule_overrides[@]}" \
   "${action_overrides[@]}" \
   "$@"
