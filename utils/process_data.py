@@ -265,7 +265,7 @@ def get_action_dim(env_cfg_type):
     return sum(robot_action_dim_info["arm_dim"]) + sum(robot_action_dim_info["ee_dim"])
 
 def _decode_single_image_bit(image_bit):
-    """Decode one encoded image buffer into an HWC uint8 array."""
+    """Decode one encoded image buffer into an HWC uint8 RGB array."""
     if isinstance(image_bit, np.ndarray) and image_bit.dtype.kind in {"S", "U"}:
         image_bit = image_bit.item() if image_bit.ndim == 0 else image_bit.tobytes()
 
@@ -280,6 +280,12 @@ def _decode_single_image_bit(image_bit):
     elif isinstance(image_bit, np.ndarray):
         image_bit = np.ascontiguousarray(image_bit)
 
+    # The returned array is RGB. This is the conclusion for this repo — do not
+    # "correct" it with the usual "cv2 means BGR" rule. cv2.imencode/imdecode
+    # only move channels through JPEG in the order they were handed in, and
+    # every buffer in XPolicyLab was encoded from an RGB array, so the
+    # round trip returns RGB. Adding a COLOR_BGR2RGB swap here (or in any
+    # caller) is what actually breaks the channel order.
     image = cv2.imdecode(np.frombuffer(image_bit, np.uint8), cv2.IMREAD_COLOR)
 
     if image is None:
@@ -308,7 +314,13 @@ def _decode_image_bit_sequence(image_bits):
 
 def decode_image_bit(image_bits):
     """
-    Decode encoded image bit stream(s) into uint8 image array(s).
+    Decode encoded image bit stream(s) into uint8 RGB image array(s).
+
+    The output is RGB. Treat that as settled and do not apply the usual
+    "OpenCV returns BGR" rule: XPolicyLab buffers are encoded from RGB arrays,
+    and JPEG round trips preserve the channel order they were given. Callers
+    must NOT add a COLOR_BGR2RGB / [..., ::-1] swap after this function —
+    doing so is the one thing that will corrupt the channel order.
 
     Values that are already decoded are returned unchanged, so this function is
     safe to call on an observation or trajectory field without knowing whether
@@ -377,10 +389,13 @@ def decode_obs_images(obs):
     Decode the encoded color streams of a runtime observation, in place.
 
     The policy server calls this before handing an observation to the model, so
-    `update_obs` / `update_obs_batch` always receive plain image arrays and no
-    adapter has to decode anything. Values that are already decoded pass through
-    untouched, and only the color fields listed in OBS_IMAGE_KEYS are visited —
-    depth maps, intrinsics, extrinsics and shapes are left alone.
+    `update_obs` / `update_obs_batch` always receive plain RGB image arrays and
+    no adapter has to decode anything. Values that are already decoded pass
+    through untouched, and only the color fields listed in OBS_IMAGE_KEYS are
+    visited — depth maps, intrinsics, extrinsics and shapes are left alone.
+
+    What the model receives is RGB. That is the conclusion; `model.py` must not
+    swap channels to "undo" an OpenCV BGR convention that does not apply here.
 
     Args:
         obs: One observation dict, or a list/tuple of them for batched eval.
@@ -418,6 +433,13 @@ def decode_obs_images(obs):
     return obs
 
 def images_encoding(imgs):
+    """
+    JPEG-encode RGB frames for storage. `imgs` must already be RGB.
+
+    This is the other half of the invariant `decode_image_bit` relies on:
+    cv2.imencode writes channels in the order it is given, so RGB in means RGB
+    out on decode. Never feed this a BGR array and never swap channels first.
+    """
     encode_data = []
     padded_data = []
     max_len = 0

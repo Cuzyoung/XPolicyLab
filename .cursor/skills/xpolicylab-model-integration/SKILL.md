@@ -51,10 +51,11 @@ Action dict keys: dual-arm uses `left_arm_joint_state` / `right_arm_joint_state`
 
 - **`model.py` must not decode images.** The policy server decodes observations before `update_obs` / `update_obs_batch`, so `obs["vision"][<camera>]["color"]` is always a plain image array. Adapters only reshape / cast / resize.
 - **Offline code decodes only via `decode_image_bit`** from `XPolicyLab.utils.process_data` — in data-conversion scripts and training dataloaders, never hand-roll `cv2.imdecode` / `np.frombuffer` / PIL decoding. RoboTwin/RoboDojo legacy image-bit layouts are only handled correctly by this function; custom decoders silently decode wrong or fail on part of the data.
+- **A decode returns RGB. This is the conclusion — do not re-derive it from OpenCV conventions.** `decode_image_bit`, `decode_obs_images`, and therefore everything `update_obs` receives are RGB. The familiar "`cv2.imdecode` returns BGR" rule does not apply here: XPolicyLab buffers are encoded from RGB arrays, and `cv2.imencode`/`cv2.imdecode` carry channels through JPEG in the order they were handed in, so the round trip is RGB in, RGB out. Never insert a `COLOR_BGR2RGB` after a decode to "fix" it — that swap is what creates the bug.
 - `eval.sh` positional args, same for all adapters: `bench_name task_name ckpt_name env_cfg_type action_type seed policy_gpu_id env_gpu_id policy_env_or_uv_path eval_env_conda_env`.
 - Checkpoints resolve to `checkpoints/<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>-<seed>/`; a full folder name or explicit path also works.
 - Observations carry the language prompt under `instruction` (string; fall back to `instructions`). Poses are `[x, y, z, qw, qx, qy, qz]`.
-- Images are RGB end to end — never add channel swaps in conversion, training, or eval code. The only exceptions are medium adapters: `COLOR_RGB2BGR` immediately before `cv2.VideoWriter.write(...)`, `COLOR_BGR2RGB` immediately after `cv2.VideoCapture.read()`.
+- Images are RGB end to end — never add channel swaps in conversion, training, or eval code, and do not let an upstream repo's BGR habits leak in. The only exceptions are medium adapters: `COLOR_RGB2BGR` immediately before `cv2.VideoWriter.write(...)`, `COLOR_BGR2RGB` immediately after `cv2.VideoCapture.read()`.
 - Trajectory HDF5 files store a singular `instruction` string and camera extrinsics as `extrinsic_matrix`; runtime observations use `extrinsics_matrix`.
 - Full observation/trajectory format trees live in the repo README under "Standard Data Formats".
 

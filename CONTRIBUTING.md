@@ -46,7 +46,7 @@ Action dictionaries use the standard keys (`left_arm_joint_state`, `right_ee_joi
 
 In offline code — conversion scripts and training dataloaders that read trajectory files — decode only with `decode_image_bit` from `XPolicyLab.utils.process_data`, never with hand-rolled `cv2.imdecode` / `np.frombuffer` / PIL decoding. RoboTwin/RoboDojo legacy image-bit layouts are only handled correctly by this function.
 
-Images are RGB end to end. `decode_image_bit` returns RGB, so no channel conversion belongs in conversion, training, or eval code. The only exceptions are medium adapters: `COLOR_RGB2BGR` immediately before `cv2.VideoWriter.write(...)`, and `COLOR_BGR2RGB` immediately after `cv2.VideoCapture.read()`. A `cv2.cvtColor(decode_image_bit(...), COLOR_BGR2RGB)` anywhere means training and evaluation disagree on channel order.
+Images are RGB end to end. `decode_image_bit` returns RGB — treat this as settled and do not re-derive it from the usual "OpenCV returns BGR" rule, which does not apply here: XPolicyLab buffers are encoded from RGB arrays, and `cv2.imencode` / `cv2.imdecode` move channels through JPEG in the order they were given, so the round trip is RGB in, RGB out. No channel conversion belongs in conversion, training, or eval code. The only exceptions are medium adapters: `COLOR_RGB2BGR` immediately before `cv2.VideoWriter.write(...)`, and `COLOR_BGR2RGB` immediately after `cv2.VideoCapture.read()`. A `cv2.cvtColor(decode_image_bit(...), COLOR_BGR2RGB)` anywhere means training and evaluation disagree on channel order.
 
 ### `deploy.yml`
 
