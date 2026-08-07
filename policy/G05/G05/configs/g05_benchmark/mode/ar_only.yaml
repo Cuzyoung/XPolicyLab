@@ -1,0 +1,15 @@
+# @package _global_
+# Canonical G0.5 autoregressive-only objective.
+model:
+  model_arch:
+    discrete_action: true
+    continuous_action: false
+    fm:
+      fm_weight: 0.0
+      joint_training: true
+    ar:
+      block_wise_autoregressive: false
+      ce_weight: 1.0
+tokenizer:
+  vq_config:
+    block_wise_autoregressive: false

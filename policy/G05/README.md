@@ -1,8 +1,8 @@
 # G05 RoboDojo Policy Adapter
 
-**Contributor:** OpenGalaxea | **Paper:** Not applicable | **arXiv:** Not applicable | **Original code:** G05
+**Contributor:** OpenGalaxea | **Paper:** Not applicable | **arXiv:** Not applicable | **Original code:** See vendored `G05/`.
 
-This adapter serves G05 checkpoints through the XPolicyLab websocket policy-server interface. It keeps model-specific loading, observation conversion, and action decoding inside `policy/G05`; simulator assets, environment clients, and task logic stay on the RoboDojo/XPolicyLab side.
+This adapter serves G05 checkpoints through the XPolicyLab websocket policy-server interface. Integration scripts live at this directory level; the vendored public G05 implementation lives in `G05/`.
 
 Shared conventions — argument meanings, checkpoint naming, split-machine deployment, and `EVAL_ENV_TYPE` — are documented in the [XPolicyLab README](../../README.md). Official results: [RoboDojo LeaderBoard](https://robodojo-benchmark.com/LeaderBoard).
 
@@ -16,14 +16,15 @@ export G05_PYTHON=/path/to/python
 bash install.sh
 ```
 
-Set the G05 runtime before evaluation or training:
+The vendored G05 checkout is used by default. Set `G05_ROOT` only when using another compatible checkout:
 
 ```bash
-export G05_ROOT=/path/to/G05_checkout
 export G05_PYTHON=/path/to/python
+# optional:
+export G05_ROOT=/path/to/another/G05_checkout
 ```
 
-`G05_ROOT` must contain the G05 model code and RoboDojo policy implementation. `G05_PYTHON` must point to an environment that can import that checkout and its dependencies. Checkpoint archives do not include a Python runtime.
+`G05_PYTHON` must point to an environment that can import the vendored G05 checkout and its dependencies. Checkpoint archives do not include a Python runtime.
 
 ## Model Assets
 
@@ -118,22 +119,17 @@ Point the selected G05 training config to these assets using the config keys exp
 
 ## Data Processing
 
-This adapter does not provide a standalone data converter. Use the official RoboDojo data download and conversion pipeline for simulator data, and the matching RoboDojo-real data pipeline for real-world data. The policy adapter expects the selected G05 checkout to read those datasets directly.
+This adapter does not provide a standalone data converter. Use the official RoboDojo data download and conversion pipeline for simulator data. The policy reads the RoboDojo LeRobot v3.0 dataset directly.
 
 ## Training
 
-`train.sh` is a compatibility launcher around the selected G05 checkout:
-
-- If `${G05_ROOT}/scripts/run/finetune_benchmark.sh` exists, it is used by compatible G05 checkouts.
-- Otherwise, the launcher falls back to `${G05_ROOT}/scripts/run/finetune.sh`, which is the path used by the released RoboDojo simulation training stack.
+`train.sh` is a compatibility launcher around the vendored G05 checkout. It supports RoboDojo simulator training with `action_type=joint` and mode selection through `G05_TRAIN_MODE`.
 
 Simulation training example:
 
 ```bash
-export G05_ROOT=/path/to/public_g05_checkout
 export G05_PYTHON=/path/to/python
 export ROBODOJO_LEROBOT_V30_ROOT=/path/to/RoboDojo_lerobot_v30_video
-export G05_TRAIN_BENCHMARK=robodojo
 export G05_TRAIN_MODE=fm_only
 
 cd XPolicyLab/policy/G05
@@ -141,9 +137,9 @@ bash train.sh RoboDojo cotrain arx_x5 joint 0 0,1,2,3,4,5,6,7 \
   <g05_training_overrides>
 ```
 
-Trailing arguments are passed through to the selected G05 training script. Use the training overrides supported by that G05 checkout.
+Supported `G05_TRAIN_MODE` values are `fm_only`, `ar_only`, and `ar_fm`. Trailing arguments are passed through as Hydra overrides to the G05 training script.
 
-RoboDojo-real training is not documented here because the released checkpoint was trained with a G05 checkout that includes RoboDojo-real training configs. For official RoboDojo-real evaluation, use the released real checkpoint with a compatible G05 runtime.
+RoboDojo-real training code is not included in this release. For official RoboDojo-real evaluation, use the released real checkpoint with this adapter.
 
 ## Evaluation
 
@@ -152,7 +148,6 @@ Offline adapter check:
 ```bash
 cd XPolicyLab/policy/G05
 export EVAL_ENV_TYPE=debug
-export G05_ROOT=/path/to/G05_checkout
 export G05_PYTHON=/path/to/python
 export G05_CKPT_PATH=/path/to/extracted/checkpoint
 export ROBODOJO_G05_ACTION_SOURCE=fm
@@ -166,7 +161,6 @@ Simulator-backed evaluation uses the same adapter entrypoint with `EVAL_ENV_TYPE
 ```bash
 cd XPolicyLab/policy/G05
 unset EVAL_ENV_TYPE
-export G05_ROOT=/path/to/G05_checkout
 export G05_PYTHON=/path/to/python
 export G05_CKPT_PATH=/path/to/extracted/checkpoint
 export ROBODOJO_G05_ACTION_SOURCE=fm

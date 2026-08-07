@@ -19,7 +19,7 @@ UTILS_DIR="${XPL_ROOT}/utils"
 policy_name="$(basename "${SCRIPT_DIR}")"
 yaml_file="${SCRIPT_DIR}/deploy.yml"
 
-G05_ROOT="${G05_ROOT:-}"
+G05_ROOT="${G05_ROOT:-${SCRIPT_DIR}/G05}"
 PYTHON_BIN="${G05_PYTHON:-}"
 if [[ -z "${PYTHON_BIN}" ]]; then
   if [[ "${policy_env}" == /* && -x "${policy_env}/bin/python" ]]; then
@@ -68,11 +68,6 @@ resolve_ckpt_path() {
 if [[ "${action_type}" != "joint" ]]; then
   echo "G05 adapter currently supports action_type=joint, got ${action_type}" >&2
   exit 2
-fi
-
-if [[ -z "${G05_ROOT}" ]]; then
-  echo "Set G05_ROOT to a G05 checkout before launching the G05 adapter." >&2
-  exit 3
 fi
 
 if [[ ! -d "${G05_ROOT}" ]]; then

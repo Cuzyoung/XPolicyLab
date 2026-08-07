@@ -56,9 +56,11 @@ class Model(ModelTemplate):
         self._obs_batch_env_keys: list[Any] | None = None
         self._history_buffers: dict[Any, dict[str, Any]] = {}
 
-        raw_g05_root = model_cfg.get("g05_root") or os.environ.get("G05_ROOT")
-        if not raw_g05_root:
-            raise ValueError("G05_ROOT or deploy.yml g05_root must be set to a G05 checkout")
+        raw_g05_root = (
+            model_cfg.get("g05_root")
+            or os.environ.get("G05_ROOT")
+            or (Path(__file__).resolve().parent / "G05")
+        )
         g05_root = Path(str(raw_g05_root)).expanduser().resolve()
         if not g05_root.exists():
             raise FileNotFoundError(f"G0.5 repo not found: {g05_root}")
@@ -285,7 +287,7 @@ class Model(ModelTemplate):
                     raise RuntimeError(
                         "G05 mem/history evaluation requires a G05_ROOT whose "
                         "scripts.serve_policy.build_obs_dict accepts frame_buffers/state_buffers; "
-                        "use GalaxeaVLA_Private or another updated G0.5 repo."
+                        "use a G0.5 checkout with history-buffer support."
                     )
                 obs_dicts.append(self._build_obs_dict(raw_obs, self.processor))
         batch_size = max(1, int(getattr(self, "inference_batch_size", len(obs_dicts))))
@@ -483,7 +485,7 @@ class Model(ModelTemplate):
 
         Older G05 runs used RoboDojo-native keys:
           cam_high, cam_left_wrist, cam_right_wrist
-        GalaxeaVLA_Private uses canonical schema keys:
+        G05 checkpoints use canonical schema keys:
           exterior_rgb, left_wrist_rgb, right_wrist_rgb
         """
         shape_meta = getattr(self.processor, "shape_meta", {}) or {}
