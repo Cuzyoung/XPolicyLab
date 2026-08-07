@@ -66,7 +66,7 @@ The public archive name intentionally does not encode the training step.
 
 ### RoboDojo-real checkpoint
 
-Use this archive for RoboDojo-real evaluation:
+Use this archive for RoboDojo-real evaluation only:
 
 ```bash
 huggingface-cli download OpenGalaxea/g05-robodojo \
@@ -91,6 +91,8 @@ Then set:
 export G05_CKPT_PATH=/path/to/g05_robodojo_real_checkpoint/checkpoint/checkpoints/checkpoint.pt
 export ROBODOJO_G05_ACTION_SOURCE=fm
 ```
+
+This release does not include RoboDojo-real training code or data-processing scripts. The real checkpoint is provided for official RoboDojo-real evaluation with this adapter.
 
 ### Training base assets
 
@@ -142,7 +144,7 @@ Supported `G05_TRAIN_MODE` values are `fm_only`, `ar_only`, and `ar_fm`. Trainin
 
 Training length is not fixed by this adapter. For RoboDojo simulator training, users can start from a moderate number of optimizer steps and extend training if validation or simulator evaluation metrics continue to improve. The released checkpoint is intended as a reproducible evaluation baseline; further tuning of training length, data mixture, and model configuration may improve performance.
 
-RoboDojo-real training code is not included in this release. For official RoboDojo-real evaluation, use the released real checkpoint with this adapter.
+RoboDojo-real support in this release is evaluation-only. Use the released real checkpoint for official RoboDojo-real evaluation; real-world training code and data-processing scripts are not included here.
 
 ## Evaluation
 
