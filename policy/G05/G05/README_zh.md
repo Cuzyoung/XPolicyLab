@@ -365,7 +365,7 @@ RoboTwin 评测运行在 RoboTwin 仿真器中，需要额外的仿真依赖和 
    bash scripts/run/finetune.sh 1 r1pro --dry-run --max_datasets 1
 
    # 单卡 smoke test
-   bash scripts/run/finetune.sh 1 r1pro --test --max_datasets 1 model.max_steps=10
+   bash scripts/run/finetune.sh 1 r1pro --test --max_datasets 1 model.max_steps=<num_steps>
 
    # 多 GPU 示例：
    bash scripts/run/finetune.sh 8 r1lite

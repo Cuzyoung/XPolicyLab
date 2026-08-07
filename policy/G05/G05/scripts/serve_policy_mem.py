@@ -7,7 +7,7 @@ deque maxlen=1, equivalent to the old expand behavior.
 Usage:
     # Load config from the training run_dir.
     python scripts/serve_policy_mem.py \
-        --ckpt_path /path/to/checkpoints/step_10000/model_state_dict.pt \
+        --ckpt_path /path/to/checkpoints/checkpoint/model_state_dict.pt \
         --action_steps 15 \
         eval_embodiment=galaxea_r1lite
 

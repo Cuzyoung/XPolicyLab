@@ -20,7 +20,7 @@ model:
   # so 2 * 16 GPUs * 8 grad-accum steps = 256 effective global batch.
   grad_accumulation_steps: 8
   max_epochs: null
-  max_steps: 60000
+  max_steps: null
   learning_rate: 1.0e-04
   warmup_steps: 250
   constant_end_ratio: 0.95
@@ -32,7 +32,7 @@ model:
   num_workers: 8
   find_unused_parameters: true
   model_arch:
-    hf_processor_path: ${oc.env:G05_HF_PROCESSOR_PATH,${oc.env:G05_HF_PROCESSOR_PATH,checkpoints/g05-base/hf_processor}}
+    hf_processor_path: ${oc.env:G05_HF_PROCESSOR_PATH,checkpoints/g05-base/hf_processor}
     position_ids_type: pi0fast
     checkpoint_joint: false
     checkpoint_vision: true
@@ -94,5 +94,5 @@ tokenizer:
 
 logger:
   type: wandb
-  mode: online
+  mode: disabled
   project: g05_robodojo

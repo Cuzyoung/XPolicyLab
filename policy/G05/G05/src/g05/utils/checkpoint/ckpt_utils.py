@@ -140,8 +140,8 @@ def load_config_from_run_dir(run_dir: Path, ckpt_path: str, overrides: list[str]
     OmegaConf.set_struct(cfg, False)
     _patch_g05_compat(cfg)
 
-    # Derive eval subfolder from checkpoint filename (e.g. step_14000.pt -> eval_step_14000)
-    ckpt_stem = Path(ckpt_path).stem  # e.g. "step_14000" or "last"
+    # Derive eval subfolder from checkpoint filename (e.g. step_<N>.pt -> eval_step_<N>)
+    ckpt_stem = Path(ckpt_path).stem  # e.g. "step_<N>" or "last"
     eval_dir_name = f"eval_{ckpt_stem}"
 
     # Patch Hydra-specific interpolations

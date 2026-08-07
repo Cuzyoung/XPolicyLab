@@ -7,13 +7,13 @@ the server returns a denormalized action dict.
 Usage:
     # Single embodiment
     python scripts/serve_policy.py \
-        --ckpt_path /path/to/checkpoints/step_10000/model_state_dict.pt \
+        --ckpt_path /path/to/checkpoints/checkpoint/model_state_dict.pt \
         --host 0.0.0.0 --port 8765 \
         eval_embodiment=galaxea_r1lite
 
     # Mixture: client routes by the embodiment_type field.
     python scripts/serve_policy.py \
-        --ckpt_path /path/to/checkpoints/step_10000/model_state_dict.pt \
+        --ckpt_path /path/to/checkpoints/checkpoint/model_state_dict.pt \
         --host 0.0.0.0 --port 8765
 """
 

@@ -366,7 +366,7 @@ To fine-tune our models with your own data, follow four steps. See [configs/QUIC
    bash scripts/run/finetune.sh 1 r1pro --dry-run --max_datasets 1
 
    # single-GPU smoke test
-   bash scripts/run/finetune.sh 1 r1pro --test --max_datasets 1 model.max_steps=10
+   bash scripts/run/finetune.sh 1 r1pro --test --max_datasets 1 model.max_steps=<num_steps>
 
    # multi-GPU examples:
    bash scripts/run/finetune.sh 8 r1lite

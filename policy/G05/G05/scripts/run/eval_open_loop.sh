@@ -10,7 +10,7 @@
 #
 #   # Eval with a custom task config (overrides config from run_dir)
 #   bash scripts/run/eval_open_loop.sh \
-#       --ckpt_path runs/.../checkpoints/step_24000.pt \
+#       --ckpt_path runs/.../checkpoints/checkpoint.pt \
 #       --task_config configs/task/libero.yaml
 #
 #   # Eval only r1lite

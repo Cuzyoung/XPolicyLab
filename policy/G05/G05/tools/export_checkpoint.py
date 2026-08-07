@@ -136,7 +136,7 @@ def validate_source_dir(path: Path) -> dict:
 
 
 def _extract_step(name: str) -> int:
-    """Extract step number from filename like 'step_2000.pt'."""
+    """Extract step number from filename like 'step_<N>.pt'."""
     stem = Path(name).stem
     parts = stem.split("_")
     for p in reversed(parts):
@@ -539,7 +539,7 @@ def main():
     )
     parser.add_argument(
         "--checkpoint",
-        help="Checkpoint file name to use directly, for example step_16000.pt",
+        help="Checkpoint file name to use directly, for example step_<N>.pt",
     )
     parser.add_argument(
         "--strip",

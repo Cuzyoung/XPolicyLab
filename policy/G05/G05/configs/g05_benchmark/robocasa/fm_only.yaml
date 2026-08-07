@@ -1,5 +1,0 @@
-# @package _global_
-defaults:
-  - /g05_benchmark/mode@_global_: fm_only
-  - _self_
-model: {batch_size: 2, grad_accumulation_steps: 4, max_epochs: null, max_steps: 75000}

@@ -10,7 +10,7 @@ model:
   use_8bit_optimizer: false
   batch_size: 8
   max_epochs: null
-  max_steps: 100000
+  max_steps: null
   learning_rate: 1.0e-05
   backbone_lr_multiplier: 1.0
   weight_decay: 0.01

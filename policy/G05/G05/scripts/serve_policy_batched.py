@@ -14,7 +14,7 @@ ChunkedPolicyWrapper cache hits bypass the batcher entirely — only recomputes
 
 Usage:
     python scripts/serve_policy_batched.py \\
-        --ckpt_path /path/to/checkpoints/step_10000/model_state_dict.pt \\
+        --ckpt_path /path/to/checkpoints/checkpoint/model_state_dict.pt \\
         --host 0.0.0.0 --port 8765 \\
         --max_batch_size 5 --max_wait_ms 1000.0 \\
         eval_embodiment=galaxea_r1lite
