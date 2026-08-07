@@ -15,7 +15,7 @@ policy_server_host=${10:-"localhost"}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 UTILS_DIR="${ROOT_DIR}/XPolicyLab/utils"
-XR1_ROOT="${SCRIPT_DIR}/xiaomi_robotics_1"
+XR1_ROOT="${SCRIPT_DIR}/xiaomi_robotics_1/xr1"
 
 policy_name="$(basename "${SCRIPT_DIR}")"
 yaml_file="${ROOT_DIR}/XPolicyLab/policy/${policy_name}/deploy.yml"

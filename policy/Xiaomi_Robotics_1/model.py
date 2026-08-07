@@ -11,20 +11,39 @@
 
 """Xiaomi_Robotics_1 policy for XPolicyLab evaluation.
 
-Slot layout (each arm occupies 8 slots of the 60-dim state/action vector):
-  Input state is always joint:
-    [0:6] left_arm_joint, [7:8] left_gripper,
-    [8:14] right_arm_joint, [15:16] right_gripper; every other slot is zero.
-  Output action depends on action_type:
-    - joint: [0:6] left_arm_joint, [7:8] left_gripper,
-             [8:14] right_arm_joint, [15:16] right_gripper (rest ignored).
-    - ee:    [0:3] left_xyz, [3:6] left_axis_angle, [7:8] left_gripper,
-             [8:11] right_xyz, [11:14] right_axis_angle, [15:16] right_gripper
-             (rest ignored; rotation transformed MiBot -> simulator frame).
+This adapter drives the vendored ``xr1`` model in-process, reproducing exactly
+what ``mibot/server/deploy.py`` + ``mibot/server/runtime/server.py`` +
+``mibot/server/runtime/client.py`` do over a socket, minus the socket.
+
+Model loading mirrors ``mibot.server.deploy``:
+    cfg, model = load_model(model_dir, device)
+    mean, std, q01, q99, action_mask = load_stats(cfg, device)
+
+Batch assembly mirrors ``mibot.server.runtime.client.Client.__call__``:
+  three PIL views (ego / left-wrist / right-wrist) resized with
+  ``mibot.utils.io.resize_image`` and tokenized through the Qwen3-VL chat
+  template with ``do_resize=False``, plus a packed 60-dim state.
+
+Normalization mirrors ``Server.run``: the state is quantile-mapped to [-1, 1]
+and clamped, the action chunk is produced in gaussian-normalized space and
+denormalized with ``mean``/``std``, both masked by ``action_mask``.
+
+Vector layouts (from ``mibot/utils/io.py``; note state and action differ):
+  State - ``compose_state``, always joint space, shape (1, 60):
+    [0:7] left_arm_joint, [7:8] left_gripper,
+    [8:15] right_arm_joint, [15:16] right_gripper; every other slot is zero.
+  Action - ``ACTION_PARTS``, shape (30, 60), all values are RELATIVE deltas:
+    [0:3] left_ee_pos, [3:6] left_ee_aa, [6:7] left_gripper,
+    [8:11] right_ee_pos, [11:14] right_ee_aa, [14:15] right_gripper,
+    [16:17] waist, [17:20] base_vel; every other slot is padding.
+
+Only ``action_type="ee"`` is supported: the packed action carries no arm-joint
+slots, so joint targets cannot be recovered from the model output.
 """
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import Any
 
@@ -34,66 +53,65 @@ from PIL import Image
 from scipy.spatial.transform import Rotation
 
 from XPolicyLab.model_template import ModelTemplate
-from XPolicyLab.utils.process_data import get_robot_action_dim_info
 
-# RoboDojo -> MiBot EEF local axis redefinition matrix.
-# R_mibot = R_robodojo @ P,  P = Rx(+90°) @ Rz(+90°)
-# Only rotation changes; position and gripper are unchanged.
-EEF_REFRAME_P = np.array(
+_SUPPORTED_BENCH_NAMES = ("RoboDojo", "RoboDojo_real")
+
+# Per-bench EEF local axis redefinition matrices.
+# Convention: R_mibot = R_env @ P; position and gripper unchanged.
+
+# RoboDojo (sim): P = Rx(+90°) @ Rz(+90°), same for all robots.
+_EEF_REFRAME_P_ROBODOJO = np.array(
     [[0.0, -1.0, 0.0], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0]], dtype=np.float64
 )
-# Inverse: P^T (orthogonal matrix)
-EEF_REFRAME_P_INV = EEF_REFRAME_P.T
+
+# RoboDojo_real: per-robot P matrices.
+_EEF_REFRAME_P_ROBODOJO_REAL = {
+    "piper_x": np.array(
+        [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64
+    ),
+    "piper": np.array(
+        [[-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64
+    ),
+    "arx_x5": np.array(
+        [[0.0, 0.0, 1.0], [0.0, -1.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float64
+    ),
+}
 
 
-# ---------------------------------------------------------------------------
-# Normalization helpers
-# ---------------------------------------------------------------------------
+def _get_eef_reframe_p(bench_name: str, env_cfg_type: str) -> np.ndarray:
+    if bench_name == "RoboDojo":
+        return _EEF_REFRAME_P_ROBODOJO
+    elif bench_name == "RoboDojo_real":
+        if env_cfg_type not in _EEF_REFRAME_P_ROBODOJO_REAL:
+            raise ValueError(
+                f"[Xiaomi_Robotics_1] Unsupported env_cfg_type={env_cfg_type!r} "
+                f"for bench_name='RoboDojo_real'. "
+                f"Supported: {list(_EEF_REFRAME_P_ROBODOJO_REAL.keys())}"
+            )
+        return _EEF_REFRAME_P_ROBODOJO_REAL[env_cfg_type]
+    else:
+        raise ValueError(
+            f"[Xiaomi_Robotics_1] Unsupported bench_name={bench_name!r}. "
+            f"Supported: {list(_SUPPORTED_BENCH_NAMES)}"
+        )
 
 
-def _normalize(x: torch.Tensor, norm_info: dict) -> torch.Tensor:
-    mode = norm_info["mode"]
-    if mode == "gaussian":
-        return (x - norm_info["mean"]) / norm_info["std"]
-    elif mode == "quantile":
-        q01, q99 = norm_info["q01"], norm_info["q99"]
-        denom = q99 - q01
-        valid = denom.abs() > 1e-5
-        safe_denom = torch.where(valid, denom, torch.ones_like(denom))
-        result = 2 * (x - q01) / safe_denom - 1
-        return torch.where(valid, result, x)
-    return x
+def _add_xr1_to_path() -> str:
+    """Put the vendored ``xr1`` package root on sys.path and return it.
 
-
-def _denormalize(x: torch.Tensor, norm_info: dict) -> torch.Tensor:
-    mode = norm_info["mode"]
-    if mode == "gaussian":
-        return x * norm_info["std"] + norm_info["mean"]
-    elif mode == "quantile":
-        q01, q99 = norm_info["q01"], norm_info["q99"]
-        denom = q99 - q01
-        valid = denom.abs() > 1e-5
-        safe_denom = torch.where(valid, denom, torch.ones_like(denom))
-        result = (x + 1) / 2 * safe_denom + q01
-        return torch.where(valid, result, x)
-    return x
-
-
-# ---------------------------------------------------------------------------
-# Image preprocessing
-# ---------------------------------------------------------------------------
-
-
-def _center_crop_pil(img: Image.Image, crop_ratio: float) -> Image.Image:
-    w, h = 320, 256
-    new_w, new_h = int(w * crop_ratio), int(h * crop_ratio)
-    left = (w - new_w) // 2
-    top = (h - new_h) // 2
-    return (
-        img.resize((w, h), Image.BILINEAR)
-        .crop((left, top, left + new_w, top + new_h))
-        .resize((w, h), Image.BILINEAR)
+    ``setup_eval_policy_server.sh`` already exports it via PYTHONPATH; doing it
+    here as well keeps a plain ``python -c "import model"`` working.
+    """
+    xr1_root = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "xiaomi_robotics_1", "xr1"
     )
+    if not os.path.isdir(xr1_root):
+        raise RuntimeError(
+            f"[Xiaomi_Robotics_1] vendored xr1 package not found at {xr1_root}"
+        )
+    if xr1_root not in sys.path:
+        sys.path.insert(0, xr1_root)
+    return xr1_root
 
 
 # ---------------------------------------------------------------------------
@@ -142,30 +160,33 @@ def _extract_image(obs: dict, cam_keys: list[str]) -> np.ndarray:
     raise KeyError(f"No image found for camera keys: {cam_keys}")
 
 
-def _ee_pose_sim_to_mibot(xyz_sim: np.ndarray, quat_wxyz_sim: np.ndarray):
-    """Convert an ee pose from simulator frame to MiBot frame.
+def _ee_pose_sim_to_mibot(
+    xyz_sim: np.ndarray, quat_wxyz_sim: np.ndarray, eef_reframe_p: np.ndarray
+):
+    """Convert an ee pose from environment frame to MiBot frame.
 
-    Only the EEF local axes are redefined (R_mibot = R_sim @ P); the base-frame
+    Only the EEF local axes are redefined (R_mibot = R_env @ P); the base-frame
     position is unchanged. Returns (pos, rotm) as float64 for downstream math.
     """
     pos_m = np.asarray(xyz_sim, dtype=np.float64).reshape(3)
     q = np.asarray(quat_wxyz_sim, dtype=np.float64).reshape(4)
     rotm_sim = Rotation.from_quat(q[[1, 2, 3, 0]]).as_matrix()
-    rotm_m = rotm_sim @ EEF_REFRAME_P
+    rotm_m = rotm_sim @ eef_reframe_p
     return pos_m, rotm_m
 
 
-def _ee_pose_mibot_to_sim(pos_mibot: np.ndarray, rotm_mibot: np.ndarray):
-    """Convert an ee pose from MiBot frame back to simulator frame.
+def _ee_pose_mibot_to_sim(
+    pos_mibot: np.ndarray, rotm_mibot: np.ndarray, eef_reframe_p_inv: np.ndarray
+):
+    """Convert an ee pose from MiBot frame back to environment frame.
 
     Inverse of :func:`_ee_pose_sim_to_mibot`: position unchanged, rotation
-    mapped by R_sim = R_mibot @ P^T. Returns (xyz, quat_wxyz) as float32.
+    mapped by R_env = R_mibot @ P^T. Returns (xyz, quat_wxyz) as float32.
     """
-    xyz = np.asarray(pos_mibot, dtype=np.float32).reshape(3)  # position unchanged
-    rotm_sim = np.asarray(rotm_mibot, dtype=np.float64) @ EEF_REFRAME_P_INV
+    xyz = np.asarray(pos_mibot, dtype=np.float32).reshape(3)
+    rotm_sim = np.asarray(rotm_mibot, dtype=np.float64) @ eef_reframe_p_inv
     quat_xyzw = Rotation.from_matrix(rotm_sim).as_quat()
     quat_wxyz = quat_xyzw[[3, 0, 1, 2]].astype(np.float64)
-    # Canonicalize: w >= 0
     if quat_wxyz[0] < 0:
         quat_wxyz = -quat_wxyz
     return xyz, quat_wxyz.astype(np.float32)
@@ -179,272 +200,276 @@ def _ee_pose_mibot_to_sim(pos_mibot: np.ndarray, rotm_mibot: np.ndarray):
 class Model(ModelTemplate):
     def __init__(self, model_cfg: dict[str, Any]):
         self.model_cfg = model_cfg
-        self.action_type = model_cfg.get("action_type", "joint")
-        if self.action_type not in ("joint", "ee"):
+        self.action_type = model_cfg.get("action_type", "ee")
+        if self.action_type != "ee":
             raise ValueError(
                 f"[Xiaomi_Robotics_1] Unsupported action_type: {self.action_type!r}. "
-                "Supported values are 'joint' and 'ee'."
+                "The packed 60-dim action of this model carries end-effector "
+                "slots only (see ACTION_PARTS in mibot/utils/io.py), so joint "
+                "targets cannot be recovered from its output. Set "
+                "action_type='ee' in deploy.yml."
             )
         self.env_cfg_type = model_cfg["env_cfg_type"]
-        self.robot_action_dim_info = get_robot_action_dim_info(self.env_cfg_type)
+        self.bench_name = model_cfg["bench_name"]
+        self._eef_reframe_p = _get_eef_reframe_p(self.bench_name, self.env_cfg_type)
+        self._eef_reframe_p_inv = self._eef_reframe_p.T
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-        # Config
-        self.task_id = model_cfg.get("task_id", "robodojo")
         self.default_prompt = model_cfg.get(
             "default_prompt", model_cfg.get("task_name", "Perform the task.")
         )
-        self.action_max_length = model_cfg.get("action_max_length", 60)
-        self.action_length = model_cfg.get("action_length", 10)
-        self.state_token_length = model_cfg.get("state_token_length", 1)
-        self.input_length = model_cfg.get("input_length", 60)
-        self.crop_ratio = model_cfg.get("crop_ratio", 0.95)
+        # Image preprocessing, matching mibot Client / JsonDataset._augment.
+        self.image_factor = int(model_cfg.get("image_factor", 32))
+        self.image_max_pixels = int(model_cfg.get("image_max_pixels", 160000))
+        # Number of leading action steps actually executed per inference call;
+        # 0 or None means the whole predicted chunk.
+        self.action_length = model_cfg.get("action_length") or 0
 
-        from src.server.deploy import helper
+        xr1_root = _add_xr1_to_path()
+        print(f"[Xiaomi_Robotics_1] xr1 package root: {xr1_root}", flush=True)
 
-        # Resolve model_dir: explicit path > checkpoints/<ckpt_name>/
-        import os
-        model_dir = model_cfg.get("model_dir")
-        if not model_dir:
-            policy_dir = os.path.dirname(os.path.abspath(__file__))
-            ckpt_name = model_cfg.get("ckpt_name")
-            if ckpt_name:
-                model_dir = os.path.join(policy_dir, "checkpoints", ckpt_name)
-            if not model_dir or not os.path.isdir(model_dir):
-                raise ValueError(
-                    f"[Xiaomi_Robotics_1] model_dir is not set and fallback "
-                    f"checkpoints/{ckpt_name}/ does not exist at {model_dir}"
-                )
+        from mibot.server.deploy import load_model, load_stats
+        from mibot.utils.io import ACTION_EPS, compose_state, denormalize_action
 
-        # Load model
-        class _ModelArgs:
-            model = model_dir
+        self._action_eps = ACTION_EPS
+        self._compose_state = compose_state
+        self._denormalize_action = denormalize_action
 
-        print(f"[Xiaomi_Robotics_1] Loading model from {model_dir}...")
-        (
-            self.model,
-            self.action_norms,
-            self.state_norms,
-            self.action_composition,
-            _,
-        ) = helper(_ModelArgs())
-
-        # Build action_dim_mask (same logic as casatwin policy_server.py)
-        action_dim = max(
-            v[-1] if isinstance(v, (list, tuple)) and isinstance(v[-1], int) else 0
-            for v in self.action_composition.values()
-            if isinstance(v, (list, tuple))
+        model_dir = self._resolve_model_dir(model_cfg)
+        print(f"[Xiaomi_Robotics_1] Loading model from {model_dir}...", flush=True)
+        cfg, self.model = load_model(model_dir, str(self.device))
+        self.cfg = cfg
+        self.mean, self.std, self.q01, self.q99, self.action_mask = load_stats(
+            cfg, str(self.device)
         )
-        self.action_dim_mask = torch.zeros(
-            action_dim, dtype=torch.int32, device=self.device
-        )
-        for component, indexs in self.action_composition.items():
-            if not isinstance(indexs, (list, tuple)):
-                continue
-            if isinstance(indexs[1], (list, tuple)):
-                _, (t_start, t_end) = indexs
-                self.action_dim_mask[t_start:t_end] = 1
-            else:
-                start, end = indexs
-                if not component.startswith("action_padding"):
-                    self.action_dim_mask[start:end] = 1
+        # (action_length, 60): the chunk shape the DiT head was trained to emit.
+        self.action_shape = tuple(self.mean.shape)
+        self._state_valid = self.q99 > self.q01
 
-        # Get action shape from norms
-        self.action_shape = None
-        for norm in self.action_norms.values():
-            if norm["mode"] == "gaussian":
-                self.action_shape = norm["mean"].shape
-                break
-            elif norm["mode"] == "quantile":
-                self.action_shape = norm["q01"].shape
-                break
-
-        # Load VLM processor (use_fast=True, special tokens include a_i)
-        vlm_processor_path = model_cfg.get(
-            "vlm_processor_path", "Qwen/Qwen3-VL-4B-Instruct"
-        )
-        from transformers import AutoProcessor
-
-        special_tokens = {"score": "<score>", "state": "<state>"}
-        special_tokens.update({f"a_{i}": f"<a_{i}>" for i in range(self.action_max_length)})
-        self.processor = AutoProcessor.from_pretrained(
-            vlm_processor_path,
-            use_fast=True,
-            extra_special_tokens=special_tokens,
-        )
+        self.processor = self._build_processor(model_cfg)
 
         # Internal state
         self._encoded_obs_list: list[dict[str, Any]] = []
 
-        print(f"[Xiaomi_Robotics_1] Model loaded. action_shape={self.action_shape}")
+        print(
+            f"[Xiaomi_Robotics_1] Model loaded. action_shape={self.action_shape}, "
+            f"action_type={self.action_type}, device={self.device}",
+            flush=True,
+        )
+
+    # ------------------------------------------------------------------
+    # Setup helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_model_dir(model_cfg: dict[str, Any]) -> str:
+        """Resolve the checkpoint dir: explicit model_dir > checkpoints/<ckpt_name>.
+
+        ``mibot.server.deploy.load_model`` expects the directory to hold
+        ``config.py`` and ``last.ckpt/checkpoint/mp_rank_00_model_states.pt``.
+        The official checkpoint archive nests those a few levels deep, so a
+        bounded search for ``config.py`` is done before giving up.
+        """
+        policy_dir = os.path.dirname(os.path.abspath(__file__))
+        model_dir = model_cfg.get("model_dir")
+        ckpt_name = model_cfg.get("ckpt_name")
+
+        if not model_dir:
+            if not ckpt_name:
+                raise ValueError(
+                    "[Xiaomi_Robotics_1] neither model_dir nor ckpt_name is set "
+                    "in deploy.yml"
+                )
+            model_dir = os.path.join(policy_dir, "checkpoints", ckpt_name)
+
+        if not os.path.isabs(model_dir):
+            model_dir = os.path.join(policy_dir, model_dir)
+        if not os.path.isdir(model_dir):
+            raise ValueError(
+                f"[Xiaomi_Robotics_1] checkpoint dir does not exist: {model_dir}"
+            )
+
+        if os.path.isfile(os.path.join(model_dir, "config.py")):
+            return model_dir
+
+        matches = []
+        for root, dirs, files in os.walk(model_dir):
+            dirs.sort()
+            # last.ckpt holds the weight shards, never a nested checkpoint root.
+            dirs[:] = [name for name in dirs if name != "last.ckpt"]
+            if "config.py" in files:
+                matches.append(root)
+        if len(matches) == 1:
+            print(
+                f"[Xiaomi_Robotics_1] resolved nested checkpoint dir: {matches[0]}",
+                flush=True,
+            )
+            return matches[0]
+        if not matches:
+            raise ValueError(
+                f"[Xiaomi_Robotics_1] no config.py found under {model_dir}; "
+                "point model_dir at the training output dir that holds "
+                "config.py and last.ckpt/"
+            )
+        raise ValueError(
+            f"[Xiaomi_Robotics_1] {len(matches)} candidate checkpoint dirs found "
+            f"under {model_dir}: {matches}. Set model_dir explicitly."
+        )
+
+    @staticmethod
+    def _build_processor(model_cfg: dict[str, Any]):
+        """Build the Qwen3-VL processor with xr1's action/state special tokens.
+
+        Identical to ``mibot.data.collate.CustomCollate``: 60 ``<a_i>`` tokens
+        plus ``<score>`` / ``<state>``, whose ids the model hard-codes as
+        SCORE_ID / STATE_ID / ACTION_START_ID in ``mibot/models/VLM/qwen3vl.py``.
+        The ids are verified here so a processor mismatch fails at load time
+        rather than producing silently wrong embeddings.
+        """
+        from transformers import AutoProcessor
+
+        from mibot.models.VLM.qwen3vl import (
+            ACTION_START_ID,
+            SCORE_ID,
+            STATE_ID,
+        )
+
+        processor_path = model_cfg.get(
+            "vlm_processor_path", "Qwen/Qwen3-VL-4B-Instruct"
+        )
+        special_tokens = {"score": "<score>", "state": "<state>"}
+        special_tokens.update({f"a_{i}": f"<a_{i}>" for i in range(60)})
+        processor = AutoProcessor.from_pretrained(
+            processor_path, use_fast=True, extra_special_tokens=special_tokens
+        )
+        processor.tokenizer.padding_side = "right"
+
+        token_ids = processor.tokenizer.convert_tokens_to_ids(
+            ["<score>", "<state>", "<a_0>", "<a_59>"]
+        )
+        expected = [SCORE_ID, STATE_ID, ACTION_START_ID, ACTION_START_ID + 59]
+        if token_ids != expected:
+            raise ValueError(
+                f"[Xiaomi_Robotics_1] unexpected special token ids {token_ids}, "
+                f"expected {expected} from vlm_processor_path={processor_path!r}"
+            )
+        return processor
 
     # ------------------------------------------------------------------
     # Observation preprocessing
     # ------------------------------------------------------------------
 
-    def _encode_observation(self, obs: dict[str, Any]) -> dict[str, Any]:
-        """Encode a single XPolicyLab obs into intermediate representation.
+    @staticmethod
+    def _messages(instruction, ego_obs, left_wrist_obs, right_wrist_obs):
+        """Chat turns, byte-for-byte identical to mibot Client._messages."""
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "The following observations are captured from multiple views.\n# Ego View\n",
+                    },
+                    {"type": "image", "image": ego_obs},
+                    {"type": "text", "text": "\n# Left-Wrist View\n"},
+                    {"type": "image", "image": left_wrist_obs},
+                    {"type": "text", "text": "\n# Right-Wrist View\n"},
+                    {"type": "image", "image": right_wrist_obs},
+                    {
+                        "type": "text",
+                        "text": f"\nGenerate robot actions for the task:\n{instruction} /no_cot",
+                    },
+                ],
+            },
+            {"role": "assistant", "content": [{"type": "text", "text": "<cot></cot>"}]},
+        ]
 
-        Returns a dict with 'messages', 'state_tensor', 'action_condition_length'.
+    def _encode_observation(self, obs: dict[str, Any]) -> dict[str, Any]:
+        """Encode a single XPolicyLab obs into the model's input representation.
+
+        Returns the tokenized payload plus the absolute current pose needed to
+        turn the model's relative action chunk back into absolute targets.
         """
-        # Extract images
+        from mibot.utils.io import resize_image
+
         head_img = _extract_image(obs, ["cam_head", "cam_high", "head_camera"])
-        left_img = _extract_image(
-            obs, ["cam_left_wrist", "left_camera", "wrist_left"]
-        )
+        left_img = _extract_image(obs, ["cam_left_wrist", "left_camera", "wrist_left"])
         right_img = _extract_image(
             obs, ["cam_right_wrist", "right_camera", "wrist_right"]
         )
 
-
+        # Same preprocessing as mibot Client.__call__ and JsonDataset._augment:
+        # resize to a factor-of-32 grid under max_pixels, then hand the images
+        # to the processor with do_resize disabled.
         pil_images = [
-            _center_crop_pil(Image.fromarray(head_img), self.crop_ratio),
-            _center_crop_pil(Image.fromarray(left_img), self.crop_ratio),
-            _center_crop_pil(Image.fromarray(right_img), self.crop_ratio),
+            resize_image(
+                Image.fromarray(img),
+                factor=self.image_factor,
+                max_pixels=self.image_max_pixels,
+            )
+            for img in (head_img, left_img, right_img)
         ]
 
-        # Extract state. Input state is always joint, packed into the sparse
-        # per-arm 8-slot layout: [0:6] left_arm_joint, [7:8] left_gripper,
-        # [8:14] right_arm_joint, [15:16] right_gripper; rest zero.
         state = obs.get("state", {})
         left_arm_joint = np.asarray(
             state["left_arm_joint_state"], dtype=np.float32
-        ).reshape(-1)[:6]
-        left_gripper = float(
-            np.asarray(state["left_ee_joint_state"]).reshape(-1)[0]
-        )
+        ).reshape(-1)
+        left_gripper = np.asarray(
+            state["left_ee_joint_state"], dtype=np.float32
+        ).reshape(-1)[:1]
         right_arm_joint = np.asarray(
             state["right_arm_joint_state"], dtype=np.float32
-        ).reshape(-1)[:6]
-        right_gripper = float(
-            np.asarray(state["right_ee_joint_state"]).reshape(-1)[0]
+        ).reshape(-1)
+        right_gripper = np.asarray(
+            state["right_ee_joint_state"], dtype=np.float32
+        ).reshape(-1)[:1]
+
+        # compose_state packs joints into [0:7]/[8:15] and grippers into
+        # [7:8]/[15:16], and rejects arms wider than 7 dof.
+        state_np = self._compose_state(
+            left_gripper=left_gripper,
+            left_joint=left_arm_joint,
+            right_gripper=right_gripper,
+            right_joint=right_arm_joint,
+        )  # (1, 60)
+
+        # The model predicts RELATIVE deltas w.r.t. the observed pose, expressed
+        # in the current ee frame (MiBot convention). Stash the absolute pose so
+        # _actions_to_xpl_format can restore absolute targets.
+        left_pose = np.asarray(state["left_ee_pose"], dtype=np.float64).reshape(7)
+        right_pose = np.asarray(state["right_ee_pose"], dtype=np.float64).reshape(7)
+        l_pos_m, l_rotm_m = _ee_pose_sim_to_mibot(
+            left_pose[:3], left_pose[3:7], self._eef_reframe_p
         )
-
-        state_padded = np.zeros(self.input_length, dtype=np.float32)
-        state_padded[0:6] = left_arm_joint
-        state_padded[7] = left_gripper
-        state_padded[8:14] = right_arm_joint
-        state_padded[15] = right_gripper
-        state_tensor = torch.from_numpy(state_padded).bfloat16()  # [60]
-
-        # The model predicts RELATIVE (delta) actions w.r.t. the current state
-        # (see mibot GetJointAction / GetEEActionPos / GetEEActionAA, ref_frame="ee").
-        # Stash the current absolute state so _actions_to_xpl_format can restore
-        # absolute actions. joint: current joints; ee: current ee pose in MiBot frame.
-        current_state: dict[str, Any] = {
-            "left_arm_joint": left_arm_joint.copy(),
-            "right_arm_joint": right_arm_joint.copy(),
+        r_pos_m, r_rotm_m = _ee_pose_sim_to_mibot(
+            right_pose[:3], right_pose[3:7], self._eef_reframe_p
+        )
+        current_state = {
+            "left_ee_pos_mibot": l_pos_m,
+            "left_ee_rotm_mibot": l_rotm_m,
+            "left_gripper": float(left_gripper[0]),
+            "right_ee_pos_mibot": r_pos_m,
+            "right_ee_rotm_mibot": r_rotm_m,
+            "right_gripper": float(right_gripper[0]),
         }
-        if self.action_type == "ee":
-            left_pose = np.asarray(state["left_ee_pose"], dtype=np.float64).reshape(7)
-            right_pose = np.asarray(state["right_ee_pose"], dtype=np.float64).reshape(7)
-            l_pos_m, l_rotm_m = _ee_pose_sim_to_mibot(left_pose[:3], left_pose[3:7])
-            r_pos_m, r_rotm_m = _ee_pose_sim_to_mibot(right_pose[:3], right_pose[3:7])
-            current_state.update({
-                "left_ee_pos_mibot": l_pos_m,
-                "left_ee_rotm_mibot": l_rotm_m,
-                "right_ee_pos_mibot": r_pos_m,
-                "right_ee_rotm_mibot": r_rotm_m,
-            })
 
-        # Build prompt via apply_chat_template
         instruction = self._get_instruction(obs)
 
-        # Base messages: vision + instruction
-        base_messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "The following observations are captured from multiple views.\n# Ego View\n"},
-                    {"type": "image", "image": pil_images[0]},
-                    {"type": "text", "text": "\n# Left-Wrist View\n"},
-                    {"type": "image", "image": pil_images[1]},
-                    {"type": "text", "text": "\n# Right-Wrist View\n"},
-                    {"type": "image", "image": pil_images[2]},
-                    {"type": "text", "text": f"\nGenerate robot actions for the task:\n{instruction} /no_cot"},
-                ],
-            },
-            {
-                "role": "assistant",
-                "content": [{"type": "text", "text": "<cot></cot>"}],
-            },
-        ]
-
-        # Compute action_condition_length from base messages
-        base_data = self.processor.apply_chat_template(
-            base_messages,
-            tokenize=True,
-            return_dict=True,
-            do_resize=False,
-            return_tensors="pt",
-        )
-        action_condition_length = base_data["input_ids"].size(1)
-
-        # State/action turn
-        state_tokens = "".join(
-            ["<state>" for _ in range(self.state_token_length)]
-        )
-        action_tokens = "".join(
-            [f"<a_{i}>" for i in range(self.action_length)]
-        )
-        action_response = f"{action_tokens}<score>"
-
-        action_messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": f"Robot state: {state_tokens}"}
-                ],
-            },
-            {
-                "role": "assistant",
-                "content": [{"type": "text", "text": action_response}],
-            },
-        ]
-
-        # Full messages (not yet tokenized as batch)
-        full_messages = base_messages + action_messages
+        # Vision + instruction turns only, exactly as mibot Client._messages.
+        # The training-time "Robot state: <state>" / "<a_i>...<score>" turns are
+        # deliberately NOT added: those tokens are embedded by the VLM only when
+        # xr1.forward is in training mode (it passes state_embeds and reads the
+        # <a_i>/<score> hidden states for the choice head). At inference the VLM
+        # is called without state_embeds, so a <state> token would raise
+        # "State tokens require state_embeds". The proprioception reaches the
+        # model through batch["state"] -> DiT state_projector instead.
+        messages = self._messages(instruction, *pil_images)
 
         return {
-            "messages": full_messages,
-            "state_tensor": state_tensor,
-            "action_condition_length": action_condition_length,
+            "messages": messages,
+            "state": torch.from_numpy(state_np)[None],  # (1, 1, 60)
             "current_state": current_state,
         }
-
-    def _build_batch(
-        self, encoded_obs_list: list[dict[str, Any]]
-    ) -> dict[str, Any]:
-        """Build a batched model input from a list of encoded observations."""
-        batch_size = len(encoded_obs_list)
-
-        # Tokenize all messages as a batch with padding
-        all_messages = [item["messages"] for item in encoded_obs_list]
-        batch = self.processor.apply_chat_template(
-            all_messages,
-            tokenize=True,
-            return_dict=True,
-            do_resize=False,
-            return_tensors="pt",
-            padding=True,
-        )
-
-        # Stack state tensors [B, 1, 60]
-        states = torch.stack(
-            [item["state_tensor"] for item in encoded_obs_list], dim=0
-        ).unsqueeze(1)  # [B, 1, 60]
-        batch["state"] = states
-
-        # action_vlm_condition_segments [B, 2]
-        batch["action_vlm_condition_segments"] = torch.tensor(
-            [[0, item["action_condition_length"]] for item in encoded_obs_list],
-            dtype=torch.int64,
-        )
-
-        # Metadata
-        batch["task_id"] = self.task_id
-
-        return batch
 
     def _get_instruction(self, obs: dict[str, Any]) -> str:
         for key in ("instruction", "instructions"):
@@ -454,75 +479,74 @@ class Model(ModelTemplate):
             if isinstance(val, list):
                 val = val[0] if val else ""
             if isinstance(val, str) and val.strip():
-                text = val.strip().rstrip(".") + "."
-                return text
+                return val.strip().rstrip(".") + "."
         return self.default_prompt
+
+    def _build_batch(self, encoded_obs_list: list[dict[str, Any]]) -> dict[str, Any]:
+        """Tokenize a list of encoded observations into one model batch.
+
+        Keys are exactly those ``mibot.server.runtime.client`` puts on the wire
+        (``input_ids``, ``attention_mask``, ``pixel_values``, ``image_grid_thw``,
+        ``state``), because ``xr1.forward`` forwards every leftover key straight
+        into the VLM. In particular ``action_vlm_condition_segments`` is NOT set:
+        ``xr1._unpad`` slices the cache as ``keys[:, 0, ...]``, which is only
+        valid for the packed single-sequence batch used during training. With
+        segments left unset the DiT attends over the full VLM cache, matching the
+        official inference server.
+        """
+        batch = self.processor.apply_chat_template(
+            [item["messages"] for item in encoded_obs_list],
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+            padding=True,
+            images_kwargs={"do_resize": False},
+        )
+        batch = dict(batch)
+        batch["state"] = torch.cat([item["state"] for item in encoded_obs_list], dim=0)
+        return batch
 
     # ------------------------------------------------------------------
     # Inference
     # ------------------------------------------------------------------
 
-    def _run_inference_batch(self, data: dict[str, Any]) -> np.ndarray:
-        """Run model inference on a batch, return raw actions [B, T, action_dim]."""
-        task_id = data.pop("task_id")
-        if task_id not in self.action_norms:
-            task_id = list(self.action_norms.keys())[0]
+    @torch.no_grad()
+    def _run_inference_batch(self, batch: dict[str, Any]) -> np.ndarray:
+        """Normalize, run the model, denormalize. Mirrors ``Server.run``.
 
-        data.pop("global_rank", None)
-        data.pop("rollout_i", None)
-        data.pop("step_i", None)
-
-        # Move tensors to device
-        model_input = {
+        Returns unnormalized relative actions as [B, action_length, 60].
+        """
+        batch = {
             key: (value.to(self.device) if isinstance(value, torch.Tensor) else value)
-            for key, value in data.items()
+            for key, value in batch.items()
         }
+        batch_size = batch["input_ids"].shape[0]
 
-        # State normalization
-        if "state" in model_input and task_id in self.state_norms:
-            s_norm = self.state_norms[task_id]
-            if s_norm["mode"] is not None:
-                model_input["state"] = _normalize(model_input["state"], s_norm)
+        # (B, action_length, 60) mask marking the slots the model was trained on.
+        mask = self.action_mask.unsqueeze(0).expand(batch_size, -1, -1)
+        batch["action_mask"] = mask
+        # No action prefix at inference time: the chunk starts from pure noise.
+        batch["action"] = torch.zeros(
+            (batch_size, *self.action_shape),
+            device=self.device,
+            dtype=torch.bfloat16,
+        )
 
-        # Action placeholder + normalization
-        a_norm = self.action_norms[task_id]
-        batch_size = model_input["input_ids"].shape[0]
-        if "action" not in model_input:
-            model_input["action"] = torch.zeros(
-                (batch_size, *self.action_shape),
-                device=self.device,
-                dtype=torch.bfloat16,
-            )
-        elif a_norm["mode"] is not None:
-            normed = _normalize(model_input["action"], a_norm)
-            if a_norm["mode"] == "gaussian":
-                norm_valid = a_norm["std"] > 1e-5
-            elif a_norm["mode"] == "quantile":
-                norm_valid = (a_norm["q99"] - a_norm["q01"]).abs() > 1e-5
-            model_input["action"] = torch.where(
-                norm_valid, normed, model_input["action"]
-            )
+        # Quantile-normalize the state to [-1, 1], leaving padded dims at zero.
+        state = batch["state"]
+        valid = self._state_valid
+        normalized_state = torch.zeros_like(state)
+        normalized_state[..., valid[0]] = (
+            2.0
+            * (state[..., valid[0]] - self.q01[..., valid[0]])
+            / (self.q99[..., valid[0]] - self.q01[..., valid[0]] + self._action_eps)
+            - 1.0
+        )
+        batch["state"] = normalized_state.clamp(-1.0, 1.0)
 
-        # Action mask (keep [1, action_dim] for broadcast over [B, T, D])
-        if "action_mask" not in model_input:
-            model_input["action_mask"] = self.action_dim_mask[None]
-
-        # Inference
-        with torch.no_grad():
-            action = self.model.generate(model_input)
-
-        # Denormalize
-        if a_norm["mode"] is not None:
-            denormed = _denormalize(action, a_norm)
-            if a_norm["mode"] == "gaussian":
-                norm_valid = a_norm["std"] > 1e-5
-            elif a_norm["mode"] == "quantile":
-                norm_valid = (a_norm["q99"] - a_norm["q01"]).abs() > 1e-5
-            action = torch.where(norm_valid, denormed, action)
-
-        # [B, T, dim] -> [B, T, action_dim]
-        raw_actions = action.float().cpu().numpy()
-        return raw_actions
+        action = self.model.generate(batch)
+        action = self._denormalize_action(action * mask, self.mean, self.std) * mask
+        return action.float().cpu().numpy()
 
     # ------------------------------------------------------------------
     # Action postprocessing
@@ -531,71 +555,58 @@ class Model(ModelTemplate):
     def _actions_to_xpl_format(
         self, raw_actions: np.ndarray, current_state: dict[str, Any]
     ) -> list[dict[str, np.ndarray]]:
-        """Convert raw model actions [T, 16] to XPolicyLab action dicts.
+        """Convert one relative action chunk [T, 60] into XPolicyLab actions.
 
-        The model predicts RELATIVE (delta) actions w.r.t. the observation's
-        current state, matching mibot's training-time transforms. This method
-        restores ABSOLUTE actions before returning them; ``current_state`` holds
-        the observation's absolute state captured in _encode_observation.
-
-        Behavior depends on self.action_type:
-          - joint (GetJointAction): abs_joint = current_joint + delta.
-                delta slots: [0:6] left_arm_joint, [8:14] right_arm_joint.
-                Grippers ([7:8], [15:16]) are absolute (GetAbsAction).
-          - ee (GetEEActionPos/AA, ref_frame="ee"): the delta is expressed in the
-                current ee frame (MiBot). Restore in MiBot frame, then map to sim:
-                    abs_pos_m  = current_pos_m + current_rotm_m @ delta_pos
-                    abs_rotm_m = current_rotm_m @ Rot(delta_axis_angle)
-                delta slots: [0:3]/[8:11] xyz, [3:6]/[11:14] axis-angle.
-                Grippers ([7:8], [15:16]) are absolute (GetAbsAction).
+        Reproduces ``mibot.utils.io.recover_action`` in the MiBot frame and then
+        maps the result back to the environment frame. Every packed slot is a
+        delta w.r.t. the observed pose (see ACTION_PARTS):
+            abs_pos_m  = current_pos_m + current_rotm_m @ delta_pos
+            abs_rotm_m = current_rotm_m @ Rot(delta_axis_angle)
+            abs_grip   = current_grip + delta_grip
+        Slots [0:3]/[3:6]/[6:7] are the left arm, [8:11]/[11:14]/[14:15] the
+        right; waist [16:17] and base [17:20] have no XPolicyLab counterpart on
+        the supported robots and are ignored.
         """
         action_list = []
         for t in range(raw_actions.shape[0]):
             a = raw_actions[t]
 
-            if self.action_type == "joint":
-                left_arm = current_state["left_arm_joint"] + a[0:6]
-                right_arm = current_state["right_arm_joint"] + a[8:14]
-                action_list.append({
-                    "left_arm_joint_state": left_arm.astype(np.float32),
-                    "left_ee_joint_state": a[7:8].astype(np.float32),
-                    "right_arm_joint_state": right_arm.astype(np.float32),
-                    "right_ee_joint_state": a[15:16].astype(np.float32),
-                })
-            else:
-                left_xyz, left_quat = self._restore_abs_ee(
-                    a[0:3], a[3:6],
-                    current_state["left_ee_pos_mibot"],
-                    current_state["left_ee_rotm_mibot"],
-                )
-                right_xyz, right_quat = self._restore_abs_ee(
-                    a[8:11], a[11:14],
-                    current_state["right_ee_pos_mibot"],
-                    current_state["right_ee_rotm_mibot"],
-                )
-                action_list.append({
-                    "left_ee_pose": np.concatenate([left_xyz, left_quat]).astype(np.float32),
-                    "right_ee_pose": np.concatenate([right_xyz, right_quat]).astype(np.float32),
-                    "left_ee_joint_state": a[7:8].astype(np.float32),
-                    "right_ee_joint_state": a[15:16].astype(np.float32),
-                })
+            left_xyz, left_quat = self._restore_abs_ee(
+                a[0:3], a[3:6],
+                current_state["left_ee_pos_mibot"],
+                current_state["left_ee_rotm_mibot"],
+            )
+            right_xyz, right_quat = self._restore_abs_ee(
+                a[8:11], a[11:14],
+                current_state["right_ee_pos_mibot"],
+                current_state["right_ee_rotm_mibot"],
+            )
+            left_grip = current_state["left_gripper"] + float(a[6])
+            right_grip = current_state["right_gripper"] + float(a[14])
+
+            action_list.append({
+                "left_ee_pose": np.concatenate([left_xyz, left_quat]).astype(np.float32),
+                "right_ee_pose": np.concatenate([right_xyz, right_quat]).astype(np.float32),
+                "left_ee_joint_state": np.array([left_grip], dtype=np.float32),
+                "right_ee_joint_state": np.array([right_grip], dtype=np.float32),
+            })
 
         return action_list
 
-    @staticmethod
     def _restore_abs_ee(
+        self,
         delta_pos: np.ndarray,
         delta_aa: np.ndarray,
         current_pos_m: np.ndarray,
         current_rotm_m: np.ndarray,
     ):
-        """Restore an absolute ee pose (sim frame) from an ee-frame delta.
+        """Restore an absolute ee pose (env frame) from an ee-frame delta.
 
-        Inverse of mibot GetEEActionPos/GetEEActionAA with ref_frame="ee",
-        all in the MiBot frame, then converted back to the simulator frame:
+        Inverse of the packing in ``JsonDataset._arm_action``, all in the MiBot
+        frame, then converted back to the environment frame:
             abs_pos_m  = current_pos_m + current_rotm_m @ delta_pos
             abs_rotm_m = current_rotm_m @ Rot(delta_aa)
-        Returns (xyz, quat_wxyz) in the simulator frame.
+        Returns (xyz, quat_wxyz) in the environment frame.
         """
         delta_pos = np.asarray(delta_pos, dtype=np.float64).reshape(3)
         abs_pos_m = current_pos_m + current_rotm_m @ delta_pos
@@ -603,7 +614,7 @@ class Model(ModelTemplate):
             np.asarray(delta_aa, dtype=np.float64).reshape(3)
         ).as_matrix()
         abs_rotm_m = current_rotm_m @ delta_rotm
-        return _ee_pose_mibot_to_sim(abs_pos_m, abs_rotm_m)
+        return _ee_pose_mibot_to_sim(abs_pos_m, abs_rotm_m, self._eef_reframe_p_inv)
 
     # ------------------------------------------------------------------
     # ModelTemplate interface
@@ -613,37 +624,37 @@ class Model(ModelTemplate):
         self.update_obs_batch([obs])
 
     def update_obs_batch(self, obs_list):
-        self._encoded_obs_list = [
-            self._encode_observation(obs) for obs in obs_list
-        ]
+        self._encoded_obs_list = [self._encode_observation(obs) for obs in obs_list]
 
     def get_action(self, **kwargs):
         if not self._encoded_obs_list:
             raise AssertionError(
                 "[Xiaomi_Robotics_1] Call update_obs before get_action."
             )
-        return self._predict_action_chunk(self._encoded_obs_list[0])
+        return self._predict_action_chunks(self._encoded_obs_list[:1])[0]
 
     def get_action_batch(self, env_idx_list=None, **kwargs):
         if not self._encoded_obs_list:
             raise AssertionError(
                 "[Xiaomi_Robotics_1] Call update_obs_batch before get_action_batch."
             )
-        return [
-            self._predict_action_chunk(encoded_obs)
-            for encoded_obs in self._encoded_obs_list
-        ]
+        return self._predict_action_chunks(self._encoded_obs_list)
 
-    def _predict_action_chunk(
-        self, encoded_obs: dict[str, Any]
-    ) -> list[dict[str, np.ndarray]]:
-        """Run inference on a single encoded observation."""
-        batch_data = self._build_batch([encoded_obs])
-        raw_actions = self._run_inference_batch(batch_data)  # [1, T, 16]
-        return self._actions_to_xpl_format(
-            raw_actions[0], encoded_obs["current_state"]
-        )
+    def _predict_action_chunks(
+        self, encoded_obs_list: list[dict[str, Any]]
+    ) -> list[list[dict[str, np.ndarray]]]:
+        """Run one batched inference pass and convert each chunk."""
+        raw_actions = self._run_inference_batch(self._build_batch(encoded_obs_list))
+        chunks = []
+        for index, encoded_obs in enumerate(encoded_obs_list):
+            actions = raw_actions[index]
+            if 0 < self.action_length < actions.shape[0]:
+                actions = actions[: self.action_length]
+            chunks.append(
+                self._actions_to_xpl_format(actions, encoded_obs["current_state"])
+            )
+        return chunks
 
     def reset(self):
         self._encoded_obs_list = []
-        print("[Xiaomi_Robotics_1] Model reset.")
+        print("[Xiaomi_Robotics_1] Model reset.", flush=True)
