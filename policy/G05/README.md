@@ -140,6 +140,8 @@ bash train.sh RoboDojo cotrain arx_x5 joint 0 0,1,2,3,4,5,6,7 \
 
 Supported `G05_TRAIN_MODE` values are `fm_only`, `ar_only`, and `ar_fm`. Training length is intentionally user-defined: set `G05_MAX_STEPS`, `G05_MAX_EPOCHS`, or pass `model.max_steps=...` / `model.max_epochs=...` as a Hydra override. Trailing arguments are passed through to the G05 training script.
 
+Training length is not fixed by this adapter. For RoboDojo simulator training, users can start from a moderate number of optimizer steps and extend training if validation or simulator evaluation metrics continue to improve. The released checkpoint is intended as a reproducible evaluation baseline; further tuning of training length, data mixture, and model configuration may improve performance.
+
 RoboDojo-real training code is not included in this release. For official RoboDojo-real evaluation, use the released real checkpoint with this adapter.
 
 ## Evaluation
