@@ -25,5 +25,14 @@ pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https
 pip install transformers==4.57.1 scipy numpy Pillow ninja
 pip install flash-attn==2.8.3 --no-build-isolation
 
+# Vendored xr1 requirements. mmengine (model registry) and liger-kernel (fused
+# RMSNorm/RoPE in the VLM) are needed just to import mibot, so inference needs
+# them too; the rest are pulled in by the training entrypoints.
+pip install -r "${POLICY_DIR}/xiaomi_robotics_1/xr1/assets/requirements.txt"
+
+# HDF5 -> JSON/MP4 conversion (process_data.sh). Not part of the vendored
+# requirements, which cover training and inference only.
+pip install opencv-python-headless h5py imageio imageio-ffmpeg tqdm
+
 echo "[Xiaomi_Robotics_1] Installation finished."
 echo "[Xiaomi_Robotics_1] Activate env: conda activate ${CONDA_ENV}"
