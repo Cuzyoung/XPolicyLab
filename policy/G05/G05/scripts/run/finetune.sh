@@ -85,11 +85,6 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 SCRIPT_DIR="$(dirname "$(realpath "${G05_FINETUNE_SH_ORIGINAL:-$0}")")"
 PROJECT_ROOT="$(realpath "$SCRIPT_DIR/../..")"
 ROOT="${ROOT:-$(realpath "${PROJECT_ROOT}/../..")}"
-if [[ -f "${ROOT}/experiments_compare/.secrets/wandb.env" ]]; then
-  set -a
-  source "${ROOT}/experiments_compare/.secrets/wandb.env"
-  set +a
-fi
 export WANDB_ENTITY="${WANDB_ENTITY:-}"
 export WANDB_BASE_URL="${WANDB_BASE_URL:-https://api.wandb.ai}"
 export PYTHONPATH="${PROJECT_ROOT}:${PROJECT_ROOT}/src:${PYTHONPATH:-}"
