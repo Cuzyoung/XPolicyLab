@@ -1,128 +1,184 @@
-# G05 RoboDojo Real Adapter
+# G05 RoboDojo Policy Adapter
 
-This directory contains the G05 policy adapter for RoboDojo evaluation through
-XPolicyLab.
+**Contributor:** OpenGalaxea | **Paper:** Not applicable | **arXiv:** Not applicable | **Original code:** G05
 
-The adapter loads a G05 policy implementation from an external G05 checkout and
-serves it through the XPolicyLab websocket policy-server interface. RoboDojo
-simulation remains on the evaluator/client side.
+This adapter serves G05 checkpoints through the XPolicyLab websocket policy-server interface. It keeps model-specific loading, observation conversion, and action decoding inside `policy/G05`; simulator assets, environment clients, and task logic stay on the RoboDojo/XPolicyLab side.
 
-## Checkpoint
+Shared conventions — argument meanings, checkpoint naming, split-machine deployment, and `EVAL_ENV_TYPE` — are documented in the [XPolicyLab README](../../README.md). Official results: [RoboDojo LeaderBoard](https://robodojo-benchmark.com/LeaderBoard).
 
-Download the G05 RoboDojo-real checkpoint package from the OpenGalaxea Hugging Face organization. Access to the real checkpoint may be gated until evaluation is finalized. The archive and the extracted checkpoint intentionally do not expose the training step.
+## Installation
+
+Install the XPolicyLab-side adapter dependencies:
+
+```bash
+cd XPolicyLab/policy/G05
+export G05_PYTHON=/path/to/python
+bash install.sh
+```
+
+Set the G05 runtime before evaluation or training:
+
+```bash
+export G05_ROOT=/path/to/G05_checkout
+export G05_PYTHON=/path/to/python
+```
+
+`G05_ROOT` must contain the G05 model code and RoboDojo policy implementation. `G05_PYTHON` must point to an environment that can import that checkout and its dependencies. Checkpoint archives do not include a Python runtime.
+
+## Model Assets
+
+Model files are hosted in:
+
+```text
+https://huggingface.co/OpenGalaxea/g05-robodojo
+```
+
+### RoboDojo simulation checkpoint
+
+Use this archive for RoboDojo simulator evaluation:
+
+```bash
+huggingface-cli download OpenGalaxea/g05-robodojo \
+  g05_robodojo_fm_only_checkpoint.tar \
+  g05_robodojo_fm_only_checkpoint.tar.sha256 \
+  --local-dir ./checkpoints/g05_robodojo_sim
+
+cd ./checkpoints/g05_robodojo_sim
+sha256sum -c g05_robodojo_fm_only_checkpoint.tar.sha256
+tar -xf g05_robodojo_fm_only_checkpoint.tar
+```
+
+The extracted checkpoint file is:
+
+```text
+hf_g05_robodojo_fm_only_checkpoint/checkpoints/checkpoint
+```
+
+Then set:
+
+```bash
+export G05_CKPT_PATH=/path/to/hf_g05_robodojo_fm_only_checkpoint/checkpoints/checkpoint
+export ROBODOJO_G05_ACTION_SOURCE=fm
+```
+
+The public archive name intentionally does not encode the training step.
+
+### RoboDojo-real checkpoint
+
+Use this archive for RoboDojo-real evaluation:
 
 ```bash
 huggingface-cli download OpenGalaxea/g05-robodojo \
   g05_robodojo_real_checkpoint.tar \
   g05_robodojo_real_checkpoint.tar.sha256 \
-  --local-dir ./checkpoints/g05_real
+  --local-dir ./checkpoints/g05_robodojo_real
 
-cd ./checkpoints/g05_real
+cd ./checkpoints/g05_robodojo_real
 sha256sum -c g05_robodojo_real_checkpoint.tar.sha256
 tar -xf g05_robodojo_real_checkpoint.tar
 ```
 
-Set the checkpoint path for evaluation:
+The extracted checkpoint file is:
+
+```text
+g05_robodojo_real_checkpoint/checkpoint/checkpoints/checkpoint.pt
+```
+
+Then set:
 
 ```bash
 export G05_CKPT_PATH=/path/to/g05_robodojo_real_checkpoint/checkpoint/checkpoints/checkpoint.pt
 export ROBODOJO_G05_ACTION_SOURCE=fm
 ```
 
-## Training base assets
+### Training base assets
 
-To reproduce G05 RoboDojo training, download the base model and tokenizer assets separately from the evaluation checkpoint:
+Training base assets are separate from evaluation checkpoints:
 
 ```bash
 huggingface-cli download OpenGalaxea/g05-robodojo \
   g05_robodojo_train_base_assets.tar \
   g05_robodojo_train_base_assets.tar.sha256 \
-  --local-dir ./checkpoints/g05_train_assets
+  --local-dir ./checkpoints/g05_robodojo_train_assets
 
-cd ./checkpoints/g05_train_assets
+cd ./checkpoints/g05_robodojo_train_assets
 sha256sum -c g05_robodojo_train_base_assets.tar.sha256
 tar -xf g05_robodojo_train_base_assets.tar
 ```
 
-These assets include the base checkpoint, HF processor, and action tokenizer required by the G05 training configs. RoboDojo datasets should be downloaded from the official RoboDojo data source separately.
+The extracted directory contains:
 
-## Runtime requirements
-
-Install the XPolicyLab-side adapter dependencies:
-
-```bash
-cd policy/G05
-export G05_PYTHON=/path/to/python
-bash install.sh
+```text
+g05_robodojo_train_base_assets/pretrained/checkpoints/model_state_dict.pt
+g05_robodojo_train_base_assets/pretrained/hf_processor/
+g05_robodojo_train_base_assets/pretrained/action_tokenizer_hf/
 ```
 
-Then set these paths before training or evaluation:
+Point the selected G05 training config to these assets using the config keys expected by that G05 checkout. RoboDojo datasets are not included in this archive.
+
+## Data Processing
+
+This adapter does not provide a standalone data converter. Use the official RoboDojo data download and conversion pipeline for simulator data, and the matching RoboDojo-real data pipeline for real-world data. The policy adapter expects the selected G05 checkout to read those datasets directly.
+
+## Training
+
+`train.sh` is a compatibility launcher around the selected G05 checkout:
+
+- If `${G05_ROOT}/scripts/run/finetune_benchmark.sh` exists, it is used by compatible G05 checkouts.
+- Otherwise, the launcher falls back to `${G05_ROOT}/scripts/run/finetune.sh`, which is the path used by the released RoboDojo simulation training stack.
+
+Simulation training example:
 
 ```bash
-export G05_ROOT=/path/to/GalaxeaVLA_or_G05_checkout
+export G05_ROOT=/path/to/public_g05_checkout
 export G05_PYTHON=/path/to/python
+export ROBODOJO_LEROBOT_V30_ROOT=/path/to/RoboDojo_lerobot_v30_video
+export G05_TRAIN_BENCHMARK=robodojo
+export G05_TRAIN_MODE=fm_only
+
+cd XPolicyLab/policy/G05
+bash train.sh RoboDojo cotrain arx_x5 joint 0 0,1,2,3,4,5,6,7 \
+  <g05_training_overrides>
 ```
 
-`G05_ROOT` must contain the G05 model/inference code compatible with the real checkpoint. The real checkpoint was produced with the private/current G05 training stack, so evaluators should use the matching G05 runtime provided for official real evaluation.
-`G05_PYTHON` must point to a Python environment with the G05 runtime
-dependencies installed.
+Trailing arguments are passed through to the selected G05 training script. Use the training overrides supported by that G05 checkout.
 
-The checkpoint package does not include a full Python runtime. Keep the G05
-runtime as a normal external checkout/environment and point the adapter to it
-with `G05_ROOT` and `G05_PYTHON`.
+RoboDojo-real training is not documented here because the released checkpoint was trained with a G05 checkout that includes RoboDojo-real training configs. For official RoboDojo-real evaluation, use the released real checkpoint with a compatible G05 runtime.
 
 ## Evaluation
 
-Debug mode validates policy-server wiring and action schema without launching
-Isaac Sim:
+Offline adapter check:
 
 ```bash
-cd policy/G05
+cd XPolicyLab/policy/G05
 export EVAL_ENV_TYPE=debug
-export G05_CKPT_PATH=/path/to/extracted/g05/checkpoint
+export G05_ROOT=/path/to/G05_checkout
+export G05_PYTHON=/path/to/python
+export G05_CKPT_PATH=/path/to/extracted/checkpoint
+export ROBODOJO_G05_ACTION_SOURCE=fm
+
 bash eval.sh RoboDojo stack_bowls checkpoint arx_x5 joint 0 0 0 \
   "$G05_PYTHON" base
 ```
 
-Simulator-backed evaluation uses the same adapter entrypoint. Example:
+Simulator-backed evaluation uses the same adapter entrypoint with `EVAL_ENV_TYPE` unset or set to `sim`:
 
 ```bash
-cd policy/G05
+cd XPolicyLab/policy/G05
+unset EVAL_ENV_TYPE
 export G05_ROOT=/path/to/G05_checkout
 export G05_PYTHON=/path/to/python
-export G05_CKPT_PATH=/path/to/extracted/g05/checkpoint
+export G05_CKPT_PATH=/path/to/extracted/checkpoint
 export ROBODOJO_G05_ACTION_SOURCE=fm
 
 bash eval.sh RoboDojo stack_bowls checkpoint arx_x5 joint 0 0 0 \
   "$G05_PYTHON" sim
 ```
 
-The positional arguments are:
+For split-machine deployment via `setup_eval_policy_server.sh` and `setup_eval_env_client.sh`, follow the [Deployment Flow](../../README.md#-deployment-flow).
 
-```text
-eval.sh <bench_name> <task_name> <ckpt_name> <env_cfg_type> <action_type> \
-  <seed> <policy_gpu_id> <env_gpu_id> <policy_python_or_env> <eval_env>
-```
+## Notes
 
-Use `ROBODOJO_G05_ACTION_SOURCE=fm` for FM-style continuous action inference,
-or `ROBODOJO_G05_ACTION_SOURCE=ar` for AR-style action decoding when evaluating
-a compatible checkpoint.
-
-For simulator evaluation, unset `EVAL_ENV_TYPE` or set it to `sim`, and run from
-a RoboDojo checkout where the evaluator-side directories `env_cfg/`, `scripts/`,
-`src/`, `task/`, and `Assets/` are available next to `XPolicyLab`.
-
-## Training
-
-Training is optional for evaluation. If training is needed, set the RoboDojo
-LeRobot v3.0 joint-action dataset path explicitly:
-
-```bash
-export ROBODOJO_LEROBOT_V30_ROOT=/path/to/RoboDojo_lerobot_v30_video
-export G05_ROOT=/path/to/G05_checkout
-export G05_PYTHON=/path/to/python
-cd policy/G05
-bash train.sh RoboDojo cotrain arx_x5 joint 0 0,1,2,3,4,5,6,7
-```
-
-The adapter currently targets RoboDojo `arx_x5` with `joint` actions.
+- Use `ROBODOJO_G05_ACTION_SOURCE=fm` for FM-style continuous action inference.
+- Use `ROBODOJO_G05_ACTION_SOURCE=ar` only with checkpoints and G05 runtimes trained and validated for AR action decoding.
+- For simulator evaluation, run from a RoboDojo checkout where evaluator-side `env_cfg/`, `scripts/`, `src/`, `task/`, and `Assets/` are available next to `XPolicyLab`.
