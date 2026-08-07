@@ -69,3 +69,11 @@ The optional 11th argument `planning_gpu_ids` (comma-separated) auto-starts the 
 ## Configuration
 
 `deploy.yml` keys to check before evaluation: `action_dim`, `device`, `image_size`, `norm_way`, `task_type`, `execution_ckpt`, `state_stats_path`, `planning_module_config_path`, `vllm_url`, `global_task`, `action_horizon`.
+
+`planning_module_config_path` must point at an existing file even for `M1`, because the upstream agent builds its planner unconditionally; the adapter fails at startup with an explicit message rather than inside OmegaConf. Override it with `MEM0_PLANNING_MODULE_CONFIG`.
+
+`eval_batch` is `false` and must stay that way: the MemoryBank is per-episode stateful, so `update_obs_batch` / `get_action_batch` raise `NotImplementedError`.
+
+## Deploy loop
+
+Unlike other adapters, `deploy.py` drives evaluation through the custom RPCs `begin_episode` and `step` instead of `update_obs` / `get_action`, which is what lets the MemoryBank update between single actions and lets `Mn` switch subtasks on the server. `step` returns `None` between macro chunks and right after a subtask switch; the loop simply fetches a fresh observation and calls again. As with the standard methods, the policy server decodes camera images before these calls, so `model.py` must not decode.

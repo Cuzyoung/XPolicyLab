@@ -419,7 +419,7 @@ from XPolicyLab.utils.process_data import decode_image_bit, get_robot_action_dim
 
 Three image rules that cause silent, hard-to-debug bugs when broken:
 
-> - **`model.py` never decodes.** The policy server decodes every observation before `update_obs` / `update_obs_batch`, so `obs["vision"][<camera>]["color"]` already is an image array.
+> - **`model.py` never decodes.** The policy server decodes every observation it forwards, so `obs["vision"][<camera>]["color"]` already is an image array. This covers `update_obs` / `update_obs_batch` and any custom RPC a policy exposes that carries an observation.
 > - **Offline code decodes only via `decode_image_bit`.** In conversion scripts and training dataloaders, never hand-roll `cv2.imdecode` / `np.frombuffer` / PIL decoding — RoboTwin and RoboDojo store image bits in legacy layouts that only this function reads correctly.
 > - **Everything is RGB, end to end.** No channel conversion belongs in conversion, training, or evaluation. The only exceptions are medium adapters: `COLOR_RGB2BGR` right before `cv2.VideoWriter.write(...)`, and `COLOR_BGR2RGB` right after `cv2.VideoCapture.read()`.
 

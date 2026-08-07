@@ -88,7 +88,10 @@ class ModelServer:
                     cmd = data.get("cmd")
                     obs = data.get("obs")  # None if not provided
 
-                    if cmd in {"update_obs", "update_obs_batch"}:
+                    # Decode every payload-carrying command, matching the ws
+                    # server: custom RPCs can ship camera frames too, and
+                    # decode_obs_images leaves non-observation payloads alone.
+                    if obs is not None:
                         obs = decode_obs_images(obs)
 
                     # Find corresponding model method

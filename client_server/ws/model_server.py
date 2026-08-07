@@ -473,14 +473,19 @@ class PolicyServer:
             )
 
         obs = frame.payload.get("obs")
-        # `infer` is included so a generic CALL to model.infer gets the same
-        # image decoding as the dedicated INFER message type.
-        if func_name in {"update_obs", "update_obs_batch", "infer"}:
-            if obs is None:
-                raise WsError(
-                    ErrorCode.INVALID_FRAME, f"{func_name} payload missing obs"
-                )
+        if func_name in {"update_obs", "update_obs_batch", "infer"} and obs is None:
+            raise WsError(ErrorCode.INVALID_FRAME, f"{func_name} payload missing obs")
+
+        if obs is not None:
             try:
+                # Decode for EVERY payload-carrying call, not just the standard
+                # method names: adapters are forbidden from decoding themselves,
+                # and a policy may expose custom RPCs that ship camera frames
+                # (Mem_0's begin_episode/step). decode_obs_images only touches
+                # dicts with a `vision` field and returns already-decoded values
+                # untouched, so payloads that are not observations — notably
+                # get_action_batch's env_idx_list — pass straight through.
+                #
                 # JPEG decode is CPU-bound (a batched obs can be N envs x M
                 # cameras); run it off the event loop for the same reason
                 # compression is disabled — a blocked loop delays keepalive

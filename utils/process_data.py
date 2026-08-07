@@ -282,10 +282,10 @@ def _decode_single_image_bit(image_bit):
 
     # The returned array is RGB. This is the conclusion for this repo — do not
     # "correct" it with the usual "cv2 means BGR" rule. cv2.imencode/imdecode
-    # only move channels through JPEG in the order they were handed in, and
-    # every buffer in XPolicyLab was encoded from an RGB array, so the
-    # round trip returns RGB. Adding a COLOR_BGR2RGB swap here (or in any
-    # caller) is what actually breaks the channel order.
+    # only carry channels in the order they were handed in, so the round trip
+    # is an identity on channel order, and XPolicyLab trajectory files and
+    # runtime observations are encoded from RGB arrays. Adding a COLOR_BGR2RGB
+    # swap here (or in any caller) is what actually breaks the channel order.
     image = cv2.imdecode(np.frombuffer(image_bit, np.uint8), cv2.IMREAD_COLOR)
 
     if image is None:
@@ -317,10 +317,16 @@ def decode_image_bit(image_bits):
     Decode encoded image bit stream(s) into uint8 RGB image array(s).
 
     The output is RGB. Treat that as settled and do not apply the usual
-    "OpenCV returns BGR" rule: XPolicyLab buffers are encoded from RGB arrays,
-    and JPEG round trips preserve the channel order they were given. Callers
-    must NOT add a COLOR_BGR2RGB / [..., ::-1] swap after this function —
-    doing so is the one thing that will corrupt the channel order.
+    "OpenCV returns BGR" rule: XPolicyLab trajectory files and runtime
+    observations store buffers encoded from RGB arrays, and encode/decode
+    round trips preserve the channel order they were given. Never add a
+    COLOR_BGR2RGB after this function to "correct" the output — there is
+    nothing to correct, and the swap is what breaks the channel order.
+
+    Deliberately converting the RGB result to BGR is a different thing and is
+    allowed where a checkpoint was trained on BGR data; that must be an opt-in
+    documented in the adapter (see Dexora_1B's `input_color_order`), never a
+    silent fix applied at the decode site.
 
     Values that are already decoded are returned unchanged, so this function is
     safe to call on an observation or trajectory field without knowing whether
@@ -434,11 +440,12 @@ def decode_obs_images(obs):
 
 def images_encoding(imgs):
     """
-    JPEG-encode RGB frames for storage. `imgs` must already be RGB.
+    JPEG-encode frames for storage in the XPolicyLab layout, padded to a
+    common length so they fit a fixed-width HDF5 byte column.
 
-    This is the other half of the invariant `decode_image_bit` relies on:
-    cv2.imencode writes channels in the order it is given, so RGB in means RGB
-    out on decode. Never feed this a BGR array and never swap channels first.
+    Feed this RGB, never BGR and never a channel-swapped array: cv2.imencode
+    writes channels in the order it is given, so whatever goes in is what
+    `decode_image_bit` hands back, and the rest of the pipeline assumes RGB.
     """
     encode_data = []
     padded_data = []

@@ -108,6 +108,14 @@ class Model(ModelTemplate):
         )
 
         cfg = OmegaConf.create(dict(model_cfg))
+        # deploy.yml declares these keys as `null`, so the key exists and
+        # `.get(key, default)` hands back None instead of the default. The
+        # upstream agent reads them as `self.config.get("global_task", "")` and
+        # would pass None on to the planner, so give them a real value here.
+        for key in ("global_task", "vllm_url", "task_name"):
+            if cfg.get(key) is None:
+                cfg[key] = ""
+
         qwen_path = _resolve_path(cfg.execution_module.qwen_vl.get("model_path", ""))
         cfg.execution_module.qwen_vl.model_path = qwen_path
         if not os.path.isdir(qwen_path):
@@ -117,9 +125,20 @@ class Model(ModelTemplate):
                 "red",
             )
 
-        planning_cfg = _resolve_path(cfg.get("planning_module_config_path", ""))
-        if planning_cfg:
-            cfg.planning_module_config_path = planning_cfg
+        # MemoryMattersAgent builds its planner unconditionally — including for
+        # M1 — with OmegaConf.load(planning_module_config_path), so this file
+        # must exist even when no planning happens. Fail here instead of inside
+        # OmegaConf, where the message does not name the config key.
+        planning_cfg = _resolve_path(model_cfg.get("planning_module_config_path") or "")
+        if not planning_cfg or not os.path.isfile(planning_cfg):
+            raise FileNotFoundError(
+                self._error_msg(
+                    "planning_module_config_path does not point at a file: "
+                    f"{planning_cfg or '<unset>'}. Set it in deploy.yml or via "
+                    "MEM0_PLANNING_MODULE_CONFIG."
+                )
+            )
+        cfg.planning_module_config_path = planning_cfg
 
         ckpt_path = _resolve_path(model_cfg.get("execution_ckpt", ""))
         self._stats = {}
