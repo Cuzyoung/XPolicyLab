@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any, Literal
 
+import cv2
 import numpy as np
 from tqdm import tqdm
 
@@ -28,8 +29,10 @@ DATA_ROOT = PROJECT_ROOT / "data"
 ENV_CFG_ROOT = PROJECT_ROOT / "env_cfg"
 ROBOT_INFO_PATH = ENV_CFG_ROOT / "robot" / "_robot_info.json"
 
-TARGET_IMAGE_WIDTH = 640
-TARGET_IMAGE_HEIGHT = 480
+DEFAULT_IMAGE_WIDTH = 640
+DEFAULT_IMAGE_HEIGHT = 480
+# Common source resolutions: 480x640 (RoboDojo) and 240x320 (RoboTwin).
+SUPPORTED_IMAGE_SIZES = ((480, 640), (240, 320))
 
 
 CAMERA_CANDIDATES = {
@@ -444,7 +447,17 @@ def _pad_state_to_target_dims(array, current_dims, target_dims, name):
 # Images
 # ============================================================
 
-def _decode_images_if_needed(images):
+def _resize_image(image, image_height, image_width):
+    if image.shape[:2] == (image_height, image_width):
+        return image
+    return cv2.resize(
+        image,
+        (image_width, image_height),
+        interpolation=cv2.INTER_LINEAR,
+    )
+
+
+def _decode_images_if_needed(images, image_height, image_width):
 
     frames = np.asarray(decode_image_bit(images))
 
@@ -454,19 +467,87 @@ def _decode_images_if_needed(images):
     if frames.ndim != 4:
         raise ValueError(f"Expected decoded frames with shape [T,H,W,3], got {frames.shape}")
 
-    return frames.astype(np.uint8, copy=False)
+    if frames.dtype != np.uint8:
+        frames = frames.astype(np.uint8)
+
+    if frames.shape[1:3] != (image_height, image_width):
+        frames = np.stack(
+            [_resize_image(frame, image_height, image_width) for frame in frames],
+            axis=0,
+        )
+
+    return frames
 
 
-def _find_camera_array(data, camera_name):
+def _find_camera_array(data, camera_name, image_height, image_width):
 
     for keys in CAMERA_CANDIDATES[camera_name]:
 
         value = _get_nested(data, *keys)
 
         if value is not None:
-            return _decode_images_if_needed(value)
+            return _decode_images_if_needed(value, image_height, image_width)
 
     return None
+
+
+def _probe_raw_image_hw(target_inputs, data_type, data_version):
+    """Return (H, W) from the first readable camera frame, without resizing."""
+    for _, _, _, _, input_files in target_inputs:
+        for input_path in input_files:
+            data = load(
+                str(input_path),
+                data_type=data_type,
+                data_version=data_version,
+            )
+            for camera_name in CAMERA_CANDIDATES:
+                for keys in CAMERA_CANDIDATES[camera_name]:
+                    value = _get_nested(data, *keys)
+                    if value is None:
+                        continue
+                    frames = np.asarray(decode_image_bit(value))
+                    if frames.ndim == 3:
+                        return int(frames.shape[0]), int(frames.shape[1])
+                    if frames.ndim == 4 and frames.shape[0] > 0:
+                        return int(frames.shape[1]), int(frames.shape[2])
+    return DEFAULT_IMAGE_HEIGHT, DEFAULT_IMAGE_WIDTH
+
+
+def _parse_resolution(text: str) -> tuple[int, int]:
+    """Parse '240x320' / '240,320' into (height, width)."""
+    normalized = text.lower().replace(",", "x").replace("*", "x")
+    parts = [p.strip() for p in normalized.split("x") if p.strip()]
+    if len(parts) != 2:
+        raise argparse.ArgumentTypeError(
+            f"resolution must look like HxW (e.g. 240x320), got: {text}"
+        )
+    height, width = int(parts[0]), int(parts[1])
+    if height <= 0 or width <= 0:
+        raise argparse.ArgumentTypeError(f"invalid resolution: {text}")
+    return height, width
+
+
+def _resolve_image_hw(args, target_inputs) -> tuple[int, int]:
+    if args.resolution is not None:
+        image_hw = _parse_resolution(args.resolution)
+    elif args.image_height is not None or args.image_width is not None:
+        if args.image_height is None or args.image_width is None:
+            raise ValueError("Pass both --image_height and --image_width, or use --resolution")
+        image_hw = (args.image_height, args.image_width)
+    else:
+        image_hw = _probe_raw_image_hw(
+            target_inputs,
+            args.data_type,
+            args.data_version,
+        )
+
+    if image_hw not in SUPPORTED_IMAGE_SIZES:
+        supported = ", ".join(f"{h}x{w}" for h, w in SUPPORTED_IMAGE_SIZES)
+        print(
+            f"[warn] Using image size {image_hw[0]}x{image_hw[1]}; "
+            f"commonly tested sizes are: {supported}"
+        )
+    return image_hw
 
 
 # ============================================================
@@ -480,6 +561,8 @@ def create_empty_dataset(
     fps: int,
     mode: Literal["video", "image"] = "video",
     *,
+    image_height: int = DEFAULT_IMAGE_HEIGHT,
+    image_width: int = DEFAULT_IMAGE_WIDTH,
     dataset_config: DatasetConfig = DEFAULT_DATASET_CONFIG,
 ) -> Any:
 
@@ -502,8 +585,8 @@ def create_empty_dataset(
             "dtype": mode,
             "shape": (
                 3,
-                TARGET_IMAGE_HEIGHT,
-                TARGET_IMAGE_WIDTH,
+                image_height,
+                image_width,
             ),
             "names": [
                 "channels",
@@ -572,6 +655,8 @@ def convert_one(
     data_version,
     current_dims,
     target_dims,
+    image_height,
+    image_width,
 ):
 
     data = load(
@@ -615,6 +700,8 @@ def convert_one(
         image_array = _find_camera_array(
             data,
             camera_name,
+            image_height,
+            image_width,
         )
 
         if image_array is not None:
@@ -748,6 +835,25 @@ def main():
         type=int,
         default=200,
     )
+    parser.add_argument(
+        "--resolution",
+        type=str,
+        default=None,
+        help="Target image size as HxW, e.g. 240x320 or 480x640. "
+        "Default: auto-detect from the first source frame.",
+    )
+    parser.add_argument(
+        "--image_height",
+        type=int,
+        default=None,
+        help="Override target image height (use with --image_width).",
+    )
+    parser.add_argument(
+        "--image_width",
+        type=int,
+        default=None,
+        help="Override target image width (use with --image_height).",
+    )
 
     args = parser.parse_args()
 
@@ -766,6 +872,9 @@ def main():
 
     _print_matched_targets(target_inputs)
 
+    image_height, image_width = _resolve_image_hw(args, target_inputs)
+    print(f"Image size: {image_height}x{image_width}")
+
     repo_id = (
         args.repo_id
         or f"unified_{'_'.join(pattern.replace('*', 'all').replace('.', '_') for pattern in args.patterns)}".lower()
@@ -781,6 +890,8 @@ def main():
 
         # IMPORTANT
         mode="video",
+        image_height=image_height,
+        image_width=image_width,
 
         dataset_config=DEFAULT_DATASET_CONFIG,
     )
@@ -847,6 +958,8 @@ def main():
                         args.data_version,
                         current_dims,
                         target_dims,
+                        image_height,
+                        image_width,
                     )
 
                     task_success += 1
