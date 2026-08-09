@@ -329,20 +329,16 @@ class LayerwiseFlowmatchingActionHead(nn.Module):
             else torch.cat((future_tokens, action_features), dim=1)
         )
 
-        # Encode timesteps
-        temb = self.model.timestep_encoder(t_discretized)
+        # Route through DiT.forward so the configured cross/self-attention
+        # interleaving is preserved for layer-wise VLM embeddings.
+        model_output = self.model(
+            hidden_states=sa_embs,
+            encoder_hidden_states=vl_embs_list,
+            timestep=t_discretized,
+            encoder_attention_mask=encoder_attention_mask,
+            return_pre_output=True,
+        )
 
-        # Layerwise cross-attention with vl_embs
-        model_output = sa_embs
-        for layer_idx, layer in enumerate(self.model.transformer_blocks):
-            model_output = layer(
-                hidden_states=model_output,
-                encoder_hidden_states=vl_embs_list[layer_idx],  # Use layer-specific vl_embs
-                encoder_attention_mask=encoder_attention_mask,
-                temb=temb,
-            )
-
-        # TODO miss self att and _process_output, but work well
         pred = self.action_decoder(model_output)
         pred_actions = pred[:, -actions.shape[1] :]
 
@@ -395,19 +391,15 @@ class LayerwiseFlowmatchingActionHead(nn.Module):
                 else torch.cat((future_tokens, action_features), dim=1)
             )
 
-            # Encode timestep
-            temb = self.model.timestep_encoder(timesteps_tensor)
-
-            # Layerwise cross-attention with vl_embs_list
-            model_output = sa_embs
-            for layer_idx, layer in enumerate(self.model.transformer_blocks):
-                model_output = layer(
-                    hidden_states=model_output,
-                    encoder_hidden_states=vl_embs_list[layer_idx],
-                    encoder_attention_mask=encoder_attention_mask,
-                    temb=temb,
-                )
-            # TODO miss self att and _process_output
+            # DiT.forward handles layer-wise conditioning while retaining the
+            # self-attention blocks used when this checkpoint was trained.
+            model_output = self.model(
+                hidden_states=sa_embs,
+                encoder_hidden_states=vl_embs_list,
+                timestep=timesteps_tensor,
+                encoder_attention_mask=encoder_attention_mask,
+                return_pre_output=True,
+            )
             pred = self.action_decoder(model_output)
             pred_velocity = pred[:, -self.action_horizon :]
 
