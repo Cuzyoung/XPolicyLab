@@ -345,6 +345,12 @@ class RoboDojoArgumentParsingTest(unittest.TestCase):
         self.assertIn("check_isaac_runtime.py", entrypoint)
         self.assertIn("check_isaac_runtime.py", helper)
 
+    def test_released_eval_preflights_official_robodojo_assets(self):
+        entrypoint = (POLICY_DIR / "eval_hf_robodojo.sh").read_text(encoding="utf-8")
+        self.assertIn("Assets/Robots/x5/robot_config.yml", entrypoint)
+        self.assertIn("Assets/Eval_Layout/RoboDojo", entrypoint)
+        self.assertIn("bash scripts/init_assets.sh", entrypoint)
+
     def test_released_eval_defaults_to_one_sequential_isaac_environment(self):
         helper = (POLICY_DIR / "tools" / "run_hf_robodojo_env_client.sh").read_text(
             encoding="utf-8"

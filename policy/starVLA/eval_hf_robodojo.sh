@@ -96,6 +96,26 @@ if [[ ! -f "${BENCH_ROOT}/scripts/robodojo.sh" ]]; then
     exit 1
 fi
 
+required_asset_paths=(
+    "Assets/Robots/x5/robot_config.yml"
+    "Assets/Object/RoboDojo"
+    "Assets/Eval_Layout/RoboDojo"
+    "Assets/Material"
+)
+missing_asset_paths=()
+for asset_path in "${required_asset_paths[@]}"; do
+    if [[ ! -e "${BENCH_ROOT}/${asset_path}" ]]; then
+        missing_asset_paths+=("${asset_path}")
+    fi
+done
+if (( ${#missing_asset_paths[@]} > 0 )); then
+    echo "[starVLA HF][ERROR] RoboDojo's official benchmark assets are incomplete:" >&2
+    printf '[starVLA HF][ERROR]   %s\n' "${missing_asset_paths[@]}" >&2
+    echo "[starVLA HF][ERROR] Run this once from the RoboDojo root:" >&2
+    echo "[starVLA HF][ERROR]   bash scripts/init_assets.sh" >&2
+    exit 1
+fi
+
 if [[ "${eval_env_ref}" == */* && ! -x "${eval_env_ref}/bin/python" ]]; then
     echo "[starVLA HF][ERROR] RoboDojo sim environment is not a valid environment prefix: ${eval_env_ref}" >&2
     echo "[starVLA HF][ERROR] Pass a Conda environment name or a prefix containing bin/python, not the RoboDojo source directory." >&2
