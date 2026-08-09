@@ -58,7 +58,22 @@ class PolicyServerWrapper:
 
         # action_chunk_size = future_action_window_size + 1 (matches old client).
         action_model_cfg = model_cfg["framework"]["action_model"]
-        
+        self._framework_name = str(model_cfg["framework"]["name"])
+        self._pi_v3_forward = None
+        diffusion_model_cfg = action_model_cfg.get("diffusion_model_cfg", {})
+        requests_interleaved_forward = bool(
+            diffusion_model_cfg.get("interleave_self_attention", False)
+        )
+        if self._framework_name == "QwenPI_v3" and requests_interleaved_forward:
+            action_dit = getattr(getattr(framework, "action_model", None), "model", None)
+            action_dit_cfg = getattr(action_dit, "config", None)
+            uses_canonical_forward = bool(
+                getattr(action_dit_cfg, "use_canonical_forward", False)
+            )
+            self._pi_v3_forward = (
+                "canonical_interleaved" if uses_canonical_forward else "legacy_all_cross"
+            )
+
         if "action_horizon" in action_model_cfg:
             self._action_chunk_size = int(action_model_cfg["action_horizon"])
         elif "future_action_window_size" in action_model_cfg:
@@ -72,6 +87,7 @@ class PolicyServerWrapper:
         # ckpts clients must pass unnorm_key per request.
         self._default_unnorm_key = unnorm_key
         self._norm_processors: Dict[str, PolicyNormProcessor] = {}
+        self._logged_state_contract = False
 
         # Peek at available keys without building a full processor.
         _, _ns = read_mode_config(self._ckpt_path)
@@ -112,6 +128,7 @@ class PolicyServerWrapper:
         base = {
             "env": "starvla_policy_server",
             "ckpt_path": self._ckpt_path,
+            "framework": self._framework_name,
             "action_chunk_size": self._action_chunk_size,
             "available_unnorm_keys": self._available_unnorm_keys,
             "default_unnorm_key": self._default_unnorm_key,
@@ -121,17 +138,44 @@ class PolicyServerWrapper:
             proc = self._get_processor(self._default_unnorm_key)
             base["action_keys"] = proc.action_keys
             base["state_keys"] = proc.state_keys
+            base["runtime_contract"] = {
+                "version": 1,
+                "image_color_order": "rgb",
+                "state_input": "raw_env",
+                "state_normalization": "training_transform",
+                "action_output": "unnormalized_env",
+                "action_dim": proc.action_dim,
+                "state_dim": proc.state_dim,
+            }
+            if self._pi_v3_forward is not None:
+                base["runtime_contract"]["pi_v3_forward"] = self._pi_v3_forward
         return base
 
-    @staticmethod
     def _normalize_example_states(
+        self,
         examples: List[dict], proc: PolicyNormProcessor
     ) -> List[dict]:
         normalized_examples = []
         for example in examples:
             normalized = dict(example)
             if "state" in normalized and normalized["state"] is not None:
-                normalized["state"] = proc.apply_state(normalized["state"])
+                raw_state = np.asarray(normalized["state"], dtype=np.float32)
+                normalized_state = proc.apply_state(raw_state)
+                normalized["state"] = normalized_state
+                if not self._logged_state_contract:
+                    logging.info(
+                        "StarVLA state contract: unnorm_key=%s raw_shape=%s normalized_shape=%s "
+                        "raw_first=%s normalized_first=%s",
+                        proc.unnorm_key,
+                        raw_state.shape,
+                        np.asarray(normalized_state).shape,
+                        np.array2string(raw_state.reshape(-1, raw_state.shape[-1])[0], precision=5),
+                        np.array2string(
+                            np.asarray(normalized_state).reshape(-1, raw_state.shape[-1])[0],
+                            precision=5,
+                        ),
+                    )
+                    self._logged_state_contract = True
             normalized_examples.append(normalized)
         return normalized_examples
 
