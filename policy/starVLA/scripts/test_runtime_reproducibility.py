@@ -24,7 +24,7 @@ try:
         resolve_include_state,
         validate_server_runtime_contract,
     )
-    from XPolicyLab.policy.starVLA.tools.prepare_hf_checkpoint import (
+    from XPolicyLab.policy.starVLA.scripts.prepare_hf_checkpoint import (
         load_manifest,
         resolve_variant,
         validate_checkpoint_dir,
@@ -314,7 +314,9 @@ class PiV3CanonicalForwardTest(unittest.TestCase):
 
 class RoboDojoArgumentParsingTest(unittest.TestCase):
     def test_released_eval_clears_stale_distributed_training_environment(self):
-        entrypoint = (POLICY_DIR / "eval_hf_robodojo.sh").read_text(encoding="utf-8")
+        entrypoint = (POLICY_DIR / "scripts" / "eval_hf_robodojo.sh").read_text(
+            encoding="utf-8"
+        )
         launcher = (POLICY_DIR / "setup_eval_policy_server.sh").read_text(
             encoding="utf-8"
         )
@@ -338,21 +340,25 @@ class RoboDojoArgumentParsingTest(unittest.TestCase):
         )
 
     def test_released_eval_preflights_isaac_host_libraries(self):
-        entrypoint = (POLICY_DIR / "eval_hf_robodojo.sh").read_text(encoding="utf-8")
-        helper = (POLICY_DIR / "tools" / "run_hf_robodojo_env_client.sh").read_text(
+        entrypoint = (POLICY_DIR / "scripts" / "eval_hf_robodojo.sh").read_text(
+            encoding="utf-8"
+        )
+        helper = (POLICY_DIR / "scripts" / "run_hf_robodojo_env_client.sh").read_text(
             encoding="utf-8"
         )
         self.assertIn("check_isaac_runtime.py", entrypoint)
         self.assertIn("check_isaac_runtime.py", helper)
 
     def test_released_eval_preflights_official_robodojo_assets(self):
-        entrypoint = (POLICY_DIR / "eval_hf_robodojo.sh").read_text(encoding="utf-8")
+        entrypoint = (POLICY_DIR / "scripts" / "eval_hf_robodojo.sh").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("Assets/Robots/x5/robot_config.yml", entrypoint)
         self.assertIn("Assets/Eval_Layout/RoboDojo", entrypoint)
         self.assertIn("bash scripts/init_assets.sh", entrypoint)
 
     def test_released_eval_defaults_to_one_sequential_isaac_environment(self):
-        helper = (POLICY_DIR / "tools" / "run_hf_robodojo_env_client.sh").read_text(
+        helper = (POLICY_DIR / "scripts" / "run_hf_robodojo_env_client.sh").read_text(
             encoding="utf-8"
         )
         self.assertIn('runtime_num_envs="${STARVLA_ROBODOJO_NUM_ENVS:-1}"', helper)
@@ -363,7 +369,7 @@ class RoboDojoArgumentParsingTest(unittest.TestCase):
         self.assertTrue(deploy["eval_batch"])
 
     def test_device_is_not_abbreviated_to_device_id_during_preparse(self):
-        runner = POLICY_DIR / "tools" / "run_robodojo_main.py"
+        runner = POLICY_DIR / "scripts" / "run_robodojo_main.py"
         with tempfile.TemporaryDirectory() as temp_dir:
             target = Path(temp_dir) / "main.py"
             target.write_text(

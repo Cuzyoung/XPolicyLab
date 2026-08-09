@@ -84,6 +84,10 @@ bash eval.sh RoboDojo stack_bowls RoboDojo-stack_bowls-arx_x5-joint-0 arx_x5 joi
 
 ### Released Hugging Face RoboDojo checkpoints
 
+Release-specific launchers, checkpoint preparation, simulator preflights, and
+their reproducibility tests are kept together under `scripts/`. The root-level
+`setup_eval_*` files remain the fixed XPolicyLab policy entry points.
+
 Use the dedicated entry point for the released QwenOFT, QwenGR00T, and QwenPI_v3 checkpoints. It pins the exact Hugging Face revision, preserves the complete run-directory layout, verifies the weight and normalization SHA256 values, and starts the vendored StarVLA server with the published RoboDojo runtime contract:
 
 ```bash
@@ -93,15 +97,15 @@ bash scripts/init_assets.sh
 cd XPolicyLab/policy/starVLA
 
 # Exact seed-0 commands used for the 10-layout checks reported below.
-STARVLA_ROBODOJO_NUM_ENVS=1 bash eval_hf_robodojo.sh oft build_tower 0 0 1 \
+STARVLA_ROBODOJO_NUM_ENVS=1 bash scripts/eval_hf_robodojo.sh oft build_tower 0 0 1 \
   <starvla_env> <robodojo_sim_env> 10
-STARVLA_ROBODOJO_NUM_ENVS=5 bash eval_hf_robodojo.sh groot build_tower 0 0 1 \
+STARVLA_ROBODOJO_NUM_ENVS=5 bash scripts/eval_hf_robodojo.sh groot build_tower 0 0 1 \
   <starvla_env> <robodojo_sim_env> 10
-STARVLA_ROBODOJO_NUM_ENVS=5 bash eval_hf_robodojo.sh pi_v3 build_tower 0 0 1 \
+STARVLA_ROBODOJO_NUM_ENVS=5 bash scripts/eval_hf_robodojo.sh pi_v3 build_tower 0 0 1 \
   <starvla_env> <robodojo_sim_env> 10
 
 # Use `native` for the task's official episode count instead of a quick check.
-bash eval_hf_robodojo.sh pi_v3 build_tower 0 0 1 <starvla_env> <robodojo_sim_env> native
+bash scripts/eval_hf_robodojo.sh pi_v3 build_tower 0 0 1 <starvla_env> <robodojo_sim_env> native
 ```
 
 The pinned releases' official 50-episode `build_tower` references are:
@@ -124,7 +128,7 @@ With the same pinned PI-v3 snapshot, seed, layouts, data contract, and simulator
 
 The 10-episode command is a quick contract check rather than a replacement for the official 50-episode protocol. Near-zero success together with visibly abnormal arm motion should not be accepted as a small-sample fluctuation: inspect the server handshake and first state-contract log described below.
 
-Do **not** start `deployment/model_server/server_policy.py` from a separate or unpinned upstream StarVLA checkout. `eval_hf_robodojo.sh` starts the XPolicyLab vendored server itself. The adapter requires the server handshake to confirm all of the following before the simulator can move the robot:
+Do **not** start `deployment/model_server/server_policy.py` from a separate or unpinned upstream StarVLA checkout. `scripts/eval_hf_robodojo.sh` starts the XPolicyLab vendored server itself. The adapter requires the server handshake to confirm all of the following before the simulator can move the robot:
 
 - images are RGB;
 - the input is raw 14D ARX X5 state and the server applies the checkpoint's q99 training transform exactly once;

@@ -125,7 +125,7 @@ starvla_image_size="${STARVLA_IMAGE_SIZE:-[224,224]}"
 starvla_cpu_threads="${STARVLA_CPU_THREADS:-8}"
 starvla_required_pi_v3_forward="${STARVLA_REQUIRED_PI_V3_FORWARD:-none}"
 
-# Defensive counterpart to eval_hf_robodojo.sh for callers that use the
+# Defensive counterpart to scripts/eval_hf_robodojo.sh for callers that use the
 # generic XPolicyLab launcher directly.  This server is single-process; stale
 # torchrun/MPI variables make StarVLA's DistributedOverwatch wait for peers.
 unset RANK WORLD_SIZE LOCAL_RANK LOCAL_WORLD_SIZE MASTER_ADDR MASTER_PORT
@@ -168,8 +168,8 @@ fi
 # Accept the venv path used by the released StarVLA setup as well as a Conda
 # environment name.  This keeps the documented eval command identical across
 # the two installation styles.
-# shellcheck source=tools/activate_policy_env.sh
-source "${SCRIPT_DIR}/tools/activate_policy_env.sh"
+# shellcheck source=scripts/activate_policy_env.sh
+source "${SCRIPT_DIR}/scripts/activate_policy_env.sh"
 starvla_activate_policy_env "${policy_conda_env}"
 
 (

@@ -4,11 +4,11 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  bash eval_hf_robodojo.sh <oft|groot|pi_v3> <task_name> <seed> <policy_gpu> <env_gpu> \
+  bash scripts/eval_hf_robodojo.sh <oft|groot|pi_v3> <task_name> <seed> <policy_gpu> <env_gpu> \
     <starvla_env> <robodojo_sim_env> [eval_num|native]
 
 Example (10-episode build_tower verification):
-  bash eval_hf_robodojo.sh oft build_tower 0 0 1 /path/to/starvla-env /path/to/robodojo-env 10
+  bash scripts/eval_hf_robodojo.sh oft build_tower 0 0 1 /path/to/starvla-env /path/to/robodojo-env 10
 
 The script downloads the pinned Hugging Face snapshot, verifies its framework,
 normalization files, size and SHA256, then starts the vendored XPolicyLab
@@ -85,9 +85,10 @@ if (( ${#stale_distributed_env_vars[@]} > 0 )); then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-XPL_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+POLICY_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+XPL_ROOT="$(cd "${POLICY_DIR}/../.." && pwd)"
 BENCH_ROOT="$(cd "${XPL_ROOT}/.." && pwd)"
-hf_root="${STARVLA_HF_ROOT:-${SCRIPT_DIR}/checkpoints/huggingface}"
+hf_root="${STARVLA_HF_ROOT:-${POLICY_DIR}/checkpoints/huggingface}"
 run_dir="${hf_root}/${variant}"
 
 if [[ ! -f "${BENCH_ROOT}/scripts/robodojo.sh" ]]; then
@@ -126,7 +127,7 @@ fi
 # loading the 10 GB policy checkpoint.  Conda-name environments are checked by
 # the client helper immediately after activation.
 if [[ -x "${eval_env_ref}/bin/python" ]]; then
-    "${eval_env_ref}/bin/python" "${SCRIPT_DIR}/tools/check_isaac_runtime.py"
+    "${eval_env_ref}/bin/python" "${SCRIPT_DIR}/check_isaac_runtime.py"
     export STARVLA_ISAAC_RUNTIME_PREFLIGHTED=1
 fi
 
@@ -152,11 +153,11 @@ echo "[starVLA HF] preparing variant=${variant}, task=${task_name}, eval_num=${e
 # XPolicyLab's sim-client bootstrap reads deploy.yml with `python` before it
 # activates the RoboDojo Conda environment, so a path-only venv must remain on
 # PATH until that hand-off.
-# shellcheck source=tools/activate_policy_env.sh
-source "${SCRIPT_DIR}/tools/activate_policy_env.sh"
+# shellcheck source=activate_policy_env.sh
+source "${SCRIPT_DIR}/activate_policy_env.sh"
 starvla_activate_policy_env "${policy_env_ref}"
 checkpoint_path="$(
-    "${STARVLA_POLICY_PYTHON}" "${SCRIPT_DIR}/tools/prepare_hf_checkpoint.py" "${prepare_args[@]}" \
+    "${STARVLA_POLICY_PYTHON}" "${SCRIPT_DIR}/prepare_hf_checkpoint.py" "${prepare_args[@]}" \
         | tail -n 1
 )"
 
@@ -184,7 +185,7 @@ echo "[starVLA HF] checkpoint: ${STARVLA_CKPT_PATH}"
 
 robodojo_args=(
     eval
-    --policy-dir "${SCRIPT_DIR}"
+    --policy-dir "${POLICY_DIR}"
     --task "${task_name}"
     --ckpt "${ckpt_label}"
     --env-cfg arx_x5
