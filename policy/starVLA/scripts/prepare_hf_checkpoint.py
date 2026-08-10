@@ -20,7 +20,7 @@ import yaml
 
 
 POLICY_DIR = Path(__file__).resolve().parents[1]
-DEFAULT_MANIFEST = POLICY_DIR / "hf_robodojo_checkpoints.json"
+DEFAULT_MANIFEST = Path(__file__).resolve().parent / "hf_robodojo_checkpoints.json"
 VARIANT_ALIASES = {
     "oft": "oft",
     "qwen_oft": "oft",
