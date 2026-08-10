@@ -28,6 +28,21 @@ yaml_file="${XPL_ROOT}/policy/${policy_name}/deploy.yml"
 
 echo "[CLIENT] policy=${policy_name}, task=${task_name}, ckpt_name=${ckpt_name}, server=${policy_server_host}:${policy_server_port}"
 
+if [[ "${STARVLA_DIRECT_ROBODOJO_CLIENT:-0}" == "1" ]]; then
+    exec bash "${SCRIPT_DIR}/scripts/run_hf_robodojo_env_client.sh" \
+        "${eval_env_conda_env}" \
+        "${policy_server_port}" \
+        "${bench_name}" \
+        "${task_name}" \
+        "${env_cfg_type}" \
+        "${policy_name}" \
+        "${additional_info}" \
+        "${BENCH_ROOT}" \
+        "${seed}" \
+        "${env_gpu_id}" \
+        "${policy_server_host}"
+fi
+
 bash "${UTILS_DIR}/setup_env_client.sh" \
     "${UTILS_DIR}" \
     "${yaml_file}" \

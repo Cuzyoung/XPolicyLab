@@ -13,7 +13,12 @@ from XPolicyLab.utils.process_data import (
     pack_robot_state,
     unpack_robot_state,
 )
-from .runtime_config import resolve_include_state
+from .runtime_config import (
+    parse_bool,
+    resolve_checkpoint_framework,
+    resolve_include_state,
+    validate_server_runtime_contract,
+)
 
 
 _CUR_DIR = Path(__file__).resolve().parent
@@ -117,6 +122,26 @@ class Model(ModelTemplate):
             self.model_cfg.get("include_state", "auto"),
             self.model_cfg.get("checkpoint_path"),
         )
+        self.require_runtime_contract = parse_bool(
+            self.model_cfg.get("require_runtime_contract", True)
+        )
+        if self.require_runtime_contract:
+            expected_framework = resolve_checkpoint_framework(
+                self.model_cfg.get("checkpoint_path")
+            )
+            expected_pi_v3_forward = self.model_cfg.get("required_pi_v3_forward")
+            if expected_pi_v3_forward in (None, "", "auto", "none", "null", "None"):
+                expected_pi_v3_forward = None
+            else:
+                expected_pi_v3_forward = str(expected_pi_v3_forward)
+            validate_server_runtime_contract(
+                server_meta,
+                include_state=self.include_state,
+                action_dim=self.action_dim,
+                unnorm_key=self.unnorm_key,
+                expected_framework=expected_framework,
+                expected_pi_v3_forward=expected_pi_v3_forward,
+            )
 
         self.obs_by_env: dict[int, dict[str, Any]] = {}
         self.action_chunks_by_env: dict[int, np.ndarray] = {}

@@ -96,7 +96,25 @@ if [[ ! -f "${checkpoint_path}" ]]; then
     echo "[SERVER][ERROR]   ${local_run_dir}/checkpoints/" >&2
     exit 1
 fi
-checkpoint_path="$(realpath "${checkpoint_path}")"
+# Keep the final checkpoint symlink unresolved. Hugging Face snapshots place
+# the weight under <snapshot>/checkpoints/ as a symlink into the blob cache;
+# resolving that symlink loses the adjacent config YAML and normalization
+# statistics that StarVLA intentionally reads from <snapshot>/.
+checkpoint_parent="$(cd -L "$(dirname "${checkpoint_path}")" && pwd -L)"
+checkpoint_path="${checkpoint_parent}/$(basename "${checkpoint_path}")"
+checkpoint_parent_name="$(basename "${checkpoint_parent}")"
+if [[ "${checkpoint_parent_name}" == "checkpoints" || "${checkpoint_parent_name}" == "final_model" ]]; then
+    checkpoint_run_dir="$(dirname "${checkpoint_parent}")"
+else
+    checkpoint_run_dir="${checkpoint_parent}"
+fi
+for sidecar in config.yaml config.full.yaml dataset_statistics.json; do
+    if [[ ! -f "${checkpoint_run_dir}/${sidecar}" ]]; then
+        echo "[SERVER][ERROR] missing checkpoint sidecar: ${checkpoint_run_dir}/${sidecar}" >&2
+        echo "[SERVER][ERROR] keep the complete Hugging Face run-directory layout; do not pass a blob-cache path" >&2
+        exit 1
+    fi
+done
 echo "[SERVER] resolved StarVLA checkpoint: ${checkpoint_path}"
 starvla_server_port=$(bash "${UTILS_DIR}/get_free_port.sh")
 starvla_server_host="127.0.0.1"
@@ -104,6 +122,32 @@ starvla_include_state="${STARVLA_INCLUDE_STATE:-auto}"
 starvla_unnorm_key="${STARVLA_UNNORM_KEY:-arx_x5}"
 starvla_execute_horizon="${STARVLA_EXECUTE_HORIZON:-16}"
 starvla_image_size="${STARVLA_IMAGE_SIZE:-[224,224]}"
+starvla_cpu_threads="${STARVLA_CPU_THREADS:-8}"
+starvla_required_pi_v3_forward="${STARVLA_REQUIRED_PI_V3_FORWARD:-none}"
+
+# Defensive counterpart to scripts/eval_hf_robodojo.sh for callers that use the
+# generic XPolicyLab launcher directly.  This server is single-process; stale
+# torchrun/MPI variables make StarVLA's DistributedOverwatch wait for peers.
+unset RANK WORLD_SIZE LOCAL_RANK LOCAL_WORLD_SIZE MASTER_ADDR MASTER_PORT
+unset GROUP_RANK ROLE_RANK ROLE_NAME TORCHELASTIC_RUN_ID TORCHELASTIC_RESTART_COUNT
+unset PMI_RANK PMI_SIZE MPI_LOCALRANKID MPI_LOCALNRANKS
+unset OMPI_COMM_WORLD_RANK OMPI_COMM_WORLD_SIZE
+unset OMPI_COMM_WORLD_LOCAL_RANK OMPI_COMM_WORLD_LOCAL_SIZE
+unset MV2_COMM_WORLD_RANK MV2_COMM_WORLD_SIZE
+unset MV2_COMM_WORLD_LOCAL_RANK MV2_COMM_WORLD_LOCAL_SIZE
+
+if ! [[ "${starvla_cpu_threads}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[SERVER][ERROR] STARVLA_CPU_THREADS must be a positive integer: ${starvla_cpu_threads}" >&2
+    exit 2
+fi
+
+# Accelerate otherwise chooses half of all visible host CPUs for each Python
+# process.  On large shared nodes the StarVLA websocket server and the XPolicy
+# adapter import concurrently, and that default can turn a ~30 s PI-v3 import
+# into a policy-server timeout.  Respect explicit BLAS settings, with a modest
+# reproducible fallback for evaluation.
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-${starvla_cpu_threads}}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-${starvla_cpu_threads}}"
 
 cleanup() {
     if [[ -n "${STARVLA_SERVER_PID:-}" ]]; then
@@ -115,15 +159,24 @@ trap cleanup EXIT
 
 echo "[SERVER] policy=${policy_name}, task=${task_name}, policy_server_port=${policy_server_port}, starvla_port=${starvla_server_port}"
 echo "[SERVER] starVLA overrides: include_state=${starvla_include_state}, unnorm_key=${starvla_unnorm_key}, execute_horizon=${starvla_execute_horizon}, image_size=${starvla_image_size}"
+echo "[SERVER] required PI-v3 forward: ${starvla_required_pi_v3_forward}"
+echo "[SERVER] CPU thread limits: OMP_NUM_THREADS=${OMP_NUM_THREADS}, MKL_NUM_THREADS=${MKL_NUM_THREADS}"
+if [[ -n "${STARVLA_BASE_VLM:-}" ]]; then
+    echo "[SERVER] StarVLA base VLM override: ${STARVLA_BASE_VLM}"
+fi
 
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate "${policy_conda_env}"
+# Accept the venv path used by the released StarVLA setup as well as a Conda
+# environment name.  This keeps the documented eval command identical across
+# the two installation styles.
+# shellcheck source=scripts/activate_policy_env.sh
+source "${SCRIPT_DIR}/scripts/activate_policy_env.sh"
+starvla_activate_policy_env "${policy_conda_env}"
 
 (
     cd "${STARVLA_ROOT}"
     PYTHONPATH="${STARVLA_ROOT}:${PYTHONPATH:-}" \
     CUDA_VISIBLE_DEVICES="${policy_gpu_id}" \
-    python "${STARVLA_ROOT}/deployment/model_server/server_policy.py" \
+    "${STARVLA_POLICY_PYTHON}" "${STARVLA_ROOT}/deployment/model_server/server_policy.py" \
         --ckpt_path "${checkpoint_path}" \
         --port "${starvla_server_port}" \
         --use_bf16
@@ -135,7 +188,7 @@ sleep 6
 PYTHONPATH="${STARVLA_ROOT}:${PYTHONPATH:-}" \
 PYTHONWARNINGS=ignore::UserWarning \
 CUDA_VISIBLE_DEVICES="${policy_gpu_id}" \
-python "${XPL_ROOT}/setup_policy_server.py" \
+"${STARVLA_POLICY_PYTHON}" "${XPL_ROOT}/setup_policy_server.py" \
     --config_path "${yaml_file}" \
     --overrides \
         port="${policy_server_port}" \
@@ -153,6 +206,7 @@ python "${XPL_ROOT}/setup_policy_server.py" \
         unnorm_key="${starvla_unnorm_key}" \
         execute_horizon="${starvla_execute_horizon}" \
         image_size="${starvla_image_size}" \
+        required_pi_v3_forward="${starvla_required_pi_v3_forward}" \
         starvla_root="${STARVLA_ROOT}" \
         starvla_server_host="${starvla_server_host}" \
         starvla_server_port="${starvla_server_port}"

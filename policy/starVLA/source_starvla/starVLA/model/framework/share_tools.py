@@ -77,6 +77,24 @@ def dict_to_namespace(d):
     return OmegaConf.create(d)
 
 
+def _apply_runtime_base_vlm_override(global_cfg: dict) -> dict:
+    """Apply an explicit local/HF base-VLM override without editing checkpoint YAML."""
+
+    override = os.environ.get("STARVLA_BASE_VLM")
+    if not override:
+        return global_cfg
+    framework = global_cfg.setdefault("framework", {})
+    qwenvl = framework.setdefault("qwenvl", {})
+    original = qwenvl.get("base_vlm")
+    qwenvl["base_vlm"] = override
+    overwatch.info(
+        "Using STARVLA_BASE_VLM runtime override: %r -> %r",
+        original,
+        override,
+    )
+    return global_cfg
+
+
 def _to_omegaconf(x: Any):
     """
     Convert diverse input types into an OmegaConf object.
@@ -345,6 +363,8 @@ def read_model_config(pretrained_checkpoint):
         except Exception as e:
             overwatch.warning(f"apply_config_compat failed on `{config_json}`: {e}")
 
+        global_cfg = _apply_runtime_base_vlm_override(global_cfg)
+
         # Load Dataset Statistics for Action Denormalization
         with open(dataset_statistics_json, "r") as f:
             norm_stats = json.load(f)
@@ -389,6 +409,8 @@ def read_mode_config(pretrained_checkpoint):
         except Exception as e:
             overwatch.error(f"❌ Failed to load YAML config `{config_yaml}`: {e}")
             raise
+
+        global_cfg = _apply_runtime_base_vlm_override(global_cfg)
 
         # Load Dataset Statistics for Action Denormalization
         with open(dataset_statistics_json, "r") as f:

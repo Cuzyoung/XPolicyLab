@@ -343,6 +343,14 @@ class PolicyNormProcessor:
         return list(self._norm_stats.keys())
 
     @property
+    def action_dim(self) -> int:
+        return sum(self._action_key_dims.values())
+
+    @property
+    def state_dim(self) -> int:
+        return sum(self._state_key_dims.values())
+
+    @property
     def transform(self) -> ComposedModalityTransform:
         return self._transform
 
