@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 XPL_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+G05_ROOT="${G05_ROOT:-${SCRIPT_DIR}/G05}"
 
 PYTHON_BIN="${G05_PYTHON:-$(command -v python3)}"
 
@@ -13,20 +14,23 @@ fi
 
 echo "[G05 install] python=${PYTHON_BIN}"
 echo "[G05 install] xpolicylab=${XPL_ROOT}"
+echo "[G05 install] g05_root=${G05_ROOT}"
 
 "${PYTHON_BIN}" -m pip install -U pip
 "${PYTHON_BIN}" -m pip install -e "${XPL_ROOT}"
+if [[ -f "${G05_ROOT}/pyproject.toml" ]]; then
+  "${PYTHON_BIN}" -m pip install -e "${G05_ROOT}"
+fi
 
 cat <<'EOF'
 
-G05 adapter-side XPolicyLab dependencies are installed.
+G05 adapter-side dependencies are installed.
 
 Before running evaluation, set:
 
-  export G05_ROOT=/path/to/G05_checkout
   export G05_PYTHON=/path/to/python
   export G05_CKPT_PATH=/path/to/extracted/g05/checkpoint
 
-G05_ROOT/G05_PYTHON must point to a G05 runtime environment that can import the
-G05 model code and its dependencies.
+The vendored G05 checkout under policy/G05/G05 is used by default. Override
+G05_ROOT only if you want to use another compatible G05 checkout.
 EOF

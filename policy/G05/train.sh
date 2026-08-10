@@ -15,17 +15,13 @@ if [[ "${action_type}" != "joint" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-G05_ROOT="${G05_ROOT:-}"
+G05_ROOT="${G05_ROOT:-${SCRIPT_DIR}/G05}"
 PYTHON_BIN="${G05_PYTHON:-$(command -v python3)}"
 OUTPUT_ROOT="${G05_OUTPUT_ROOT:-${SCRIPT_DIR}/checkpoints}"
 export G05_OUTPUT_DIR="${G05_OUTPUT_DIR:-${OUTPUT_ROOT}}"
 export EXP_NAME="${EXP_NAME:-${bench_name}-${ckpt_name}-${env_cfg_type}-${action_type}-${seed}}"
 export PYTHON_BIN
 
-if [[ -z "${G05_ROOT}" ]]; then
-  echo "Set G05_ROOT to a G05 checkout before launching training." >&2
-  exit 3
-fi
 if [[ ! -d "${G05_ROOT}" ]]; then
   echo "G05_ROOT does not exist: ${G05_ROOT}" >&2
   exit 3
@@ -39,7 +35,6 @@ case "${G05_TRAIN_BENCHMARK:-}" in
   "")
     case "${bench_name}" in
       RoboDojo|robodojo) train_benchmark="robodojo" ;;
-      RoboDojoReal|robodojo_real|RoboDojo-real) train_benchmark="robodojo_real" ;;
       *) train_benchmark="${bench_name}" ;;
     esac
     ;;
@@ -53,20 +48,22 @@ case "${G05_TRAIN_MODE:-${ckpt_name}}" in
   *) train_mode="${G05_TRAIN_MODE:-ar_fm}" ;;
 esac
 
-case "${train_benchmark}" in
-  robodojo)
-    if [[ -z "${ROBODOJO_LEROBOT_V30_ROOT:-}" ]]; then
-      echo "Set ROBODOJO_LEROBOT_V30_ROOT to the RoboDojo LeRobot v3.0 dataset path." >&2
-      exit 3
-    fi
-    ;;
-  robodojo_real)
-    if [[ -z "${ROBODOJO_REAL_ROOT:-}" ]]; then
-      echo "Set ROBODOJO_REAL_ROOT to the RoboDojo-real dataset path." >&2
-      exit 3
-    fi
-    ;;
-esac
+if [[ "${train_benchmark}" != "robodojo" ]]; then
+  echo "This released G05 adapter documents RoboDojo simulator training only." >&2
+  echo "Set G05_TRAIN_BENCHMARK=robodojo, or use a compatible external G05 checkout via G05_ROOT." >&2
+  exit 2
+fi
+
+if [[ -z "${ROBODOJO_LEROBOT_V30_ROOT:-}" ]]; then
+  echo "Set ROBODOJO_LEROBOT_V30_ROOT to the RoboDojo LeRobot v3.0 dataset path." >&2
+  exit 3
+fi
+for required in meta data videos; do
+  if [[ ! -e "${ROBODOJO_LEROBOT_V30_ROOT}/${required}" ]]; then
+    echo "Invalid ROBODOJO_LEROBOT_V30_ROOT: missing ${required}/ under ${ROBODOJO_LEROBOT_V30_ROOT}" >&2
+    exit 3
+  fi
+done
 
 if [[ "${gpu_id}" == *","* ]]; then
   IFS=',' read -r -a _gpus <<< "${gpu_id}"
@@ -87,27 +84,68 @@ fi
 
 cd "${G05_ROOT}"
 
-if [[ -x scripts/run/finetune_benchmark.sh ]]; then
-  args=(
-    "${train_benchmark}"
-    "${train_mode}"
-    "seed=${seed}"
-    "model.batch_size=${G05_BATCH_SIZE:-8}"
-    "model.grad_accumulation_steps=${G05_GRAD_ACCUM:-1}"
-  )
-  if [[ -n "${G05_GLOBAL_BATCH_SIZE:-}" ]]; then
-    args+=("trainer.global_batch_size=${G05_GLOBAL_BATCH_SIZE}")
-  fi
-  exec bash scripts/run/finetune_benchmark.sh "${args[@]}" "$@"
+schedule_overrides=()
+has_schedule_override=0
+for arg in "$@"; do
+  case "${arg}" in
+    model.max_steps=*|model.max_epochs=*) has_schedule_override=1 ;;
+  esac
+done
+if [[ -n "${G05_MAX_STEPS:-}" ]]; then
+  schedule_overrides+=("model.max_steps=${G05_MAX_STEPS}" "model.max_epochs=null")
+  has_schedule_override=1
+fi
+if [[ -n "${G05_MAX_EPOCHS:-}" ]]; then
+  schedule_overrides+=("model.max_epochs=${G05_MAX_EPOCHS}" "model.max_steps=null")
+  has_schedule_override=1
+fi
+if [[ "${has_schedule_override}" != "1" ]]; then
+  echo "Set G05_MAX_STEPS/G05_MAX_EPOCHS or pass model.max_steps=... / model.max_epochs=... ." >&2
+  exit 3
 fi
 
-TASK_CONFIG="${G05_TASK_CONFIG:-robodojo_arx_x5_joint}"
+case "${train_mode}" in
+  fm_only)
+    action_overrides=(
+      "model.model_arch.discrete_action=false"
+      "model.model_arch.continuous_action=true"
+      "model.model_arch.fm.joint_training=false"
+      "model.model_arch.ar.ce_weight=0.0"
+    )
+    ;;
+  ar_only)
+    action_overrides=(
+      "model.model_arch.discrete_action=true"
+      "model.model_arch.continuous_action=false"
+      "model.model_arch.fm.joint_training=false"
+      "model.model_arch.fm.fm_weight=0.0"
+      "model.model_arch.ar.ce_weight=1.0"
+    )
+    ;;
+  ar_fm)
+    action_overrides=(
+      "model.model_arch.discrete_action=true"
+      "model.model_arch.continuous_action=true"
+      "model.model_arch.fm.joint_training=true"
+      "model.model_arch.fm.fm_weight=1.0"
+      "model.model_arch.ar.ce_weight=1.0"
+    )
+    ;;
+  *)
+    echo "Unsupported G05_TRAIN_MODE=${train_mode}" >&2
+    exit 2
+    ;;
+esac
+
 exec bash scripts/run/finetune.sh \
   "${num_gpus}" \
-  "${TASK_CONFIG}" \
+  "${G05_TASK_CONFIG:-robodojo_arx_x5_joint}" \
   "seed=${seed}" \
+  "exp_name=${EXP_NAME}" \
   "logger.mode=${G05_LOGGER_MODE:-online}" \
   "logger.project=${WANDB_PROJECT}" \
   "model.batch_size=${G05_BATCH_SIZE:-8}" \
   "model.grad_accumulation_steps=${G05_GRAD_ACCUM:-1}" \
+  "${schedule_overrides[@]}" \
+  "${action_overrides[@]}" \
   "$@"
