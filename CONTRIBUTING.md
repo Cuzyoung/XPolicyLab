@@ -2,7 +2,7 @@
 
 This page is the submission standard for `policy/<POLICY>/` adapters: what a complete adapter contains, how to test it, and what a PR must include. For repo-wide concepts and workflows, see the [README](README.md).
 
-In Cursor, the bundled Agent Skills automate most of this: `xpolicylab-model-integration` builds an adapter, `xpolicylab-adapter-check` audits one before a PR.
+Two bundled Agent Skills automate most of this: `xpolicylab-model-integration` builds an adapter, `xpolicylab-adapter-check` audits one before a PR. They live in `.agents/skills/`, which `.cursor/skills` and `.claude/skills` symlink to, so Cursor, Claude Code and Codex all pick them up. [AGENTS.md](AGENTS.md) distills this page into the always-on rules every agent must follow; `CLAUDE.md` just imports it.
 
 ## Adapter Standard
 
@@ -40,7 +40,18 @@ Define `class Model(ModelTemplate)` (`from XPolicyLab.model_template import Mode
 | `get_action_batch(env_idx_list=None)` | Batched chunks aligned with active env indices. |
 | `reset()` | Clear model state between episodes. |
 
-Action dictionaries use the standard keys (`left_arm_joint_state`, `right_ee_joint_state`, `ee_pose`, ...) with dimensions taken from `get_robot_action_dim_info(env_cfg_type)` in `XPolicyLab.utils.process_data` — never hard-coded. Register new robots in `utils/robot/_robot_info.json`. Observation and trajectory formats: README, [Standard Data Formats](README.md#-standard-data-formats).
+Action dictionaries use the standard keys (`left_arm_joint_state`, `right_ee_joint_state`, `ee_pose`, ...) with dimensions taken from `get_robot_action_dim_info(env_cfg_type)` in `XPolicyLab.utils.process_data` — never hard-coded, and never through a private re-implementation of the lookup. `env_cfg/` lives in the parent workspace, outside this checkout, so an adapter that assembles that path itself gets it wrong. Observation and trajectory formats: README, [Standard Data Formats](README.md#-standard-data-formats).
+
+A new robot must be registered in **both** robot-info files, or training and evaluation will disagree about action dimensions:
+
+| File | Read by | Keyed by |
+| --- | --- | --- |
+| `<parent>/env_cfg/robot/_robot_info.json` | `get_robot_action_dim_info()` and `get_action_dim()` in `XPolicyLab.utils.process_data` — runtime and offline conversion | robot name, from `config.robot` in `<parent>/env_cfg/<env_cfg_type>.yml` |
+| `utils/robot/_robot_info.json` | `utils/get_action_dim.sh`, called by `train.sh` | `env_cfg_type` |
+
+Two entry points share the name `get_action_dim`, and they do **not** read the same file. Runtime and conversion code imports `get_action_dim` (or `get_robot_action_dim_info`) from `XPolicyLab.utils.process_data`. The training path — `train.sh`, or a Python training entry it invokes — uses `utils/get_action_dim.sh` instead: it delivers the value as a shell variable, runs on stdlib `json` alone (importing the Python module pulls in numpy, cv2, h5py and yaml), and works in a standalone checkout that has no outer `env_cfg/` tree.
+
+Two more shared entry points, so adapters do not re-derive them: the importable root in `policy/<POLICY>/model.py` is `Path(__file__).resolve().parents[2]` (the parent of this checkout — `parents[1]` or `parents[3]` is a bug), and checkpoint directories resolve through `XPolicyLab.utils.checkpoint_resolver` (`resolve_checkpoint_root`, or `build_run_dir_name` / `candidate_checkpoint_roots` when the adapter adds its own naming layer).
 
 `model.py` never decodes images. The policy server decodes every observation it forwards, so `obs["vision"][<camera>]["color"]` is always a plain image array. This holds for `update_obs` / `update_obs_batch` and for any custom RPC a policy exposes that carries an observation, so an adapter with its own deploy loop still must not decode.
 
@@ -66,6 +77,8 @@ action_type: null
 gpu_id: null
 eval_batch: false
 ```
+
+All of these are required except `ckpt_name` and `gpu_id`, which the setup scripts supply per run. Keep a key even when a script already defaults it, and document model-specific extra keys in the policy README.
 
 ### Scripts
 
@@ -129,7 +142,8 @@ GitHub pre-fills this from [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUE
 ## Components
 - [ ] install.sh
 - [ ] model.py (+ __init__.py)
-- [ ] deploy.yml (protocol: ws, policy_name matches the directory)
+- [ ] images: RGB end to end, decoding only via decode_image_bit, no channel swaps (see CONTRIBUTING.md)
+- [ ] deploy.yml (standard key set incl. protocol: ws / host / port, policy_name matches the directory)
 - [ ] deploy.py aligned with demo_policy (or divergence explained)
 - [ ] eval.sh + setup_eval_policy_server.sh + setup_eval_env_client.sh
 - [ ] process_data.sh / train.sh (or eval-only, declared above)

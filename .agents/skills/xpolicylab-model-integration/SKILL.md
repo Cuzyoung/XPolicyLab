@@ -21,13 +21,15 @@ Confirm with the user, or state the assumption explicitly in your first reply:
 1. Read `policy/demo_policy/` (`model.py`, `deploy.py`, `deploy.yml`, `eval.sh`, `README.md`), then the upstream model's inference API, dependencies, and checkpoint layout.
 2. Scaffold: `bash scripts/create_policy.sh <POLICY>` (copies `demo_policy`).
 3. Implement `model.py` first (contract below). The policy server imports `XPolicyLab.policy.<POLICY>.model`, so keep the directory importable (`__init__.py`). Put environment setup in `install.sh`; add `process_data.sh` / `train.sh` only if the model supports them.
-4. Keep `deploy.py` aligned with `policy/demo_policy/deploy.py` unless the environment loop truly differs. Put runtime defaults in `deploy.yml` with `protocol: ws`.
+4. Keep `deploy.py` aligned with `policy/demo_policy/deploy.py` unless the environment loop truly differs. Put runtime defaults in `deploy.yml`, keeping the whole key set from `policy/demo_policy/deploy.yml` — `policy_name` (equal to the directory name), `protocol: ws`, `host`, `port`, plus the per-run fields the setup scripts override. Keep a key even where the scripts already default it.
 5. Debug without a simulator, from `policy/<POLICY>/`:
 
    ```bash
    export EVAL_ENV_TYPE=debug
    bash eval.sh RoboDojo stack_bowls <ckpt_name> arx_x5 joint 0 0 0 <policy_env> base
    ```
+
+   `<policy_env>` (arg 9) follows the adapter's own convention — a conda env name, `uv`, or an environment path; `policy/Pi_05`, for example, requires `uv` (see its README). The trailing `base` is the eval-env conda env (arg 10).
 
    Fix import, server-startup, action-key, and shape errors until the loop completes. Run once more with `DEBUG_OBS_ENCODED=1` so the debug client sends encoded camera colors and the server-side decode path is exercised.
 6. Static checks from the repo root: `bash -n policy/<POLICY>/*.sh` and `python -m py_compile policy/<POLICY>/model.py policy/<POLICY>/deploy.py`.
@@ -45,17 +47,20 @@ Define `class Model(ModelTemplate)`, importing `ModelTemplate` from `XPolicyLab.
 | `get_action_batch(env_idx_list=None)` | Batched chunks aligned with active env indices; fall back to the config batch size when `None`. |
 | `reset()` | Clear model state between episodes. |
 
-Action dict keys: dual-arm uses `left_arm_joint_state` / `right_arm_joint_state` plus `left_ee_joint_state` / `right_ee_joint_state`; single-arm drops the `left_` / `right_` prefix; `action_type=ee` replaces `*_arm_joint_state` with `*_ee_pose` as `[x, y, z, qw, qx, qy, qz]`. Take dimensions from `get_robot_action_dim_info(env_cfg_type)` in `XPolicyLab.utils.process_data` — never hard-code them. Register new robots in `utils/robot/_robot_info.json`.
+Action dict keys: dual-arm uses `left_arm_joint_state` / `right_arm_joint_state` plus `left_ee_joint_state` / `right_ee_joint_state`; single-arm drops the `left_` / `right_` prefix; `action_type=ee` replaces `*_arm_joint_state` with `*_ee_pose` as `[x, y, z, qw, qx, qy, qz]`.
+
+Take dimensions from `get_robot_action_dim_info(env_cfg_type)` in `XPolicyLab.utils.process_data`, and register every new robot in **both** robot-info files — `AGENTS.md` at the repo root has the table and explains why the two `get_action_dim` entry points read different files. A private loader is acceptable only when it must run without importing XPolicyLab, and then it needs a configurable root plus a fallback, as `policy/AHA_WAM` does with `env_cfg_root`.
 
 ## Conventions
 
-- **`model.py` must not decode images.** The policy server decodes every observation it forwards — `update_obs` / `update_obs_batch` and any custom RPC that carries one — so `obs["vision"][<camera>]["color"]` is always a plain image array. Adapters only reshape / cast / resize.
-- **Offline code decodes only via `decode_image_bit`** from `XPolicyLab.utils.process_data` — in data-conversion scripts and training dataloaders, never hand-roll `cv2.imdecode` / `np.frombuffer` / PIL decoding. RoboTwin/RoboDojo legacy image-bit layouts are only handled correctly by this function; custom decoders silently decode wrong or fail on part of the data.
-- **A decode returns RGB. This is the conclusion — do not re-derive it from OpenCV conventions.** `decode_image_bit`, `decode_obs_images`, and therefore everything `update_obs` receives are RGB. The familiar "`cv2.imdecode` returns BGR" rule does not apply here: XPolicyLab buffers are encoded from RGB arrays, and `cv2.imencode`/`cv2.imdecode` carry channels through JPEG in the order they were handed in, so the round trip is RGB in, RGB out. Never insert a `COLOR_BGR2RGB` after a decode to "fix" it — that swap is what creates the bug.
+`AGENTS.md` at the repo root states the image, path, and dimension rules that apply to every change; it is always loaded, so follow it rather than re-deriving anything. The three that adapters get wrong most often: `model.py` never decodes (the server already did), offline code decodes only via `decode_image_bit`, and everything is RGB end to end — a `COLOR_BGR2RGB` added after a decode is always a bug, and the only exceptions are medium adapters around `cv2.VideoWriter` / `cv2.VideoCapture` and a documented `deploy.yml` opt-in like `policy/Dexora_1B`'s `input_color_order`.
+
+Adapter-specific conventions on top of those:
+
 - `eval.sh` positional args, same for all adapters: `bench_name task_name ckpt_name env_cfg_type action_type seed policy_gpu_id env_gpu_id policy_env_or_uv_path eval_env_conda_env`.
-- Checkpoints resolve to `checkpoints/<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>-<seed>/`; a full folder name or explicit path also works.
+- **The importable root is `Path(__file__).resolve().parents[2]`** — the parent of the XPolicyLab checkout, since the server imports `XPolicyLab.policy.<POLICY>.model`. `parents[3]` is especially damaging: it silently shadows modules when inserted at `sys.path[0]`.
+- **Resolve checkpoints with `XPolicyLab.utils.checkpoint_resolver`**: `resolve_checkpoint_root(model_cfg, checkpoints_dir)` covers the shared precedence (explicit `deploy.yml` path key, `ckpt_name` as a path, the concatenated run-dir name, then `checkpoints/<ckpt_name>`). Adapters with an extra naming layer build on `build_run_dir_name` / `candidate_checkpoint_roots` instead of starting over. Checkpoints land in `checkpoints/<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>-<seed>/`.
 - Observations carry the language prompt under `instruction` (string; fall back to `instructions`). Poses are `[x, y, z, qw, qx, qy, qz]`.
-- Images are RGB end to end — never add channel swaps in conversion, training, or eval code, and do not let an upstream repo's BGR habits leak in. Two exceptions: medium adapters (`COLOR_RGB2BGR` immediately before `cv2.VideoWriter.write(...)`, `COLOR_BGR2RGB` immediately after `cv2.VideoCapture.read()`), and a deliberate RGB→BGR conversion when the checkpoint was trained on BGR data — that one must be opt-in through a documented `deploy.yml` key defaulting to RGB, as `policy/Dexora_1B` does with `input_color_order`.
 - Trajectory HDF5 files store a singular `instruction` string and camera extrinsics as `extrinsic_matrix`; runtime observations use `extrinsics_matrix`.
 - Full observation/trajectory format trees live in the repo README under "Standard Data Formats".
 
@@ -66,6 +71,7 @@ Action dict keys: dual-arm uses `left_arm_joint_state` / `right_arm_joint_state`
 | `ModuleNotFoundError` for the policy | Missing `policy/<POLICY>/__init__.py`, or `install.sh` did not install into the env passed as `<policy_env>`. |
 | Client retries connect, then gives up | The server crashed during model loading — read the policy-server log, not the client log; model tracebacks are only printed server-side. |
 | Action rejected for wrong keys/dims | Action dict keys must match `action_type` and the arm count; take dims from `get_robot_action_dim_info(env_cfg_type)`. |
+| `FileNotFoundError` on `env_cfg/<type>.yml` or `_robot_info.json` | The adapter built the `env_cfg` path itself and pointed it inside the repo, or the robot is registered in only one of the two robot-info files. |
 | Works plain, fails with `DEBUG_OBS_ENCODED=1` | `model.py` is decoding images itself, or assumes writable arrays — decoded arrays are read-only views, so copy first. |
 | Call times out | Inference is slower than `request_timeout_s` (default 120 s); raise it in `deploy.yml`. |
 

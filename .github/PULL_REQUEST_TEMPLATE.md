@@ -9,7 +9,8 @@
 ## Components
 - [ ] install.sh
 - [ ] model.py (+ __init__.py)
-- [ ] deploy.yml (protocol: ws, policy_name matches the directory)
+- [ ] images: RGB end to end, decoding only via decode_image_bit, no channel swaps (see CONTRIBUTING.md)
+- [ ] deploy.yml (standard key set incl. protocol: ws / host / port, policy_name matches the directory)
 - [ ] deploy.py aligned with demo_policy (or divergence explained)
 - [ ] eval.sh + setup_eval_policy_server.sh + setup_eval_env_client.sh
 - [ ] process_data.sh / train.sh (or eval-only, declared above)

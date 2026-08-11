@@ -1,12 +1,24 @@
 <div align="center">
 
-<img src="assets/logo.png" alt="XPolicyLab"/>
+<h1>XPolicyLab</h1>
 
-<p><strong>XPolicyLab: A unified standard and infrastructure for robot policy development and deployment.</strong></p>
+<p><strong>A Unified Standard and Open Ecosystem for Robot Policy Evaluation and Deployment</strong></p>
+
+<p>
+<a href="https://xpolicylab.github.io/">Website</a> |
+<a href="https://arxiv.org/abs/2608.09892">arXiv</a> |
+<a href="https://github.com/XPolicyLab/XPolicyLab">GitHub</a> |
+<a href="https://robodojo-benchmark.com/LeaderBoard">RoboDojo Leaderboard</a> |
+<a href="https://robotwin-platform.github.io/leaderboard">RoboTwin Leaderboard</a>
+</p>
+
+<img src="assets/teaser.png" alt="XPolicyLab overview" width="100%"/>
+
+<p><em>Connecting N policies to M evaluation environments — from O(N×M) down to O(N+M).</em></p>
 
 </div>
 
-XPolicyLab is the shared layer between policy code and evaluation environments. Keep each model's dependencies, checkpoints, and training recipes under `policy/<POLICY>/`; XPolicyLab handles the parts that are boring but easy to get wrong — serving, observation/action contracts, and eval wiring.
+XPolicyLab is the shared layer between policy code and evaluation environments. Keep each model's dependencies, checkpoints, and training recipes under `policy/<POLICY>/`; XPolicyLab handles the parts that are boring but easy to get wrong — serving, observation/action contracts, and eval wiring. As of August 2026, the ecosystem integrates **42 robot policies** spanning VLA, world-action, imitation-learning, and memory-augmented families, and the same adapters serve RoboTwin, RoboDojo simulation, and standardized real-robot evaluation.
 
 Start here for repo-level concepts and integration steps. For install commands, checkpoint layout, and training details, jump to that policy's README — it is the source of truth for its model.
 
@@ -15,15 +27,14 @@ Start here for repo-level concepts and integration steps. For install commands, 
 - [What XPolicyLab Enables](#-what-xpolicylab-enables)
 - [Supported Benchmarks And Infrastructure](#-supported-benchmarks-and-infrastructure)
 - [Integrated Policies](#-integrated-policies)
-- [Submit Your Policy](#-submit-your-policy)
 - [Framework Overview](#-framework-overview)
-- [Model Integration Guide](#-model-integration-guide)
 - [Quick Start](#-quick-start)
 - [Common Workflow](#-common-workflow)
 - [Deployment Flow](#-deployment-flow)
 - [Standard Data Formats](#-standard-data-formats)
 - [Data And Checkpoints](#-data-and-checkpoints)
-- [Checks](#-checks)
+- [Add Your Own Policy](#-add-your-own-policy)
+- [Citation](#-citation)
 - [Contact](#-contact)
 
 ## 🚀 What XPolicyLab Enables
@@ -36,31 +47,38 @@ Start here for repo-level concepts and integration steps. For install commands, 
 
 ## 🌐 Supported Benchmarks And Infrastructure
 
+XPolicyLab is benchmark-agnostic: any benchmark, simulator, or real-robot setup can plug in as an environment client against the same policy-side interface — one adapter per policy, one client per environment. Two public benchmarks are already integrated, and their official leaderboards are powered by XPolicyLab submissions.
+
+<div align="center">
+<img src="assets/benchmarks.png" alt="Cross-platform evaluation through XPolicyLab" width="100%"/>
+<p><em>Cross-platform evaluation through a shared codebase and standardized serving interface.</em></p>
+</div>
+
 **Benchmarks**
 
-- **[RoboDojo](https://github.com/RoboDojo-Benchmark/RoboDojo)**: simulator-backed evaluation and RoboDojo-format data exports.
-- **[RoboTwin](https://github.com/RoboTwin-Platform/RoboTwin)**: benchmark and data source through policy-specific adapters and conversion scripts.
+- **[RoboDojo](https://github.com/RoboDojo-Benchmark/RoboDojo)**: simulator-backed evaluation and RoboDojo-format data exports. The [RoboDojo Leaderboard](https://robodojo-benchmark.com/LeaderBoard) covers 42 simulation tasks across five capability dimensions (Generalization, Precision, Long-Horizon, Memory, Open) plus 18 real-robot tasks on three bimanual embodiments.
+- **[RoboTwin](https://github.com/RoboTwin-Platform/RoboTwin)**: benchmark and data source through policy-specific adapters and conversion scripts. The [RoboTwin 2.0 Leaderboard](https://robotwin-platform.github.io/leaderboard) covers bimanual manipulation across 50 tasks under clean and randomized settings.
 
 **Infrastructure**
 
-- **[RLinf](https://github.com/RLinf/RLinf)**: infrastructure target for policy development and deployment workflows.
+- **[RLinf](https://github.com/RLinf/RLinf)** *(coming soon)*: infrastructure target for policy development and deployment workflows.
 - **StarVLA**: infrastructure and policy stack; see [policy/starVLA](policy/starVLA/README.md).
 
 ## 🧭 Integrated Policies
 
-Top-level adapters live in `policy/`. Each policy README documents that model's paper/repo link, environment, data format, training entrypoint, and checkpoint layout.
+42 policies are currently integrated, spanning VLA, world-action, imitation-learning, and memory-augmented families. Top-level adapters live in `policy/`; each policy README documents that model's paper/repo link, environment, data format, training entrypoint, and checkpoint layout.
 
 <details>
 <summary>Policy catalog</summary>
 
 **Foundation / VLA / WAM policies**
 
-- [A1](policy/A1/README.md), [AHA_WAM](policy/AHA_WAM/README.md), [Abot_M0](policy/Abot_M0/README.md), [Being_H05](policy/Being_H05/README.md), [Dexbotic_DM0](policy/Dexbotic_DM0/README.md), [Dexora_1B](policy/Dexora_1B/README.md)
-- [DreamZero](policy/DreamZero/README.md), [EventVLA](policy/EventVLA/README.md), [FastWAM](policy/FastWAM/README.md), [GO1](policy/GO1/README.md), [GR00T_N17](policy/GR00T_N17/README.md), [GalaxeaVLA](policy/GalaxeaVLA/README.md)
-- [GigaWorldPolicy](policy/GigaWorldPolicy/README.md), [H_RDT](policy/H_RDT/README.md), [Hy_Embodied_05_VLA](policy/Hy_Embodied_05_VLA/README.md), [InternVLA_A1](policy/InternVLA_A1/README.md), [InternVLA_A1_5](policy/InternVLA_A1_5/README.md), [LDA_1B](policy/LDA_1B/README.md)
-- [LingBot_VA](policy/LingBot_VA/README.md), [LingBot_VLA](policy/LingBot_VLA/README.md), [Mem_0](policy/Mem_0/README.md), [MolmoACT2](policy/MolmoACT2/README.md)
-- [OpenVLA_OFT](policy/OpenVLA_OFT/README.md), [Pi_0](policy/Pi_0/README.md), [Pi_05](policy/Pi_05/README.md), [Pi_0_Fast](policy/Pi_0_Fast/README.md), [RDT_1B](policy/RDT_1B/README.md), [RISE](policy/RISE/README.md)
-- [SmolVLA](policy/SmolVLA/README.md), [Spatial_Forcing](policy/Spatial_Forcing/README.md), [Spirit_v15](policy/Spirit_v15/README.md), [TinyVLA](policy/TinyVLA/README.md), [X_VLA](policy/X_VLA/README.md), [X_WAM](policy/X_WAM/README.md), [Xiaomi_Robotics_0](policy/Xiaomi_Robotics_0/README.md), [Xiaomi_Robotics_1](policy/Xiaomi_Robotics_1/README.md), [starVLA](policy/starVLA/README.md)
+- [A1](policy/A1/README.md), [AHA-WAM](policy/AHA_WAM/README.md), [ABot-M0](policy/Abot_M0/README.md), [Being-H05](policy/Being_H05/README.md), [DM0](policy/Dexbotic_DM0/README.md), [Dexora-1B](policy/Dexora_1B/README.md)
+- [DreamZero](policy/DreamZero/README.md), [EventVLA](policy/EventVLA/README.md), [FastWAM](policy/FastWAM/README.md), [G0](policy/GalaxeaVLA/README.md), [G0.5](policy/G05/README.md), [GO-1](policy/GO1/README.md), [GR00T-N1.7](policy/GR00T_N17/README.md)
+- [GigaWorld-Policy](policy/GigaWorldPolicy/README.md), [H-RDT](policy/H_RDT/README.md), [Hy-Embodied-0.5-VLA](policy/Hy_Embodied_05_VLA/README.md), [InternVLA-A1](policy/InternVLA_A1/README.md), [InternVLA-A1.5](policy/InternVLA_A1_5/README.md), [LDA-1B](policy/LDA_1B/README.md)
+- [LingBot-VA](policy/LingBot_VA/README.md), [LingBot-VLA](policy/LingBot_VLA/README.md), [Mem-0](policy/Mem_0/README.md), [MolmoAct2](policy/MolmoACT2/README.md)
+- [OpenVLA-OFT](policy/OpenVLA_OFT/README.md), [π0](policy/Pi_0/README.md), [π0.5](policy/Pi_05/README.md), [π0-Fast](policy/Pi_0_Fast/README.md), [RDT-1B](policy/RDT_1B/README.md), [RISE](policy/RISE/README.md)
+- [SmolVLA](policy/SmolVLA/README.md), [Spatial Forcing](policy/Spatial_Forcing/README.md), [Spirit v1.5](policy/Spirit_v15/README.md), [TinyVLA](policy/TinyVLA/README.md), [X-VLA](policy/X_VLA/README.md), [X-WAM](policy/X_WAM/README.md), [Xiaomi-Robotics-0](policy/Xiaomi_Robotics_0/README.md), [Xiaomi-Robotics-1 (XR-1)](policy/Xiaomi_Robotics_1/README.md), [StarVLA](policy/starVLA/README.md)
 
 **Baselines and examples**
 
@@ -68,20 +86,16 @@ Top-level adapters live in `policy/`. Each policy README documents that model's 
 
 </details>
 
-## 📤 Submit Your Policy
-
-Community policies are welcome — open a PR that adds `policy/<POLICY>/`. A PR is also **required** to enter the official [RoboDojo](https://robodojo-benchmark.com/LeaderBoard) and [RoboTwin](https://robotwin-platform.github.io/leaderboard) leaderboards, together with the checkpoint that reproduces your results. The full adapter standard, testing steps, and PR description template live in [CONTRIBUTING.md](CONTRIBUTING.md).
-
-PR rules:
-
-1. **Follow the standard adapter layout** ([Framework Overview](#-framework-overview)) and support the full lifecycle — install, data conversion, training, and eval. If the training code cannot be open-sourced yet, you may land eval-only support first: notify the maintainers ([Contact](#-contact)) and share a timeline for releasing training.
-2. **Write the policy README** so that environment setup, data, training, and eval all work by following the script and argument conventions in [Common Workflow](#-common-workflow).
-3. **Run the closed loop locally first** — at minimum the debug-mode eval in [Checks](#-checks), ideally a simulator-backed eval.
-4. **For official leaderboard evaluation**, attach a checkpoint download script in the PR description (Hugging Face or ModelScope preferred). We will evaluate your submission and publish the leaderboard entry as soon as possible.
+Adding a policy of your own, or entering a leaderboard, both go through a PR — see [Add Your Own Policy](#-add-your-own-policy).
 
 ## 🧩 Framework Overview
 
-XPolicyLab separates model-side dependencies from environment-side dependencies.
+XPolicyLab separates model-side dependencies from environment-side dependencies, so each side retains its native stack and may run locally or remotely. One adapter serves benchmarks, simulators, and physical robots.
+
+<div align="center">
+<img src="assets/infra.png" alt="XPolicyLab infrastructure" width="100%"/>
+<p><em>Infrastructure of XPolicyLab. One adapter serves benchmarks, simulators, and physical robots.</em></p>
+</div>
 
 ```text
 Policy environment                         Evaluation / benchmark environment
@@ -97,6 +111,7 @@ A typical adapter contains:
 policy/<POLICY>/
 ├── README.md                    # policy-specific guide
 ├── INSTALLATION.md              # optional detailed setup notes
+├── __init__.py                  # keeps XPolicyLab.policy.<POLICY> importable
 ├── install.sh                   # environment setup
 ├── process_data.sh              # optional data conversion
 ├── train.sh                     # optional training
@@ -146,39 +161,6 @@ Optional `deploy.yml` keys — omit them to keep the defaults:
 | `handshake_timeout_s` | `60.0` | Timeout for the HELLO round-trip. |
 | `ws_ping_interval_s` / `ws_ping_timeout_s` | `20.0` | Keepalive ping/pong; `null` disables. |
 | `close_timeout_s` | `10.0` | Cap on the closing handshake. |
-
-</details>
-
-## 🛠️ Model Integration Guide
-
-The fastest way to add a model is to copy the reference adapter, keep the XPolicyLab boundary small, and debug the adapter before touching a real simulator.
-
-1. **Learn the reference adapter**: read [policy/demo_policy](policy/demo_policy/README.md), especially `model.py`, `deploy.py`, `deploy.yml`, `eval.sh`, `setup_eval_policy_server.sh`, and `setup_eval_env_client.sh`.
-2. **Understand the arguments**: keep `bench_name`, `task_name`, `ckpt_name`, `env_cfg_type`, `action_type`, and `seed` consistent across data, training, and eval.
-3. **Create a skeleton**: run `bash scripts/create_policy.sh <POLICY_NAME>` and immediately fill in `policy/<POLICY_NAME>/README.md`.
-4. **Implement `model.py` first**: load model resources in `__init__`, store observations in `update_obs`, translate observations to model-native inputs, return XPolicyLab action dictionaries from `get_action`, and reset state in `reset`.
-5. **Keep deployment simple**: put runtime defaults in `deploy.yml`; keep `deploy.py` aligned with `demo_policy/deploy.py` unless the environment loop truly differs.
-6. **Debug without a simulator**: run `EVAL_ENV_TYPE=debug` to check imports, server startup, observation serialization, action keys, action dimensions, and batch logic.
-7. **Move to simulator or remote deployment**: after debug mode passes, use `EVAL_ENV_TYPE=sim` or split policy server and environment client across machines.
-
-<details>
-<summary>Using a coding agent</summary>
-
-This repo ships Cursor Agent Skills under [.cursor/skills](.cursor/skills): `xpolicylab-model-integration` builds an adapter (a prompt like "Integrate <POLICY_NAME> into XPolicyLab" is enough), and `xpolicylab-adapter-check` audits one against [CONTRIBUTING.md](CONTRIBUTING.md) before a PR ("Check policy/<POLICY_NAME>"). Cursor picks them up automatically. For other agents, paste this checklist:
-
-```text
-Integrate <POLICY_NAME> into XPolicyLab.
-
-Use policy/demo_policy as the reference.
-1. Inspect the upstream model's inference API and dependencies.
-2. Create or update policy/<POLICY_NAME>/README.md with install, checkpoint, train, and eval commands.
-3. Implement install.sh and, if needed, process_data.sh and train.sh.
-4. Implement model.py with Model.__init__, update_obs, get_action, reset, and batch methods.
-5. Keep deploy.py aligned with policy/demo_policy/deploy.py.
-6. Put runtime defaults in deploy.yml and use protocol: ws.
-7. Run EVAL_ENV_TYPE=debug eval.sh and fix shape/action-key/server errors.
-8. Summarize supported action_type, env_cfg_type, checkpoint layout, and remaining limitations.
-```
 
 </details>
 
@@ -317,7 +299,7 @@ bash setup_eval_env_client.sh \
 
 XPolicyLab standardizes the observation and trajectory dictionaries passed between adapters, converters, and environment clients. Individual policies may convert this standard format into their upstream-native format.
 
-All pose values use `[x, y, z, qw, qx, qy, qz]`. Images are RGB end to end — stored image bits are encoded from RGB frames and no channel conversion happens anywhere in the pipeline (the only medium-adapter exceptions are listed with the converter helpers below). Note one naming quirk: runtime observations carry camera extrinsics as `extrinsics_matrix`, while trajectory files store `extrinsic_matrix`.
+All pose values use `[x, y, z, qw, qx, qy, qz]`. Images are RGB end to end — stored image bits are encoded from RGB frames, and no channel conversion happens anywhere in the pipeline. Note one naming quirk: runtime observations carry camera extrinsics as `extrinsics_matrix`, while trajectory files store `extrinsic_matrix`.
 
 <details>
 <summary>Observation Data Format</summary>
@@ -417,13 +399,9 @@ from XPolicyLab.utils.process_data import decode_image_bit, get_robot_action_dim
 
 `decode_image_bit` turns encoded image streams into arrays and returns already-decoded values untouched. `get_robot_action_dim_info(env_cfg_type)` returns robot-specific `arm_dim` and `ee_dim` lists, so adapters do not need to hard-code action dimensions.
 
-Three image rules that cause silent, hard-to-debug bugs when broken:
+Offline code — conversion scripts and training dataloaders — must decode through `decode_image_bit` and never through hand-rolled `cv2.imdecode` / `np.frombuffer` / PIL, because RoboTwin and RoboDojo store image bits in legacy layouts that only this function reads correctly. Runtime code does not decode at all; the policy server has already done it, as noted in [Framework Overview](#-framework-overview). Breaking either rule fails silently and is hard to debug.
 
-> - **`model.py` never decodes.** The policy server decodes every observation it forwards, so `obs["vision"][<camera>]["color"]` already is an image array. This covers `update_obs` / `update_obs_batch` and any custom RPC a policy exposes that carries an observation.
-> - **Offline code decodes only via `decode_image_bit`.** In conversion scripts and training dataloaders, never hand-roll `cv2.imdecode` / `np.frombuffer` / PIL decoding — RoboTwin and RoboDojo store image bits in legacy layouts that only this function reads correctly.
-> - **Everything is RGB, end to end.** No channel conversion belongs in conversion, training, or evaluation. The only exceptions are medium adapters: `COLOR_RGB2BGR` right before `cv2.VideoWriter.write(...)`, and `COLOR_BGR2RGB` right after `cv2.VideoCapture.read()`.
-
-Robot action dimensions are registered in `utils/robot/_robot_info.json`: each top-level key is an `env_cfg_type` such as `arx_x5`, with `arm_dim` / `ee_dim` lists for per-arm joint and end-effector/gripper dimensions. Update it when adding a new robot configuration so conversion, training, and deployment code can infer action shapes consistently.
+[CONTRIBUTING.md](CONTRIBUTING.md#modelpy) states both rules in full, along with the two narrow exceptions to the RGB rule and how a new robot gets registered in both `_robot_info.json` files.
 
 ## 💾 Data And Checkpoints
 
@@ -438,9 +416,23 @@ So if you trained with `bench_name=RoboDojo`, `ckpt_name=cotrain`, `env_cfg_type
 
 Policies may also use upstream-native layouts or explicit paths in `deploy.yml`. Check the policy README before assuming a naming convention. For a small local dataset to play with, see [Quick Start](#-quick-start).
 
-## ✅ Checks
+## 🤝 Add Your Own Policy
 
-Static checks, from the XPolicyLab repo root:
+Community policies are welcome — open a PR that adds `policy/<POLICY>/`. A PR is also **required** to enter the official [RoboDojo](https://robodojo-benchmark.com/LeaderBoard) and [RoboTwin](https://robotwin-platform.github.io/leaderboard) leaderboards, together with the checkpoint that reproduces your results. [CONTRIBUTING.md](CONTRIBUTING.md) is the full standard: required files, the `Model` contract, `deploy.yml` keys, script conventions, and the PR template.
+
+The fastest route is to copy the reference adapter, keep the XPolicyLab boundary small, and debug before touching a simulator:
+
+1. **Read [policy/demo_policy](policy/demo_policy/README.md)** — `model.py`, `deploy.py`, `deploy.yml`, and the `eval.sh` / `setup_eval_policy_server.sh` / `setup_eval_env_client.sh` trio.
+2. **Scaffold** with `bash scripts/create_policy.sh <POLICY_NAME>`, then fill in its README.
+3. **Implement `model.py` first**, keeping `bench_name`, `task_name`, `ckpt_name`, `env_cfg_type`, `action_type`, and `seed` consistent across data, training, and eval ([Common Workflow](#-common-workflow)).
+4. **Put runtime defaults in `deploy.yml`** and keep `deploy.py` aligned with `demo_policy/deploy.py` unless the environment loop truly differs.
+5. **Run the checks below**, then move to `EVAL_ENV_TYPE=sim` or a [split-machine deployment](#-deployment-flow).
+
+Eval-only submissions are accepted when training code cannot be open-sourced yet: say so in the PR, notify the maintainers ([Contact](#-contact)), and share a timeline. For leaderboard evaluation, attach a checkpoint download script (Hugging Face or ModelScope preferred).
+
+### Checks before a PR
+
+Static checks from the repo root, then the adapter wiring check from `policy/<POLICY>/` — no simulator required:
 
 ```bash
 git diff --check
@@ -448,18 +440,56 @@ bash -n policy/<POLICY>/*.sh
 python -m py_compile policy/<POLICY>/model.py policy/<POLICY>/deploy.py
 ```
 
-Adapter wiring check (no simulator required) — the same debug-mode eval as [Quick Start](#-quick-start), run from `policy/<POLICY>/`:
-
 ```bash
+cd policy/<POLICY>
 export EVAL_ENV_TYPE=debug
 bash eval.sh RoboDojo stack_bowls demo arx_x5 joint 0 0 0 \
   <policy_env_or_uv_path> <eval_env_conda_env>
 ```
 
-The debug client sends plain image arrays by default. Re-run with `DEBUG_OBS_ENCODED=1` to make it send encoded camera colors instead — a JPEG buffer, raw bytes, and a plain array across the three cameras — which exercises the server-side decode path that real environment clients rely on.
+This verifies imports, server startup, observation serialization, action keys, action dimensions, and batch logic. The debug client sends plain image arrays by default; re-run with `DEBUG_OBS_ENCODED=1` to make it send encoded camera colors instead — a JPEG buffer, raw bytes, and a plain array across the three cameras — which exercises the server-side decode path that real environment clients rely on. For a quick smoke test, `policy/demo_policy` accepts placeholder env names such as `base`.
 
-For a quick smoke test, `policy/demo_policy` accepts placeholder env names such as `base`. Argument details live in [Common Workflow](#-common-workflow).
+<details>
+<summary>Using a coding agent</summary>
+
+This repo ships two Agent Skills under [.agents/skills](.agents/skills), which `.cursor/skills` and `.claude/skills` symlink to, so Cursor, Claude Code and Codex all pick them up automatically: `xpolicylab-model-integration` builds an adapter (a prompt like "Integrate <POLICY_NAME> into XPolicyLab" is enough), and `xpolicylab-adapter-check` audits one against [CONTRIBUTING.md](CONTRIBUTING.md) before a PR ("Check policy/<POLICY_NAME>"). [AGENTS.md](AGENTS.md) carries the always-on rules every agent must follow. For an agent that supports none of these, paste this checklist:
+
+```text
+Integrate <POLICY_NAME> into XPolicyLab.
+
+Use policy/demo_policy as the reference.
+1. Inspect the upstream model's inference API and dependencies.
+2. Create or update policy/<POLICY_NAME>/README.md with install, checkpoint, train, and eval commands.
+3. Implement install.sh and, if needed, process_data.sh and train.sh.
+4. Implement model.py with Model.__init__, update_obs, get_action, reset, and batch methods.
+5. Keep deploy.py aligned with policy/demo_policy/deploy.py.
+6. Put runtime defaults in deploy.yml, keeping the standard key set (protocol: ws, host, port, ...).
+7. Run EVAL_ENV_TYPE=debug eval.sh and fix shape/action-key/server errors.
+8. Summarize supported action_type, env_cfg_type, checkpoint layout, and remaining limitations.
+```
+
+</details>
+
+## 📝 Citation
+
+If XPolicyLab helps your research, please cite:
+
+```bibtex
+@article{xpolicylab2026,
+  title={XPolicyLab: A Unified Standard and Open Ecosystem
+         for Robot Policy Evaluation and Deployment},
+  author={XPolicyLab Contributors},
+  year={2026},
+  note={Project website: https://xpolicylab.github.io/}
+}
+```
 
 ## 📬 Contact
 
-Tianxing Chen: [chentianxing2002@gmail.com](mailto:chentianxing2002@gmail.com)
+Tianxing Chen (project lead): [chentianxing2002@gmail.com](mailto:chentianxing2002@gmail.com)
+
+A collaborative open-source project led by **MMLab@HKU** and **THU**.
+
+**Core Lead Authors**: Tianxing Chen, Yue Chen, Tian Nian, Zijian Cai, Guangyu Chen, Wenwei Lin, Qiwei Liang.
+
+The full contributor list — spanning every integrated policy — lives on the [project website](https://xpolicylab.github.io/).
