@@ -50,7 +50,7 @@ Start here for repo-level concepts and integration steps. For install commands, 
 XPolicyLab is benchmark-agnostic: any benchmark, simulator, or real-robot setup can plug in as an environment client against the same policy-side interface — one adapter per policy, one client per environment. Two public benchmarks are already integrated, and their official leaderboards are powered by XPolicyLab submissions.
 
 <div align="center">
-<img src="assets/benchmarks.png" alt="Cross-platform evaluation through XPolicyLab" width="100%"/>
+<img src="assets/benchmarks.png" alt="Cross-platform evaluation through XPolicyLab" width="70%"/>
 <p><em>Cross-platform evaluation through a shared codebase and standardized serving interface.</em></p>
 </div>
 
