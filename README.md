@@ -475,12 +475,14 @@ Use policy/demo_policy as the reference.
 If XPolicyLab helps your research, please cite:
 
 ```bibtex
-@article{xpolicylab2026,
-  title={XPolicyLab: A Unified Standard and Open Ecosystem
-         for Robot Policy Evaluation and Deployment},
-  author={XPolicyLab Contributors},
-  year={2026},
-  note={Project website: https://xpolicylab.github.io/}
+@misc{community2026xpolicylabunifiedstandardopen,
+      title={XPolicyLab: A Unified Standard and Open Ecosystem for Robot Policy Evaluation and Deployment}, 
+      author={XPolicyLab Community and Tianxing Chen and Yue Chen and Tian Nian and Zijian Cai and Guangyu Chen and Wenwei Lin and Qiwei Liang and Peicheng Xiang and Kailun Su and Zixuan Li and Junyuan Tang and Yan Qin and Qiangyu Chen and Shaolong Zhu and Xiang Li and Jiahao Zhang and Weijie Wan and Baijun Chen and Honghao Su and Kehe Ye and Shujia Liu and Kaixuan Wang and Haotian Liang and Yunze Liu and Mingleyang Li and Yuran Wang and Boyu Chen and Hongzhe Bi and Shuhe Huang and Hengkai Tan and Jisong Cai and Yao Mu and Jun Guo and Xiaofeng Wang and Zheng Zhu and Weijie Ke and Hengtao Li and Yuhang Tang and Xiaofan Li and Ganlin Yang and Zhangzheng Tu and Shuai Yang and Wenxuan Song and Pengxiang Ding and Kaidong Zhang and Yu Sun and Junliang Guo and Tong Zhang and Yixing Chen and Rongxu Cui and Zongzheng Zhang and Haoxiang Ma and Junhao Cai and Haoyu Zhang and Senqiao Yang and Jinhui Ye and Pengguang Chen and Shu Liu and Xiu Su and Wenhan Fang and Wenhao Li and Yichao Cao and Chengyao Wang and Qiang Chen and Ping Luo and Wenbo Ding},
+      year={2026},
+      eprint={2608.09892},
+      archivePrefix={arXiv},
+      primaryClass={cs.RO},
+      url={https://arxiv.org/abs/2608.09892}, 
 }
 ```
 
