@@ -66,7 +66,7 @@ bash eval.sh RoboDojo stack_bowls RoboDojo-cotrain-arx_x5-joint-0 arx_x5 joint 0
 
 `EVAL_ENV_TYPE=debug` runs the offline wiring check (no simulator); leave it unset or set `EVAL_ENV_TYPE=sim` for RoboDojo simulation. For split-machine deployment via `setup_eval_policy_server.sh` / `setup_eval_env_client.sh`, follow the [Deployment Flow](../../README.md#-deployment-flow).
 
-`eval_batch` is `false` and must stay that way: `wan_va_server` keeps one global KV/VAE/`frame_st_id` cache, so one process can serve only one env. `update_obs_batch` / `get_action_batch` raise `NotImplementedError`.
+`eval_batch` is `false` and must stay that way: `wan_va_server` keeps one global KV/VAE/`frame_st_id` cache, so one process can serve only one env. `get_action_batch` raises `NotImplementedError`.
 
 ## Configuration
 

@@ -376,20 +376,17 @@ class Model(ModelTemplate):
         return dict(action=self._predict_chunk(observation))
 
     def update_obs(self, obs):
-        self._latest_env_idx_list = [obs.get("env_idx", 0)]
-        encoded = encode_obs(obs, self.action_type, self.robot_action_dim_info, self.default_prompt)
-        self.observation_window = [encoded]
-        if self._first_observation is not None:
-            self._exec_obs_buffer.append(encoded)
+        self.update_obs_batch([obs])
 
     def update_obs_batch(self, obs_list):
-        # Required ModelTemplate hook; wan_va_server is single-session only.
-        # Do not send a list of envs as obs["obs"]: the server treats that list
-        # as temporal keyframes, not a batch axis, and the KV cache will error.
-        raise NotImplementedError(
-            "LingBot_VA wan_va_server keeps one global KV/VAE cache and cannot "
-            "evaluate multiple envs in one process. Keep eval_batch: false in deploy.yml."
-        )
+        self._latest_env_idx_list = [obs.get("env_idx", index) for index, obs in enumerate(obs_list)]
+        encoded_obs_list = [
+            encode_obs(obs, self.action_type, self.robot_action_dim_info, self.default_prompt)
+            for obs in obs_list
+        ]
+        self.observation_window = encoded_obs_list
+        if self._first_observation is not None:
+            self._exec_obs_buffer.append(encoded_obs_list[0])
 
     def _reset_server_with_instruction(self, observation):
         """Reset the server with the episode instruction before the first chunk.
@@ -433,6 +430,8 @@ class Model(ModelTemplate):
         )
 
     def get_action_batch(self, env_idx_list=None, **kwargs):
+        # Required ModelTemplate hook. The previous implementation inferred env0
+        # once and copied that chunk to every env; do not restore that behavior.
         raise NotImplementedError(
             "LingBot_VA wan_va_server keeps one global KV/VAE cache and cannot "
             "evaluate multiple envs in one process. Keep eval_batch: false in deploy.yml."
