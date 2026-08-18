@@ -376,17 +376,20 @@ class Model(ModelTemplate):
         return dict(action=self._predict_chunk(observation))
 
     def update_obs(self, obs):
-        self.update_obs_batch([obs])
+        self._latest_env_idx_list = [obs.get("env_idx", 0)]
+        encoded = encode_obs(obs, self.action_type, self.robot_action_dim_info, self.default_prompt)
+        self.observation_window = [encoded]
+        if self._first_observation is not None:
+            self._exec_obs_buffer.append(encoded)
 
     def update_obs_batch(self, obs_list):
-        self._latest_env_idx_list = [obs.get("env_idx", index) for index, obs in enumerate(obs_list)]
-        encoded_obs_list = [
-            encode_obs(obs, self.action_type, self.robot_action_dim_info, self.default_prompt)
-            for obs in obs_list
-        ]
-        self.observation_window = encoded_obs_list
-        if self._first_observation is not None:
-            self._exec_obs_buffer.append(encoded_obs_list[0])
+        # Required ModelTemplate hook; wan_va_server is single-session only.
+        # Do not send a list of envs as obs["obs"]: the server treats that list
+        # as temporal keyframes, not a batch axis, and the KV cache will error.
+        raise NotImplementedError(
+            "LingBot_VA wan_va_server keeps one global KV/VAE cache and cannot "
+            "evaluate multiple envs in one process. Keep eval_batch: false in deploy.yml."
+        )
 
     def _reset_server_with_instruction(self, observation):
         """Reset the server with the episode instruction before the first chunk.
@@ -430,32 +433,10 @@ class Model(ModelTemplate):
         )
 
     def get_action_batch(self, env_idx_list=None, **kwargs):
-        if self.observation_window is None:
-            raise AssertionError("update_obs or update_obs_batch first!")
-
-        if self.rollout_mode == "receding_horizon":
-            self._soft_reset_inference_state()
-            action_chunk = self._predict_chunk(self.observation_window[0])
-        else:
-            if self._first_observation is None:
-                self._reset_server_with_instruction(self.observation_window[0])
-                self._first_observation = self.observation_window[0]
-            else:
-                self._commit_executed_frames()
-            action_chunk = self._predict_chunk(self._first_observation)
-
-        env_idx_list = env_idx_list or self._latest_env_idx_list
-
-        if self.robot_action_dim_info is None:
-            return [action_chunk for _ in env_idx_list]
-
-        unpacked = unpack_robot_state(
-            action_chunk,
-            self.action_type,
-            self.robot_action_dim_info,
-            source_type="obs",
+        raise NotImplementedError(
+            "LingBot_VA wan_va_server keeps one global KV/VAE cache and cannot "
+            "evaluate multiple envs in one process. Keep eval_batch: false in deploy.yml."
         )
-        return [unpacked for _ in env_idx_list]
 
     def get_action_per_frame(self):
         return self.action_per_frame
