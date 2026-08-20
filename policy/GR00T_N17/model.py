@@ -3,14 +3,16 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import numpy as np
 
 from XPolicyLab.model_template import ModelTemplate
 from XPolicyLab.utils.checkpoint_resolver import resolve_checkpoint_root
+from XPolicyLab.utils.process_data import get_robot_action_dim_info
 
 _POLICY_DIR = Path(__file__).resolve().parent
 _GR00T_ROOT = _POLICY_DIR / "gr00t_n17"
@@ -19,13 +21,42 @@ _CHECKPOINTS_DIR = _POLICY_DIR / "checkpoints"
 if str(_GR00T_ROOT) not in sys.path:
     sys.path.insert(0, str(_GR00T_ROOT))
 
-from gr00t.data.embodiment_tags import EmbodimentTag  # noqa: E402
 from gr00t.policy import Gr00tPolicy  # noqa: E402
 
-VIDEO_KEY_CANDIDATES = {
-    "front": ["cam_head", "cam_high", "head_camera", "top_camera"],
-    "left_wrist": ["cam_left_wrist", "left_camera", "left_wrist", "wrist_left"],
-    "right_wrist": ["cam_right_wrist", "right_camera", "right_wrist", "wrist_right"],
+OBSERVATION_PROFILES = {
+    "arx_x5": {
+        "video": {
+            "front": ["cam_head", "cam_high", "head_camera", "top_camera"],
+            "left_wrist": ["cam_left_wrist", "left_camera", "left_wrist", "wrist_left"],
+            "right_wrist": [
+                "cam_right_wrist",
+                "right_camera",
+                "right_wrist",
+                "wrist_right",
+            ],
+        },
+        "state": ("left_arm", "right_arm"),
+        "action": ("left_arm", "right_arm"),
+    },
+    "yam_bimanual": {
+        "video": {
+            "base_view": ["cam_head", "cam_high", "head_camera", "top_camera"],
+            "left_wrist_view": [
+                "cam_left_wrist",
+                "left_camera",
+                "left_wrist",
+                "wrist_left",
+            ],
+            "right_wrist_view": [
+                "cam_right_wrist",
+                "right_camera",
+                "right_wrist",
+                "wrist_right",
+            ],
+        },
+        "state": ("left_arm", "left_gripper", "right_arm", "right_gripper"),
+        "action": ("left_arm", "left_gripper", "right_arm", "right_gripper"),
+    },
 }
 
 
@@ -33,7 +64,8 @@ def _load_modality_config(env_cfg_type: str) -> None:
     config_path = _POLICY_DIR / "configs" / f"{env_cfg_type}_config.py"
     if not config_path.is_file():
         raise FileNotFoundError(
-            f"Modality config not found: {config_path}. Run process_data.sh for env_cfg_type={env_cfg_type} first."
+            f"Modality config not found: {config_path}. "
+            f"Run process_data.sh for env_cfg_type={env_cfg_type} first."
         )
     spec = importlib.util.spec_from_file_location(f"gr00t_modality_{env_cfg_type}", config_path)
     if spec is None or spec.loader is None:
@@ -132,6 +164,11 @@ def _resolve_checkpoint_dir(model_cfg: dict[str, Any]) -> Path:
     )
     if not root.is_dir():
         raise FileNotFoundError(f"Checkpoint root not found: {root}")
+    if (root / "config.json").is_file() and (
+        (root / "model.safetensors").is_file()
+        or (root / "model.safetensors.index.json").is_file()
+    ):
+        return root.resolve()
 
     search_roots = [root]
     for child in sorted(root.iterdir()):
@@ -248,59 +285,116 @@ def _extract_prompt(observation: dict[str, Any], default_prompt: str) -> str:
     return default_prompt
 
 
-def _pack_arm_state(observation: dict[str, Any], side: str) -> np.ndarray:
+def _extract_side_state(
+    observation: dict[str, Any],
+    side: str,
+    arm_dim: int,
+    ee_dim: int,
+) -> tuple[np.ndarray, np.ndarray]:
     state = observation.get("state", {})
     prefix = f"{side}_"
-    joint = _as_1d(state[f"{prefix}arm_joint_state"], 6)
-    gripper = _as_1d(state[f"{prefix}ee_joint_state"], 1)
-    return np.concatenate([joint, gripper], axis=0).astype(np.float32)
+    joint = _as_1d(state[f"{prefix}arm_joint_state"], arm_dim)
+    gripper = _as_1d(state[f"{prefix}ee_joint_state"], ee_dim)
+    return joint, gripper
 
 
-def _encode_observation(obs: dict[str, Any], default_prompt: str) -> dict[str, Any]:
+def _encode_observation(
+    obs: dict[str, Any],
+    default_prompt: str,
+    observation_profile: str,
+    arm_dims: tuple[int, int],
+    ee_dims: tuple[int, int],
+) -> dict[str, Any]:
+    profile = OBSERVATION_PROFILES[observation_profile]
     images = {
         video_key: _to_rgb_hwc(_extract_image(obs, candidates))
-        for video_key, candidates in VIDEO_KEY_CANDIDATES.items()
+        for video_key, candidates in profile["video"].items()
     }
     prompt = _extract_prompt(obs, default_prompt)
-    left_arm = _pack_arm_state(obs, "left")
-    right_arm = _pack_arm_state(obs, "right")
+    left_arm, left_gripper = _extract_side_state(
+        obs,
+        "left",
+        arm_dims[0],
+        ee_dims[0],
+    )
+    right_arm, right_gripper = _extract_side_state(
+        obs,
+        "right",
+        arm_dims[1],
+        ee_dims[1],
+    )
+    if observation_profile == "yam_bimanual":
+        state = {
+            "left_arm": left_arm[None, None, :],
+            "left_gripper": left_gripper[None, None, :],
+            "right_arm": right_arm[None, None, :],
+            "right_gripper": right_gripper[None, None, :],
+        }
+    else:
+        state = {
+            "left_arm": np.concatenate([left_arm, left_gripper])[None, None, :],
+            "right_arm": np.concatenate([right_arm, right_gripper])[None, None, :],
+        }
 
     return {
         "video": {
             key: np.asarray(image, dtype=np.uint8)[None, None, ...]
             for key, image in images.items()
         },
-        "state": {
-            "left_arm": left_arm[None, None, :],
-            "right_arm": right_arm[None, None, :],
-        },
+        "state": state,
         "language": {
             "annotation.human.task_description": [[prompt]],
         },
     }
 
 
-def _gr00t_action_to_env(action: dict[str, np.ndarray], action_type: str) -> list[dict[str, np.ndarray]]:
-    left_arm = np.asarray(action["left_arm"][0], dtype=np.float32)
-    right_arm = np.asarray(action["right_arm"][0], dtype=np.float32)
-    horizon = left_arm.shape[0]
-
+def _gr00t_action_to_env(
+    action: dict[str, np.ndarray],
+    action_type: str,
+    observation_profile: str,
+    arm_dims: tuple[int, int],
+    ee_dims: tuple[int, int],
+) -> list[dict[str, np.ndarray]]:
     if action_type != "joint":
         raise ValueError(
-            f"GR00T_N17 RoboDojo arx_x5 is trained with joint-space relative actions (action_type=joint). "
+            "GR00T_N17 YAM is trained with joint-space actions (action_type=joint). "
             f"Got action_type={action_type!r}."
         )
 
+    if observation_profile == "yam_bimanual":
+        left_arm = np.asarray(action["left_arm"][0], dtype=np.float32)
+        left_gripper = np.asarray(action["left_gripper"][0], dtype=np.float32)
+        right_arm = np.asarray(action["right_arm"][0], dtype=np.float32)
+        right_gripper = np.asarray(action["right_gripper"][0], dtype=np.float32)
+    else:
+        left = np.asarray(action["left_arm"][0], dtype=np.float32)
+        right = np.asarray(action["right_arm"][0], dtype=np.float32)
+        left_arm = left[:, : arm_dims[0]]
+        left_gripper = left[:, arm_dims[0] : arm_dims[0] + ee_dims[0]]
+        right_arm = right[:, : arm_dims[1]]
+        right_gripper = right[:, arm_dims[1] : arm_dims[1] + ee_dims[1]]
+
+    sequences = (left_arm, left_gripper, right_arm, right_gripper)
+    horizons = {sequence.shape[0] for sequence in sequences}
+    if len(horizons) != 1:
+        raise ValueError(f"GR00T action keys have mismatched horizons: {sorted(horizons)}")
+    expected_dims = (*arm_dims[:1], *ee_dims[:1], *arm_dims[1:], *ee_dims[1:])
+    for sequence, expected_dim in zip(sequences, expected_dims, strict=True):
+        if sequence.ndim != 2 or sequence.shape[1] != expected_dim:
+            raise ValueError(
+                f"GR00T action sequence must have shape (H, {expected_dim}), "
+                f"got {sequence.shape}"
+            )
+    horizon = horizons.pop()
+
     action_list: list[dict[str, np.ndarray]] = []
     for step in range(horizon):
-        left = left_arm[step]
-        right = right_arm[step]
         action_list.append(
             {
-                "left_arm_joint_state": left[:6].astype(np.float32),
-                "left_ee_joint_state": left[6:7].astype(np.float32),
-                "right_arm_joint_state": right[:6].astype(np.float32),
-                "right_ee_joint_state": right[6:7].astype(np.float32),
+                "left_arm_joint_state": left_arm[step].astype(np.float32),
+                "left_ee_joint_state": left_gripper[step].astype(np.float32),
+                "right_arm_joint_state": right_arm[step].astype(np.float32),
+                "right_ee_joint_state": right_gripper[step].astype(np.float32),
             }
         )
     return action_list
@@ -310,11 +404,32 @@ class Model(ModelTemplate):
     def __init__(self, model_cfg: dict[str, Any]):
         self.model_cfg = model_cfg
         self.action_type = model_cfg.get("action_type", "joint")
-        self.default_prompt = model_cfg.get("default_prompt", model_cfg.get("task_name", "Perform the robot manipulation task."))
+        self.default_prompt = model_cfg.get(
+            "default_prompt",
+            model_cfg.get("task_name", "Perform the robot manipulation task."),
+        )
         self.env_cfg_type = model_cfg["env_cfg_type"]
         self.device = model_cfg.get("device", "cuda:0" if self._has_cuda() else "cpu")
+        self.observation_profile = model_cfg.get("observation_profile", "arx_x5")
+        if self.observation_profile not in OBSERVATION_PROFILES:
+            raise ValueError(
+                f"Unsupported observation_profile={self.observation_profile!r}; "
+                f"expected one of {sorted(OBSERVATION_PROFILES)}"
+            )
+        robot_dims = get_robot_action_dim_info(self.env_cfg_type)
+        if len(robot_dims["arm_dim"]) != 2 or len(robot_dims["ee_dim"]) != 2:
+            raise ValueError("GR00T_N17 adapter requires a dual-arm robot")
+        self.arm_dims = tuple(int(value) for value in robot_dims["arm_dim"])
+        self.ee_dims = tuple(int(value) for value in robot_dims["ee_dim"])
 
-        _load_modality_config(self.env_cfg_type)
+        modality_config_source = model_cfg.get("modality_config_source", "checkpoint")
+        if modality_config_source == "python":
+            _load_modality_config(self.env_cfg_type)
+        elif modality_config_source != "checkpoint":
+            raise ValueError(
+                "modality_config_source must be 'checkpoint' or 'python', "
+                f"got {modality_config_source!r}"
+            )
         checkpoint_dir = _resolve_checkpoint_dir(model_cfg)
         embodiment_tag = model_cfg.get("embodiment_tag", "NEW_EMBODIMENT")
         cosmos_model = _resolve_cosmos_model(model_cfg)
@@ -328,6 +443,26 @@ class Model(ModelTemplate):
             )
         self.model = self.policy
         self.action_horizon = len(self.policy.modality_configs["action"].delta_indices)
+        profile = OBSERVATION_PROFILES[self.observation_profile]
+        for modality in ("video", "state", "action"):
+            actual_keys = tuple(self.policy.modality_configs[modality].modality_keys)
+            expected_keys = tuple(profile[modality])
+            if actual_keys != expected_keys:
+                raise ValueError(
+                    f"GR00T checkpoint {modality} keys must be {expected_keys}, "
+                    f"got {actual_keys}"
+                )
+        if self.observation_profile == "yam_bimanual":
+            action_configs = self.policy.modality_configs["action"].action_configs or []
+            representations = {
+                str(getattr(config.rep, "value", config.rep)).lower()
+                for config in action_configs
+            }
+            if representations != {"absolute"}:
+                raise ValueError(
+                    "GR00T YAM checkpoint must produce absolute actions, "
+                    f"got {sorted(representations)}"
+                )
 
         self._obs_list: list[dict[str, Any]] = []
         self._latest_env_idx_list: list[int] = [0]
@@ -349,8 +484,19 @@ class Model(ModelTemplate):
         self.update_obs_batch([obs])
 
     def update_obs_batch(self, obs_list):
-        self._latest_env_idx_list = [obs.get("env_idx", index) for index, obs in enumerate(obs_list)]
-        self._obs_list = [_encode_observation(obs, self.default_prompt) for obs in obs_list]
+        self._latest_env_idx_list = [
+            obs.get("env_idx", index) for index, obs in enumerate(obs_list)
+        ]
+        self._obs_list = [
+            _encode_observation(
+                obs,
+                self.default_prompt,
+                self.observation_profile,
+                self.arm_dims,
+                self.ee_dims,
+            )
+            for obs in obs_list
+        ]
 
     def get_action(self, **kwargs):
         if not self._obs_list:
@@ -364,7 +510,15 @@ class Model(ModelTemplate):
         action_list = []
         for encoded_obs in self._obs_list:
             gr00t_action, _ = self.policy.get_action(encoded_obs, **kwargs)
-            action_list.append(_gr00t_action_to_env(gr00t_action, self.action_type))
+            action_list.append(
+                _gr00t_action_to_env(
+                    gr00t_action,
+                    self.action_type,
+                    self.observation_profile,
+                    self.arm_dims,
+                    self.ee_dims,
+                )
+            )
         return action_list
 
     def reset(self):

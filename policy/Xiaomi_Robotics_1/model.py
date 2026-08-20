@@ -43,14 +43,16 @@ slots, so joint targets cannot be recovered from the model output.
 
 from __future__ import annotations
 
+import contextlib
+import json
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
 from PIL import Image
-from scipy.spatial.transform import Rotation
 
 from XPolicyLab.model_template import ModelTemplate
 
@@ -76,6 +78,81 @@ _EEF_REFRAME_P_ROBODOJO_REAL = {
         [[0.0, 0.0, 1.0], [0.0, -1.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float64
     ),
 }
+
+
+def _quat_wxyz_to_rotm(quaternion: np.ndarray) -> np.ndarray:
+    quaternion = np.asarray(quaternion, dtype=np.float64).reshape(4)
+    norm = float(np.linalg.norm(quaternion))
+    if norm == 0.0:
+        raise ValueError("end-effector quaternion cannot be zero")
+    w, x, y, z = quaternion / norm
+    return np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ],
+        dtype=np.float64,
+    )
+
+
+def _rotm_to_quat_wxyz(rotation: np.ndarray) -> np.ndarray:
+    rotation = np.asarray(rotation, dtype=np.float64).reshape(3, 3)
+    trace = float(np.trace(rotation))
+    if trace > 0.0:
+        scale = 2.0 * np.sqrt(trace + 1.0)
+        quaternion = np.array(
+            [
+                0.25 * scale,
+                (rotation[2, 1] - rotation[1, 2]) / scale,
+                (rotation[0, 2] - rotation[2, 0]) / scale,
+                (rotation[1, 0] - rotation[0, 1]) / scale,
+            ]
+        )
+    else:
+        axis = int(np.argmax(np.diag(rotation)))
+        if axis == 0:
+            scale = 2.0 * np.sqrt(1.0 + rotation[0, 0] - rotation[1, 1] - rotation[2, 2])
+            quaternion = np.array(
+                [
+                    (rotation[2, 1] - rotation[1, 2]) / scale,
+                    0.25 * scale,
+                    (rotation[0, 1] + rotation[1, 0]) / scale,
+                    (rotation[0, 2] + rotation[2, 0]) / scale,
+                ]
+            )
+        elif axis == 1:
+            scale = 2.0 * np.sqrt(1.0 + rotation[1, 1] - rotation[0, 0] - rotation[2, 2])
+            quaternion = np.array(
+                [
+                    (rotation[0, 2] - rotation[2, 0]) / scale,
+                    (rotation[0, 1] + rotation[1, 0]) / scale,
+                    0.25 * scale,
+                    (rotation[1, 2] + rotation[2, 1]) / scale,
+                ]
+            )
+        else:
+            scale = 2.0 * np.sqrt(1.0 + rotation[2, 2] - rotation[0, 0] - rotation[1, 1])
+            quaternion = np.array(
+                [
+                    (rotation[1, 0] - rotation[0, 1]) / scale,
+                    (rotation[0, 2] + rotation[2, 0]) / scale,
+                    (rotation[1, 2] + rotation[2, 1]) / scale,
+                    0.25 * scale,
+                ]
+            )
+    quaternion /= np.linalg.norm(quaternion)
+    return quaternion if quaternion[0] >= 0.0 else -quaternion
+
+
+def _axis_angle_to_rotm(axis_angle: np.ndarray) -> np.ndarray:
+    axis_angle = np.asarray(axis_angle, dtype=np.float64).reshape(3)
+    angle = float(np.linalg.norm(axis_angle))
+    if angle < 1e-8:
+        return np.eye(3)
+    x, y, z = axis_angle / angle
+    cross = np.array([[0.0, -z, y], [z, 0.0, -x], [-y, x, 0.0]])
+    return np.eye(3) + np.sin(angle) * cross + (1.0 - np.cos(angle)) * (cross @ cross)
 
 
 def _get_eef_reframe_p(bench_name: str, env_cfg_type: str) -> np.ndarray:
@@ -161,7 +238,7 @@ def _ee_pose_sim_to_mibot(
     """
     pos_m = np.asarray(xyz_sim, dtype=np.float64).reshape(3)
     q = np.asarray(quat_wxyz_sim, dtype=np.float64).reshape(4)
-    rotm_sim = Rotation.from_quat(q[[1, 2, 3, 0]]).as_matrix()
+    rotm_sim = _quat_wxyz_to_rotm(q)
     rotm_m = rotm_sim @ eef_reframe_p
     return pos_m, rotm_m
 
@@ -176,11 +253,7 @@ def _ee_pose_mibot_to_sim(
     """
     xyz = np.asarray(pos_mibot, dtype=np.float32).reshape(3)
     rotm_sim = np.asarray(rotm_mibot, dtype=np.float64) @ eef_reframe_p_inv
-    quat_xyzw = Rotation.from_matrix(rotm_sim).as_quat()
-    quat_wxyz = quat_xyzw[[3, 0, 1, 2]].astype(np.float64)
-    if quat_wxyz[0] < 0:
-        quat_wxyz = -quat_wxyz
-    return xyz, quat_wxyz.astype(np.float32)
+    return xyz, _rotm_to_quat_wxyz(rotm_sim).astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -199,10 +272,23 @@ class Model(ModelTemplate):
                 "slots only (see ACTION_PARTS in mibot/utils/io.py), so joint "
                 "targets cannot be recovered from its output. Set "
                 "action_type='ee' in deploy.yml."
-            )
+        )
         self.env_cfg_type = model_cfg["env_cfg_type"]
         self.bench_name = model_cfg["bench_name"]
-        self._eef_reframe_p = _get_eef_reframe_p(self.bench_name, self.env_cfg_type)
+        self.output_format = model_cfg.get("output_format", "xpolicylab")
+        if self.output_format not in {"xpolicylab", "packed_ee_delta"}:
+            raise ValueError("output_format must be 'xpolicylab' or 'packed_ee_delta'")
+        reframe = model_cfg.get("eef_reframe_matrix")
+        if reframe is None and self.output_format == "packed_ee_delta":
+            self._eef_reframe_p = np.eye(3)
+        elif reframe is None:
+            self._eef_reframe_p = _get_eef_reframe_p(self.bench_name, self.env_cfg_type)
+        else:
+            self._eef_reframe_p = np.asarray(reframe, dtype=np.float64)
+            if self._eef_reframe_p.shape != (3, 3):
+                raise ValueError("eef_reframe_matrix must have shape (3, 3)")
+            if not np.allclose(self._eef_reframe_p.T @ self._eef_reframe_p, np.eye(3)):
+                raise ValueError("eef_reframe_matrix must be orthonormal")
         self._eef_reframe_p_inv = self._eef_reframe_p.T
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -219,20 +305,30 @@ class Model(ModelTemplate):
         xr1_root = _add_xr1_to_path()
         print(f"[Xiaomi_Robotics_1] xr1 package root: {xr1_root}", flush=True)
 
-        from mibot.server.deploy import load_model, load_stats
         from mibot.utils.io import ACTION_EPS, compose_state, denormalize_action
 
         self._action_eps = ACTION_EPS
         self._compose_state = compose_state
         self._denormalize_action = denormalize_action
 
-        model_dir = self._resolve_model_dir(model_cfg)
-        print(f"[Xiaomi_Robotics_1] Loading model from {model_dir}...", flush=True)
-        cfg, self.model = load_model(model_dir, str(self.device))
-        self.cfg = cfg
-        self.mean, self.std, self.q01, self.q99, self.action_mask = load_stats(
-            cfg, str(self.device)
-        )
+        checkpoint_path = model_cfg.get("checkpoint_path")
+        if checkpoint_path:
+            self.cfg, self.model = self._load_consolidated_checkpoint(
+                model_cfg, str(checkpoint_path)
+            )
+            self.mean, self.std, self.q01, self.q99, self.action_mask = (
+                self._load_explicit_stats(model_cfg)
+            )
+        else:
+            from mibot.server.deploy import load_model, load_stats
+
+            model_dir = self._resolve_model_dir(model_cfg)
+            print(f"[Xiaomi_Robotics_1] Loading model from {model_dir}...", flush=True)
+            cfg, self.model = load_model(model_dir, str(self.device))
+            self.cfg = cfg
+            self.mean, self.std, self.q01, self.q99, self.action_mask = load_stats(
+                cfg, str(self.device)
+            )
         # (action_length, 60): the chunk shape the DiT head was trained to emit.
         self.action_shape = tuple(self.mean.shape)
         self._state_valid = self.q99 > self.q01
@@ -251,6 +347,63 @@ class Model(ModelTemplate):
     # ------------------------------------------------------------------
     # Setup helpers
     # ------------------------------------------------------------------
+
+    def _load_consolidated_checkpoint(
+        self, model_cfg: dict[str, Any], checkpoint_path: str
+    ):
+        from mibot.models import MIMODEL
+        from mibot.models.VLA import xr1 as xr1_module
+
+        path = os.path.abspath(os.path.expanduser(checkpoint_path))
+        if not os.path.isfile(path):
+            raise ValueError(f"checkpoint_path does not exist: {path}")
+        processor_path = model_cfg.get("vlm_processor_path")
+        if not processor_path:
+            raise ValueError("vlm_processor_path is required with checkpoint_path")
+        xr1_module.QWEN_VL_CONFIG_SOURCE = processor_path
+        model = MIMODEL.build(
+            {
+                "type": "xr1",
+                "freq_coefficient": 1.0,
+                "freq_excluded_dims": [17, 18, 19],
+                "ffn_gradient_checkpointing": False,
+                "async_train": True,
+            }
+        ).to(torch.bfloat16)
+        state_dict = torch.load(path, map_location="cpu", mmap=True, weights_only=False)[
+            "module"
+        ]
+        prefix = "model."
+        stripped = {
+            key[len(prefix) :]: value
+            for key, value in state_dict.items()
+            if key.startswith(prefix)
+        }
+        model.load_state_dict(stripped, strict=True)
+        print(
+            f"[Xiaomi_Robotics_1] loaded {len(stripped)} tensors from {path}",
+            flush=True,
+        )
+        return None, model.eval().to(self.device)
+
+    def _load_explicit_stats(self, model_cfg: dict[str, Any]):
+        from mibot.utils.io import build_action_mask, validate_quantiles, validate_stats
+
+        stats_path = model_cfg.get("norm_stats_path")
+        if not stats_path:
+            raise ValueError("norm_stats_path is required with checkpoint_path")
+        path = os.path.abspath(os.path.expanduser(str(stats_path)))
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        action_length = int(payload.get("action_length", 30))
+        mean, std = validate_stats(payload["mean"], payload["std"], action_length)
+        q01, q99 = validate_quantiles(payload["q01"], payload["q99"])
+        return (
+            torch.tensor(mean, device=self.device),
+            torch.tensor(std, device=self.device),
+            torch.tensor(q01, device=self.device),
+            torch.tensor(q99, device=self.device),
+            torch.from_numpy(build_action_mask(action_length)).to(self.device),
+        )
 
     @staticmethod
     def _resolve_model_dir(model_cfg: dict[str, Any]) -> str:
@@ -317,13 +470,12 @@ class Model(ModelTemplate):
         The ids are verified here so a processor mismatch fails at load time
         rather than producing silently wrong embeddings.
         """
-        from transformers import AutoProcessor
-
         from mibot.models.VLM.qwen3vl import (
             ACTION_START_ID,
             SCORE_ID,
             STATE_ID,
         )
+        from transformers import AutoProcessor
 
         processor_path = model_cfg.get(
             "vlm_processor_path", "Qwen/Qwen3-VL-4B-Instruct"
@@ -424,25 +576,27 @@ class Model(ModelTemplate):
             right_joint=right_arm_joint,
         )  # (1, 60)
 
-        # The model predicts RELATIVE deltas w.r.t. the observed pose, expressed
-        # in the current ee frame (MiBot convention). Stash the absolute pose so
-        # _actions_to_xpl_format can restore absolute targets.
-        left_pose = np.asarray(state["left_ee_pose"], dtype=np.float64).reshape(7)
-        right_pose = np.asarray(state["right_ee_pose"], dtype=np.float64).reshape(7)
-        l_pos_m, l_rotm_m = _ee_pose_sim_to_mibot(
-            left_pose[:3], left_pose[3:7], self._eef_reframe_p
-        )
-        r_pos_m, r_rotm_m = _ee_pose_sim_to_mibot(
-            right_pose[:3], right_pose[3:7], self._eef_reframe_p
-        )
-        current_state = {
-            "left_ee_pos_mibot": l_pos_m,
-            "left_ee_rotm_mibot": l_rotm_m,
-            "left_gripper": float(left_gripper[0]),
-            "right_ee_pos_mibot": r_pos_m,
-            "right_ee_rotm_mibot": r_rotm_m,
-            "right_gripper": float(right_gripper[0]),
-        }
+        current_state = None
+        if self.output_format == "xpolicylab":
+            # Standard XPolicyLab output restores absolute EE targets. ManiMux's
+            # packed_ee_delta mode deliberately keeps the native 60-D deltas and
+            # performs embodiment-specific FK/IK in its adapter instead.
+            left_pose = np.asarray(state["left_ee_pose"], dtype=np.float64).reshape(7)
+            right_pose = np.asarray(state["right_ee_pose"], dtype=np.float64).reshape(7)
+            l_pos_m, l_rotm_m = _ee_pose_sim_to_mibot(
+                left_pose[:3], left_pose[3:7], self._eef_reframe_p
+            )
+            r_pos_m, r_rotm_m = _ee_pose_sim_to_mibot(
+                right_pose[:3], right_pose[3:7], self._eef_reframe_p
+            )
+            current_state = {
+                "left_ee_pos_mibot": l_pos_m,
+                "left_ee_rotm_mibot": l_rotm_m,
+                "left_gripper": float(left_gripper[0]),
+                "right_ee_pos_mibot": r_pos_m,
+                "right_ee_rotm_mibot": r_rotm_m,
+                "right_gripper": float(right_gripper[0]),
+            }
 
         instruction = self._get_instruction(obs)
 
@@ -502,7 +656,9 @@ class Model(ModelTemplate):
     # ------------------------------------------------------------------
 
     @torch.no_grad()
-    def _run_inference_batch(self, batch: dict[str, Any]) -> np.ndarray:
+    def _run_inference_batch(
+        self, batch: dict[str, Any], sampling: dict[str, Any] | None = None
+    ) -> np.ndarray:
         """Normalize, run the model, denormalize. Mirrors ``Server.run``.
 
         Returns unnormalized relative actions as [B, action_length, 60].
@@ -535,7 +691,44 @@ class Model(ModelTemplate):
         )
         batch["state"] = normalized_state.clamp(-1.0, 1.0)
 
-        action = self.model.generate(batch)
+        rtc_context = contextlib.nullcontext()
+        if sampling is not None:
+            required = {"action_condition", "condition_weights", "beta"}
+            missing = sorted(required - set(sampling))
+            if missing:
+                raise ValueError(f"RTC sampling is missing fields: {missing}")
+            condition = np.asarray(sampling["action_condition"], dtype=np.float32)
+            weights = np.asarray(sampling["condition_weights"], dtype=np.float32)
+            if condition.shape != self.action_shape:
+                raise ValueError(
+                    f"action_condition must have shape {self.action_shape}, got {condition.shape}"
+                )
+            if weights.shape != (self.action_shape[0],):
+                raise ValueError(
+                    f"condition_weights must have shape {(self.action_shape[0],)}, "
+                    f"got {weights.shape}"
+                )
+            if not np.isfinite(condition).all() or not np.isfinite(weights).all():
+                raise ValueError("RTC sampling arrays must be finite")
+            if np.any((weights < 0.0) | (weights > 1.0)):
+                raise ValueError("condition_weights must be in [0, 1]")
+            beta = float(sampling["beta"])
+            if not np.isfinite(beta) or beta <= 0:
+                raise ValueError("RTC beta must be finite and positive")
+            normalized = torch.from_numpy(condition).to(self.device)
+            normalized = (normalized - self.mean) / (self.std + self._action_eps)
+            normalized = normalized * self.action_mask
+            condition_tensor = normalized[None].expand(batch_size, -1, -1).to(
+                dtype=torch.bfloat16
+            )
+            weights_tensor = torch.from_numpy(weights)[None].expand(batch_size, -1).to(
+                device=self.device, dtype=torch.bfloat16
+            )
+            rtc_context = self.model.rtc_condition(
+                condition_tensor, weights_tensor, beta=beta
+            )
+        with rtc_context:
+            action = self.model.generate(batch)
         action = self._denormalize_action(action * mask, self.mean, self.std) * mask
         return action.float().cpu().numpy()
 
@@ -601,9 +794,7 @@ class Model(ModelTemplate):
         """
         delta_pos = np.asarray(delta_pos, dtype=np.float64).reshape(3)
         abs_pos_m = current_pos_m + current_rotm_m @ delta_pos
-        delta_rotm = Rotation.from_rotvec(
-            np.asarray(delta_aa, dtype=np.float64).reshape(3)
-        ).as_matrix()
+        delta_rotm = _axis_angle_to_rotm(delta_aa)
         abs_rotm_m = current_rotm_m @ delta_rotm
         return _ee_pose_mibot_to_sim(abs_pos_m, abs_rotm_m, self._eef_reframe_p_inv)
 
@@ -624,6 +815,13 @@ class Model(ModelTemplate):
             )
         return self._predict_action_chunks(self._encoded_obs_list[:1])[0]
 
+    def get_action_rtc(self, sampling: dict[str, Any]):
+        if not self._encoded_obs_list:
+            raise AssertionError(
+                "[Xiaomi_Robotics_1] Call update_obs before get_action_rtc."
+            )
+        return self._predict_action_chunks(self._encoded_obs_list[:1], sampling=sampling)[0]
+
     def get_action_batch(self, env_idx_list=None, **kwargs):
         if not self._encoded_obs_list:
             raise AssertionError(
@@ -632,18 +830,25 @@ class Model(ModelTemplate):
         return self._predict_action_chunks(self._encoded_obs_list)
 
     def _predict_action_chunks(
-        self, encoded_obs_list: list[dict[str, Any]]
-    ) -> list[list[dict[str, np.ndarray]]]:
+        self,
+        encoded_obs_list: list[dict[str, Any]],
+        sampling: dict[str, Any] | None = None,
+    ) -> list[Any]:
         """Run one batched inference pass and convert each chunk."""
-        raw_actions = self._run_inference_batch(self._build_batch(encoded_obs_list))
+        raw_actions = self._run_inference_batch(
+            self._build_batch(encoded_obs_list), sampling=sampling
+        )
         chunks = []
         for index, encoded_obs in enumerate(encoded_obs_list):
             actions = raw_actions[index]
             if 0 < self.action_length < actions.shape[0]:
                 actions = actions[: self.action_length]
-            chunks.append(
-                self._actions_to_xpl_format(actions, encoded_obs["current_state"])
-            )
+            if self.output_format == "packed_ee_delta":
+                chunks.append(np.ascontiguousarray(actions, dtype=np.float32))
+            else:
+                chunks.append(
+                    self._actions_to_xpl_format(actions, encoded_obs["current_state"])
+                )
         return chunks
 
     def reset(self):

@@ -634,14 +634,18 @@ class PolicyEvalClient:
         self,
         observation: dict[str, Any],
         *,
+        sampling: dict[str, Any] | None = None,
         trial_id: str | None = None,
         action_case_id: str | None = None,
         repeat_index: int | None = None,
         step: int = 0,
     ) -> Frame:
+        payload: dict[str, Any] = {"observation": observation}
+        if sampling is not None:
+            payload["sampling"] = sampling
         return await self.request(
             MessageType.INFER,
-            {"observation": observation},
+            payload,
             trial_id=trial_id,
             action_case_id=action_case_id,
             repeat_index=repeat_index,

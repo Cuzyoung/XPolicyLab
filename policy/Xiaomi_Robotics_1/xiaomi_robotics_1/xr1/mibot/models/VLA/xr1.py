@@ -1,4 +1,5 @@
 # Copyright (C) 2026 Xiaomi Corporation.
+import contextlib
 import math
 import random
 
@@ -21,6 +22,8 @@ from mibot.models.VLM.qwen3vl import (
     Qwen3VLForConditionalGeneration,
 )
 from mibot.utils.model_utils import auto_cast
+
+QWEN_VL_CONFIG_SOURCE = "Qwen/Qwen3-VL-4B-Instruct"
 
 
 def modulate(x, shift, scale):
@@ -217,7 +220,7 @@ class xr1(nn.Module):
         self._build_model()
 
     def _build_model(self):
-        config = Qwen3VLConfig.from_pretrained("Qwen/Qwen3-VL-4B-Instruct")
+        config = Qwen3VLConfig.from_pretrained(QWEN_VL_CONFIG_SOURCE)
         self.vlm = Qwen3VLForConditionalGeneration._from_config(
             config,
             attn_implementation="flash_attention_2",
@@ -318,6 +321,8 @@ class xr1(nn.Module):
 
     @torch.no_grad()
     def _generate(self, noise, kwargs):
+        if getattr(self, "_rtc_condition", None) is not None:
+            return self._generate_pi_rtc(noise, kwargs)
         sample = noise.clone()
         dt = 1.0 / self.num_steps
         for step in range(self.num_steps):
@@ -325,6 +330,60 @@ class xr1(nn.Module):
                 (sample.shape[0], 1, 1), device=sample.device, dtype=sample.dtype
             ) * step / self.num_steps
             sample = sample + self.dit_forward(sample, timestep, **kwargs) * dt
+        return sample
+
+    @contextlib.contextmanager
+    def rtc_condition(self, condition, weights, beta: float = 5.0):
+        """Attach one normalized PiGDM inpainting condition to ``generate``."""
+        if getattr(self, "_rtc_condition", None) is not None:
+            raise RuntimeError("an RTC condition is already active")
+        weights = weights if weights.dim() == 3 else weights.unsqueeze(-1)
+        self._rtc_condition = condition
+        self._rtc_weights = weights
+        self._rtc_beta = float(beta)
+        try:
+            yield
+        finally:
+            self._rtc_condition = None
+            self._rtc_weights = None
+
+    def _rtc_guidance_scale(self, flow_time: float) -> float:
+        if flow_time <= 0.0:
+            return self._rtc_beta
+        if flow_time >= 1.0:
+            return 0.0
+        return min(
+            self._rtc_beta,
+            (flow_time**2 + (1.0 - flow_time) ** 2)
+            / (flow_time * (1.0 - flow_time)),
+        )
+
+    def _generate_pi_rtc(self, noise, kwargs):
+        target = self._rtc_condition.to(device=noise.device, dtype=noise.dtype)
+        weights = self._rtc_weights.to(device=noise.device, dtype=noise.dtype)
+        sample = noise.clone()
+        dt = 1.0 / self.num_steps
+        with torch.enable_grad():
+            for step in range(self.num_steps):
+                flow_time = step / self.num_steps
+                noisy_action = sample.detach().requires_grad_(True)
+                timestep = torch.full(
+                    (noisy_action.shape[0], 1, 1),
+                    flow_time,
+                    device=noisy_action.device,
+                    dtype=noisy_action.dtype,
+                )
+                velocity = self.dit_forward(noisy_action, timestep, **kwargs)
+                clean_estimate = noisy_action + (1.0 - flow_time) * velocity
+                error = ((target - clean_estimate) * weights).detach()
+                correction = torch.autograd.grad(
+                    clean_estimate,
+                    noisy_action,
+                    grad_outputs=error,
+                    create_graph=False,
+                )[0]
+                guided = velocity + self._rtc_guidance_scale(flow_time) * correction
+                sample = (noisy_action + dt * guided).detach()
         return sample
 
     @torch.no_grad()

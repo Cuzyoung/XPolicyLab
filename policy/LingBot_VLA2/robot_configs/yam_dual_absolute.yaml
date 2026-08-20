@@ -1,0 +1,24 @@
+# This profile is a contract for a YAM post-trained checkpoint. It does not make
+# the public foundation checkpoint YAM-capable by itself.
+states:
+  - observation.state.arm.position:
+      origin_keys: observation.state.arm.position
+  - observation.state.effector.position:
+      origin_keys: observation.state.effector.position
+
+actions:
+  - action.arm.position:
+      origin_keys: action.arm.position
+      subtract_state: false
+  - action.effector.position:
+      origin_keys: action.effector.position
+      subtract_state: false
+
+images:
+  - observation.images.camera_top
+  - observation.images.camera_wrist_left
+  - observation.images.camera_wrist_right
+
+# Runtime passes norm_stats_path explicitly. Keeping this field makes the file a
+# valid official LingBot robot config and prevents an implicit fallback.
+norm_stats: null

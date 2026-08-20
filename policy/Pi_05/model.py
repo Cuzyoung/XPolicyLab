@@ -3,9 +3,9 @@
 """
 #!/usr/bin/python3
 """
+import dataclasses
+import math
 from pathlib import Path
-import os
-import sys
 from typing import Any
 
 import numpy as np
@@ -46,7 +46,10 @@ def _resolve_pi05_model_root(model_cfg: dict[str, Any]) -> Path:
     )
     if not candidates:
         raise ValueError("ckpt_name or model_path is required for Pi_05.")
-    checkpoint_root = next((candidate for candidate in candidates if candidate.exists()), candidates[0])
+    checkpoint_root = next(
+        (candidate for candidate in candidates if candidate.exists()),
+        candidates[0],
+    )
     if not checkpoint_root.is_dir():
         return checkpoint_root
 
@@ -80,50 +83,136 @@ def _resolve_pi05_model_root(model_cfg: dict[str, Any]) -> Path:
             if candidate_step in {desired_step, scaled_step}:
                 return candidate
 
-    numeric_dirs = [candidate for candidate in candidate_dirs if _extract_step_number(candidate.name) is not None]
+    numeric_dirs = [
+        candidate
+        for candidate in candidate_dirs
+        if _extract_step_number(candidate.name) is not None
+    ]
     if numeric_dirs:
         return max(numeric_dirs, key=lambda candidate: _extract_step_number(candidate.name) or -1)
     return candidate_dirs[0]
+
+
+def _resolve_train_config(model_cfg: dict[str, Any]):
+    config = _config.get_config(model_cfg.get("train_config_name", "pi05_aloha"))
+    data_updates: dict[str, Any] = {}
+    for key in ("repo_id", "use_delta_joint_actions", "adapt_to_pi"):
+        if key in model_cfg:
+            data_updates[key] = model_cfg[key]
+
+    norm_stats_path = model_cfg.get("norm_stats_path")
+    if norm_stats_path is not None:
+        stats_dir = Path(str(norm_stats_path)).expanduser().resolve()
+        data_updates["assets"] = _config.AssetsConfig(
+            assets_dir=str(stats_dir.parent),
+            asset_id=stats_dir.name,
+        )
+
+    model_updates: dict[str, Any] = {}
+    if "action_horizon" in model_cfg:
+        action_horizon = int(model_cfg["action_horizon"])
+        if action_horizon <= 0:
+            raise ValueError(f"action_horizon must be positive, got {action_horizon}")
+        model_updates["action_horizon"] = action_horizon
+
+    replacements: dict[str, Any] = {}
+    if data_updates:
+        replacements["data"] = dataclasses.replace(config.data, **data_updates)
+    if model_updates:
+        replacements["model"] = dataclasses.replace(config.model, **model_updates)
+    return dataclasses.replace(config, **replacements) if replacements else config
 
 
 class Model(ModelTemplate):
     def __init__(self, model_cfg: dict[str, Any]):
         self.task_name = model_cfg["task_name"]
         self.action_type = model_cfg.get("action_type", "joint")
+        env_cfg_type = model_cfg.get("env_cfg_type")
         self.robot_action_dim_info = (
-            get_robot_action_dim_info(model_cfg["env_cfg_type"]) if model_cfg.get("env_cfg_type") is not None else None
+            get_robot_action_dim_info(env_cfg_type) if env_cfg_type is not None else None
+        )
+        self.robot_action_dim = (
+            sum(self.robot_action_dim_info["arm_dim"])
+            + sum(self.robot_action_dim_info["ee_dim"])
+            if self.robot_action_dim_info is not None
+            else None
         )
         self.observation_window: dict[str, Any] | None = None
         self._latest_env_idx_list: list[int] = [0]
+
+        self._train_config = _resolve_train_config(model_cfg)
+        self.action_horizon = int(self._train_config.model.action_horizon)
+        self.action_dim = int(self._train_config.model.action_dim)
+        self.num_steps = int(model_cfg.get("num_steps", 10))
+        if self.num_steps <= 0:
+            raise ValueError(f"num_steps must be positive, got {self.num_steps}")
 
         self.policy = self.get_model(model_cfg=model_cfg)
         self.model = self.policy
 
     def get_model(self, model_cfg: dict[str, Any]):
-        train_config_name = model_cfg.get("train_config_name", "pi05_aloha")
         repo_id = model_cfg.get("repo_id", "1118")
         model_root = _resolve_pi05_model_root(model_cfg)
 
-        config = _config.get_config(train_config_name)
         norm_stats = None
-        if repo_id is not None:
+        norm_stats_path = model_cfg.get("norm_stats_path")
+        if norm_stats_path is not None:
+            norm_stats = _normalize.load(Path(str(norm_stats_path)).expanduser().resolve())
+        elif repo_id is not None:
             norm_stats = _normalize.load(model_root / "assets" / str(repo_id))
 
-        return _policy_config.create_trained_policy(config, str(model_root), norm_stats=norm_stats)
+        return _policy_config.create_trained_policy(
+            self._train_config,
+            str(model_root),
+            norm_stats=norm_stats,
+        )
 
     def update_obs(self, obs):
         self.update_obs_batch([obs])
 
     def update_obs_batch(self, obs_list):
-        self._latest_env_idx_list = [obs.get("env_idx", index) for index, obs in enumerate(obs_list)]
+        self._latest_env_idx_list = [
+            obs.get("env_idx", index) for index, obs in enumerate(obs_list)
+        ]
         encoded_obs_list = [
             encode_obs(obs, self.action_type, self.robot_action_dim_info) for obs in obs_list
         ]
         self.observation_window = stack_obs(encoded_obs_list)
 
     def get_action(self, **kwargs):
+        kwargs.setdefault("num_steps", self.num_steps)
         action_list = self.get_action_batch(env_idx_list=[self._latest_env_idx_list[0]], **kwargs)
         return action_list[0]
+
+    def get_action_rtc(self, sampling: dict[str, Any]):
+        required = {"action_condition", "condition_weights", "beta"}
+        missing = sorted(required - set(sampling))
+        if missing:
+            raise ValueError(f"RTC sampling is missing fields: {missing}")
+
+        condition = np.asarray(sampling["action_condition"], dtype=np.float32)
+        weights = np.asarray(sampling["condition_weights"], dtype=np.float32)
+        beta = float(sampling["beta"])
+        expected_action_dim = self.robot_action_dim or self.action_dim
+        if condition.shape != (self.action_horizon, expected_action_dim):
+            raise ValueError(
+                "action_condition must have shape "
+                f"{(self.action_horizon, expected_action_dim)}, got {condition.shape}"
+            )
+        if weights.shape != (self.action_horizon,):
+            raise ValueError(
+                f"condition_weights must have shape {(self.action_horizon,)}, got {weights.shape}"
+            )
+        if not np.isfinite(condition).all() or not np.isfinite(weights).all():
+            raise ValueError("RTC sampling arrays must be finite")
+        if not math.isfinite(beta) or beta <= 0:
+            raise ValueError(f"RTC beta must be finite and positive, got {beta}")
+
+        return self.get_action(
+            action_condition=condition,
+            condition_weights=weights,
+            rtc_beta=beta,
+        )
 
     def get_action_batch(self, env_idx_list=None, **kwargs):
         if self.observation_window is None:

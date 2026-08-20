@@ -221,7 +221,12 @@ class Pi0(_model.BaseModel):
         *,
         num_steps: int | at.Int[at.Array, ""] = 10,
         noise: at.Float[at.Array, "b ah ad"] | None = None,
+        action_condition: at.Float[at.Array, "b ah ad"] | None = None,
+        condition_weights: at.Float[at.Array, "b ah 1"] | None = None,
+        rtc_beta: float = 5.0,
     ) -> _model.Actions:
+        if (action_condition is None) != (condition_weights is None):
+            raise ValueError("action_condition and condition_weights must be provided together")
         observation = _model.preprocess_observation(None, observation, train=False)
         # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
         # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
@@ -236,8 +241,7 @@ class Pi0(_model.BaseModel):
         positions = jnp.cumsum(prefix_mask, axis=1) - 1
         _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
 
-        def step(carry):
-            x_t, time = carry
+        def predict_velocity(x_t, time):
             suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(
                 observation, x_t, jnp.broadcast_to(time, batch_size)
             )
@@ -266,7 +270,26 @@ class Pi0(_model.BaseModel):
                 adarms_cond=[None, adarms_cond],
             )
             assert prefix_out is None
-            v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
+            return self.action_out_proj(suffix_out[:, -self.action_horizon :])
+
+        def step(carry):
+            x_t, time = carry
+            if action_condition is None:
+                v_t = predict_velocity(x_t, time)
+            else:
+
+                def clean_estimate(sample):
+                    velocity = predict_velocity(sample, time)
+                    return sample - time * velocity, velocity
+
+                clean, pullback, v_t = jax.vjp(clean_estimate, x_t, has_aux=True)
+                weighted_error = (action_condition - clean) * condition_weights
+                guidance = pullback(weighted_error)[0]
+                tau = 1.0 - time
+                denominator = jnp.maximum(time * tau, jnp.finfo(x_t.dtype).eps)
+                raw_scale = (time**2 + tau**2) / denominator
+                guidance_scale = jnp.minimum(jnp.asarray(rtc_beta), raw_scale)
+                v_t = v_t - guidance_scale * guidance
 
             return x_t + dt * v_t, time + dt
 

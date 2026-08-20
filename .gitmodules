@@ -1,0 +1,3 @@
+[submodule "policy/LingBot_VLA2/lingbot_vla_v2"]
+	path = policy/LingBot_VLA2/lingbot_vla_v2
+	url = https://github.com/robbyant/lingbot-vla-v2.git

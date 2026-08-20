@@ -193,6 +193,29 @@ class WsModelClient:
             self._step += 1
         return response.payload.get("result")
 
+    def infer(
+        self,
+        observation: dict[str, Any],
+        *,
+        sampling: dict[str, Any] | None = None,
+    ) -> Any:
+        """Send one observation and its sampling request as one inference call."""
+
+        response = self._run(
+            self._client.infer(
+                observation,
+                sampling=sampling,
+                trial_id=self.trial_id,
+                action_case_id=self.action_case_id,
+                repeat_index=self.repeat_index,
+                step=self._step,
+            )
+        )
+        self._step += 1
+        if "actions" not in response.payload:
+            raise RuntimeError("infer response has no actions")
+        return response.payload["actions"]
+
     @staticmethod
     def _dict_payload(func_name: str, obs: Any) -> dict | None:
         # Reject loudly instead of silently dropping a mistyped payload.

@@ -511,6 +511,13 @@ class PolicyServer:
         observation = frame.payload.get("observation")
         if observation is None:
             raise WsError(ErrorCode.INVALID_FRAME, "infer payload missing observation")
+        sampling = frame.payload.get("sampling") or {"mode": "default"}
+        if not isinstance(sampling, Mapping):
+            raise WsError(ErrorCode.INVALID_FRAME, "infer sampling must be a map")
+        sampling = dict(sampling)
+        mode = sampling.get("mode", "default")
+        if mode not in {"default", "rtc"}:
+            raise WsError(ErrorCode.INVALID_FRAME, f"unsupported sampling mode: {mode!r}")
 
         try:
             # Off the event loop: see _handle_call — JPEG decode is CPU-bound.
@@ -522,38 +529,55 @@ class PolicyServer:
         try:
             async with self._model_lock:
                 update_obs = getattr(self.model, "update_obs", None)
-                get_action = getattr(self.model, "get_action", None)
-                if callable(update_obs) and callable(get_action):
+                action_method = getattr(
+                    self.model,
+                    "get_action" if mode == "default" else "get_action_rtc",
+                    None,
+                )
+                if mode == "rtc" and not callable(action_method):
+                    raise AttributeError("model does not support RTC sampling")
+                if callable(update_obs) and callable(action_method):
                     if not inspect.iscoroutinefunction(
                         update_obs
-                    ) and not inspect.iscoroutinefunction(get_action):
+                    ) and not inspect.iscoroutinefunction(action_method):
                         # Keep the sync pair on ONE worker thread: some models
                         # carry thread-affine state between the two calls.
                         # NOTE: this only holds WITHIN one INFER request;
                         # across requests the default executor may pick a
                         # different thread, so threading.local model state is
                         # not supported.
-                        def run_legacy_infer() -> Any:
+                        def run_model_infer() -> Any:
                             update_result = update_obs(observation)
                             if inspect.isawaitable(update_result):
                                 raise TypeError(
                                     "update_obs returned an awaitable but is not async"
                                 )
-                            result = get_action()
+                            result = (
+                                action_method()
+                                if mode == "default"
+                                else action_method(sampling)
+                            )
                             if inspect.isawaitable(result):
                                 raise TypeError(
                                     "get_action returned an awaitable but is not async"
                                 )
                             return result
 
-                        result = await asyncio.to_thread(run_legacy_infer)
+                        result = await asyncio.to_thread(run_model_infer)
                     else:
                         # Mixed/async pair: _invoke_method keeps sync halves
                         # off the event loop (running a blocking sync call
                         # inline here would stall every connection).
                         await self._invoke_method(update_obs, observation)
-                        result = await self._invoke_method(get_action)
+                        if mode == "default":
+                            result = await self._invoke_method(action_method)
+                        else:
+                            result = await self._invoke_method(action_method, sampling)
                 else:
+                    if mode != "default":
+                        raise AttributeError(
+                            "RTC sampling requires update_obs() and get_action_rtc()"
+                        )
                     infer = getattr(self.model, "infer", None)
                     if not callable(infer):
                         raise AttributeError(

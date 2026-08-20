@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 import logging
+import math
 import pathlib
 import time
 from typing import Any, TypeAlias
@@ -65,10 +66,31 @@ class Policy(BasePolicy):
             self._rng = rng or jax.random.key(0)
 
     @override
-    def infer(self, obs: dict, *, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
+    def infer(
+        self,
+        obs: dict,
+        *,
+        noise: np.ndarray | None = None,
+        num_steps: int | None = None,
+        action_condition: np.ndarray | None = None,
+        condition_weights: np.ndarray | None = None,
+        rtc_beta: float = 5.0,
+    ) -> dict:  # type: ignore[misc]
+        if num_steps is not None and num_steps <= 0:
+            raise ValueError(f"num_steps must be positive, got {num_steps}")
+        if not math.isfinite(rtc_beta) or rtc_beta <= 0:
+            raise ValueError(f"rtc_beta must be finite and positive, got {rtc_beta}")
+        if (action_condition is None) != (condition_weights is None):
+            raise ValueError("action_condition and condition_weights must be provided together")
+        if action_condition is not None and self._is_pytorch_model:
+            raise NotImplementedError("RTC action conditioning is only implemented for JAX Pi0")
+
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
+        if action_condition is not None:
+            inputs["actions"] = np.asarray(action_condition, dtype=np.float32)
         inputs = self._input_transform(inputs)
+        transformed_condition = inputs.pop("actions", None) if action_condition is not None else None
 
         is_batched = False
         if "state" in inputs:
@@ -95,12 +117,44 @@ class Policy(BasePolicy):
 
         # Prepare kwargs for sample_actions
         sample_kwargs = dict(self._sample_kwargs)
+        if num_steps is not None:
+            sample_kwargs["num_steps"] = int(num_steps)
         if noise is not None:
             noise = torch.from_numpy(noise).to(self._pytorch_device) if self._is_pytorch_model else jnp.asarray(noise)
 
             if not is_batched and noise.ndim == 2:
                 noise = noise[None, ...]
             sample_kwargs["noise"] = noise
+
+        if transformed_condition is not None:
+            target = jnp.asarray(transformed_condition)
+            if not is_batched and target.ndim == 2:
+                target = target[None, ...]
+            weights = jnp.asarray(condition_weights, dtype=target.dtype)
+            if not is_batched and weights.ndim == 1:
+                weights = weights[None, ...]
+            if weights.ndim == 2:
+                weights = weights[..., None]
+            expected_target = (
+                inputs["state"].shape[0],
+                self._model.action_horizon,
+                self._model.action_dim,
+            )
+            expected_weights = (*expected_target[:2], 1)
+            if target.shape != expected_target:
+                raise ValueError(
+                    "transformed action_condition must have shape "
+                    f"{expected_target}, got {target.shape}"
+                )
+            if weights.shape != expected_weights:
+                raise ValueError(
+                    f"condition_weights must have shape {expected_weights}, got {weights.shape}"
+                )
+            sample_kwargs.update(
+                action_condition=target,
+                condition_weights=weights,
+                rtc_beta=float(rtc_beta),
+            )
 
         observation = _model.Observation.from_dict(inputs)
         start_time = time.monotonic()
