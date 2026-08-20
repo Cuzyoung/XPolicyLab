@@ -1,7 +1,7 @@
 policy_name: LingBot_VLA2
 protocol: ws
 host: 127.0.0.1
-port: 8501
+port: null
 bench_name: null
 task_name: null
 ckpt_name: null
@@ -12,9 +12,14 @@ seed: null
 gpu_id: null
 eval_batch: false
 
-# Pinned official source; initialize nested submodules after cloning XPolicyLab.
-lingbot_vla2_root: /home/ubuntu/manimux/XPolicyLab/policy/LingBot_VLA2/lingbot_vla_v2
-bundle_manifest_path: /home/ubuntu/manimux/checkpoints/pretrained/lingbot-vla-v2-yam/bundle.yaml
+# Standard eval resolves policy/LingBot_VLA2/checkpoints/<run>/bundle.yaml from
+# ckpt_name. Set an explicit bundle_manifest_path only for external artifacts.
+lingbot_vla2_root: lingbot_vla_v2
+bundle_manifest_path: null
+checkpoint_variant: yam_finetuned
+checkpoint_source: robbyant/lingbot-vla-v2-6b
+norm_stats_role: checkpoint_matched
+policy_uv_env_path: ../../../envs/lingbot-vla2
 use_bf16: true
 use_fp32: false
 use_compile: false

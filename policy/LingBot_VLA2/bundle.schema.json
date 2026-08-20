@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://manimux.dev/schemas/lingbot-vla2-yam-bundle-v1.json",
-  "title": "ManiMux LingBot-VLA2 YAM post-training bundle",
+  "$id": "https://xpolicylab.github.io/schemas/lingbot-vla2-yam-bundle-v1.json",
+  "title": "XPolicyLab LingBot-VLA2 YAM post-training bundle",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "model", "artifacts", "control", "embodiment"],
   "properties": {
     "schema_version": {
-      "const": "manimux.lingbot_vla2_yam_bundle.v1"
+      "const": "xpolicylab.lingbot_vla2_yam_bundle.v1"
     },
     "model": {
       "type": "object",

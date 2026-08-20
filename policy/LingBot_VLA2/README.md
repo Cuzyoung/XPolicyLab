@@ -1,33 +1,141 @@
 # LingBot-VLA2
 
-This adapter targets the official source repository only:
+**Contributor:** Cuzyoung | **Paper:** LingBot-VLA 2.0: From Foundation to Application | **arXiv:** [2607.06403](https://arxiv.org/abs/2607.06403) | **Original code:** [Robbyant/lingbot-vla-v2](https://github.com/Robbyant/lingbot-vla-v2)
 
-- repository: <https://github.com/Robbyant/lingbot-vla-v2>
-- audited revision: `951475ae1b1d87553e7dc47c97b53a3d695c0d13`
-- expected checkout: `policy/LingBot_VLA2/lingbot_vla_v2/`
+This adapter integrates the pinned official LingBot-VLA 2.0 implementation with
+the XPolicyLab model-server, data-processing, post-training and evaluation
+contracts. It currently supports `env_cfg_type=yam_dual`, `action_type=joint`,
+three RGB cameras and absolute `12` arm joints plus `2` grippers. The nested
+upstream submodule lives in `lingbot_vla_v2/` at revision
+`951475ae1b1d87553e7dc47c97b53a3d695c0d13`.
 
-The upstream checkout is pinned at that revision as a nested submodule. Initialize
-it with `git submodule update --init --recursive`. Do not point this adapter at
-`policy/LingBot_VLA/lingbot_vla`: that directory is the older Qwen2.5
-implementation and is not weight-compatible with V2.
+Shared conventions — argument meanings, checkpoint naming, split-machine deployment, `EVAL_ENV_TYPE` — are documented in the [XPolicyLab README](../../README.md). Official results: [RoboDojo LeaderBoard](https://robodojo-benchmark.com/LeaderBoard).
 
-Deployment additionally requires one bundle conforming to `bundle.schema.json`.
-The manifest pins the official source revision and declares the original
-`lingbotvla_cli.yaml`, complete `hf_ckpt`, matching YAM norm stats, training
-robot config, native control rate, and action horizon. Runtime config points to
-that single manifest; compliant post-training output can be loaded without
-changing this adapter. The public foundation checkpoint alone is not a YAM
-policy.
+## Installation
 
-## RTC
+Initialize nested submodules and create the policy uv environment:
 
-The official V2 sampler does not expose online action conditioning. `rtc.py`
-uses its public prefix-cache and `predict_velocity` primitives to run an
-adapter-owned PI-guided flow loop with VJP guidance at every denoising step.
-`Model.get_action_rtc` normalizes the raw 14-D YAM condition with the same
-checkpoint `FeatureTransform`, pads it to the 55-D canonical action space, and
-masks unused dimensions. This is sampler-level conditioning, not chunk splicing.
+```bash
+git submodule update --init --recursive
+cd XPolicyLab/policy/LingBot_VLA2
+bash install.sh
+```
 
-The RTC path is offline-tested but not live-validated: a real YAM bundle and
-measured steady latency are still required before using `infra/rtc.yaml` on a
-robot.
+The default environment is `<workspace>/envs/lingbot-vla2/.venv`. Set
+`LINGBOT_VLA2_ENV_DIR` to use another location. See [INSTALLATION.md](INSTALLATION.md)
+for FlashAttention wheels, model assets and training hardware notes.
+
+## Data Processing
+
+`process_data.sh` converts standard XPolicyLab HDF5 trajectories into a local
+LeRobot v3 dataset with these exact model features:
+
+- `observation.state.arm.position[12]` and `action.arm.position[12]`;
+- `observation.state.effector.position[2]` and `action.effector.position[2]`;
+- `camera_top`, `camera_wrist_left`, `camera_wrist_right`, RGB throughout.
+
+It then runs the official LingBot norm-stat computation unless
+`LINGBOT_VLA2_SKIP_NORM_STATS=1` is set:
+
+```bash
+bash process_data.sh <bench_name> <ckpt_name> yam_dual joint \
+  [expert_data_num] [raw_task_dirs]
+
+# Example: data/yam_real/pick_place/yam_dual/data/episode_*.hdf5
+bash process_data.sh yam_real lingbot_vla2_yam yam_dual joint 60 pick_place
+```
+
+Input defaults to `<workspace>/data/<bench_name>/`; output defaults to
+`data/<bench>-<ckpt>-yam_dual-joint/`. Override them with
+`XPOLICYLAB_DATA_ROOT` and `LINGBOT_VLA2_DATASET_PATH`. The converter never
+deletes an existing output directory.
+
+## Training
+
+Set the foundation model and Qwen3-VL processor, then run the standard XPolicy
+training entry:
+
+```bash
+export LINGBOT_VLA2_MODEL_PATH=/path/to/lingbot-vla-v2-6b
+export LINGBOT_VLA2_TOKENIZER_PATH=/path/to/Qwen3-VL-4B-Instruct
+
+bash train.sh <bench_name> <ckpt_name> yam_dual joint <seed> <gpu_id>
+
+# Example
+bash train.sh yam_real lingbot_vla2_yam yam_dual joint 0 0,1,2,3
+```
+
+The wrapper calls the official `tasks/vla/train_lingbotvla.py` with
+`training/yam_dual.yaml`. It writes the standard run directory
+`checkpoints/<bench>-<ckpt>-yam_dual-joint-<seed>/`, preserves the official
+`lingbotvla_cli.yaml`, saves HF checkpoints under
+`checkpoints/global_step_*/hf_ckpt/`, and generates `bundle.yaml` for direct
+evaluation through the same adapter.
+
+Useful overrides are `LINGBOT_VLA2_MAX_STEPS`, `LINGBOT_VLA2_SAVE_STEPS`,
+`LINGBOT_VLA2_MICRO_BATCH_SIZE`, `LINGBOT_VLA2_GRAD_ACCUM_STEPS`,
+`LINGBOT_VLA2_ACTION_HORIZON` and `LINGBOT_VLA2_NATIVE_HZ`.
+
+## Evaluation
+
+Run the standard same-machine XPolicy workflow:
+
+```bash
+bash eval.sh <bench_name> <task_name> <ckpt_name> yam_dual joint <seed> \
+  <policy_gpu_id> <env_gpu_id> <policy_env_or_uv_path> <eval_env>
+
+# Offline XPolicy serialization/action-contract loop
+EVAL_ENV_TYPE=debug bash eval.sh \
+  yam_real pick_place lingbot_vla2_yam yam_dual joint 0 0 0 uv envs/yam
+```
+
+The debug client accepts a Conda environment, `uv`, an absolute virtualenv
+path, or a workspace-relative virtualenv path such as `envs/yam`. `uv`
+defaults to `<workspace>/envs/yam`; override it with
+`LINGBOT_VLA2_EVAL_ENV_DIR`. Simulation and real-environment clients retain
+XPolicy's standard Conda workflow.
+
+For split-machine deployment, use `setup_eval_policy_server.sh` and
+`setup_eval_env_client.sh` as documented in the
+[Deployment Flow](../../README.md#-deployment-flow). An explicit external
+bundle can be selected with `LINGBOT_VLA2_DEPLOY_CONFIG=/path/to/deploy.yml`.
+
+## Model Assets
+
+One deployable run contains:
+
+```text
+checkpoints/<bench>-<ckpt>-yam_dual-joint-<seed>/
+├── bundle.yaml
+├── lingbotvla_cli.yaml
+├── norm_stats.json
+├── robot_config.yaml
+└── checkpoints/global_step_<N>/hf_ckpt/
+    ├── config.json
+    ├── model.safetensors.index.json
+    └── model-*.safetensors
+```
+
+`bundle.yaml` pins the official source revision, training config, checkpoint,
+norm stats, robot mapping, action horizon and control frequency. The public
+foundation checkpoint alone is not a YAM post-trained policy.
+
+## Configuration
+
+`deploy.yml` keeps the standard XPolicy key set. `ckpt_name` resolves through
+`XPolicyLab.utils.checkpoint_resolver`; `bundle_manifest_path` is an optional
+explicit override for an external bundle. Model-specific keys are
+`lingbot_vla2_root`, `checkpoint_variant`, `checkpoint_source`,
+`norm_stats_role`, `policy_uv_env_path`, `use_bf16`, `use_fp32`, `use_compile`
+and `default_prompt`.
+
+## Notes
+
+- The normal path delegates model construction, `FeatureTransform`,
+  normalization and 10-step flow sampling to the official implementation.
+- The adapter learns and returns absolute joint positions. Do not use a
+  relative-action robot config without adding the corresponding runtime decode.
+- `rtc.py` is an XPolicy sampler extension and is not part of the upstream
+  LingBot-VLA2 release; it must be evaluated separately from normal inference.
+- Training, simulator task success and real-robot success require separate
+  evidence. A successful debug loop validates wiring, not policy quality.

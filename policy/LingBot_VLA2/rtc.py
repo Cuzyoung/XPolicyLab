@@ -168,18 +168,36 @@ def sample_actions_rtc(
     return x_t
 
 
-def encode_raw_condition(action_condition: np.ndarray) -> dict[str, np.ndarray]:
-    """Map ManiMux [left 6+1, right 6+1] rows to LingBot action features."""
+def encode_raw_condition(
+    action_condition: np.ndarray,
+    robot_info: Mapping[str, Any],
+) -> dict[str, np.ndarray]:
+    """Map packed YAM [left 6+1, right 6+1] rows to LingBot features."""
 
     condition = np.asarray(action_condition, dtype=np.float32)
-    if condition.ndim != 2 or condition.shape[1] != 14:
-        raise ValueError(f"RTC raw condition must be (H, 14), got {condition.shape}")
+    arm_dims = list(robot_info["arm_dim"])
+    effector_dims = list(robot_info["ee_dim"])
+    if len(arm_dims) != 2 or len(effector_dims) != 2:
+        raise ValueError("LingBot RTC requires exactly two arms")
+    left_arm_end = arm_dims[0]
+    left_effector_end = left_arm_end + effector_dims[0]
+    right_arm_end = left_effector_end + arm_dims[1]
+    action_dim = right_arm_end + effector_dims[1]
+    if condition.ndim != 2 or condition.shape[1] != action_dim:
+        raise ValueError(
+            f"RTC raw condition must be (H, {action_dim}), got {condition.shape}"
+        )
     return {
         "action.arm.position": np.concatenate(
-            [condition[:, :6], condition[:, 7:13]], axis=-1
+            [condition[:, :left_arm_end], condition[:, left_effector_end:right_arm_end]],
+            axis=-1,
         ),
-        "action.effector.position": np.stack(
-            [condition[:, 6], condition[:, 13]], axis=-1
+        "action.effector.position": np.concatenate(
+            [
+                condition[:, left_arm_end:left_effector_end],
+                condition[:, right_arm_end:action_dim],
+            ],
+            axis=-1,
         ),
     }
 
@@ -237,8 +255,9 @@ def normalize_condition(
 class LingBotRtcBridge:
     """Run sampler-level RTC through an initialized official server instance."""
 
-    def __init__(self, server: Any) -> None:
+    def __init__(self, server: Any, robot_info: Mapping[str, Any]) -> None:
         self.server = server
+        self.robot_info = robot_info
 
     def infer(
         self,
@@ -247,7 +266,7 @@ class LingBotRtcBridge:
         condition_weights: np.ndarray,
         beta: float,
     ) -> dict[str, np.ndarray]:
-        raw_actions = encode_raw_condition(action_condition)
+        raw_actions = encode_raw_condition(action_condition, self.robot_info)
         target, weights = normalize_condition(
             self.server.vla.feature_transform, raw_actions, condition_weights
         )

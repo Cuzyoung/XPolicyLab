@@ -21,28 +21,69 @@ import numpy as np
 import yaml
 
 from XPolicyLab.model_template import ModelTemplate
+from XPolicyLab.utils.checkpoint_resolver import resolve_checkpoint_root
 from XPolicyLab.utils.process_data import get_robot_action_dim_info
 
 POLICY_DIR = Path(__file__).resolve().parent
+CHECKPOINTS_DIR = POLICY_DIR / "checkpoints"
 OFFICIAL_DEPLOY_MODULE = "deploy.lingbot_vla_v2_policy"
 OFFICIAL_FEATURE_MODULE = "lingbotvla.data.vla_data.utils"
-BUNDLE_SCHEMA_VERSION = "manimux.lingbot_vla2_yam_bundle.v1"
+BUNDLE_SCHEMA_VERSION = "xpolicylab.lingbot_vla2_yam_bundle.v1"
 EXPECTED_CAMERAS = ["camera_top", "camera_wrist_left", "camera_wrist_right"]
 EXPECTED_JOINTS = [
-    "arm.position: 14",
-    "end.position: 14",
-    "effector.position: 2",
-    "waist.position: 4",
-    "head.position: 2",
-    "base.position: 3",
-    "hand.position: 12",
+    {"arm.position": 14},
+    {"end.position": 14},
+    {"effector.position": 2},
+    {"waist.position": 4},
+    {"head.position": 2},
+    {"base.position": 3},
+    {"hand.position": 12},
 ]
 
 
-def _resolve_path(value: object, *, name: str) -> Path:
+def _normalize_official_feature_literals(data_config: Any) -> Any:
+    """Bridge official YAML mappings to the strings FeatureTransform parses."""
+
+    for field in ("joints", "norm_type"):
+        values = getattr(data_config, field, None)
+        if values is None:
+            continue
+        normalized = []
+        for value in values:
+            if isinstance(value, Mapping):
+                normalized.append(repr(dict(value)))
+            elif isinstance(value, str):
+                normalized.append(value)
+            else:
+                raise TypeError(f"data.{field} entries must be mappings or strings")
+        setattr(data_config, field, normalized)
+    return data_config
+
+
+def _resolve_path(value: object, *, name: str, base_dir: Path = POLICY_DIR) -> Path:
     if value is None or not str(value).strip():
         raise ValueError(f"{name} must be configured")
-    return Path(os.path.expandvars(os.path.expanduser(str(value)))).resolve()
+    path = Path(os.path.expandvars(os.path.expanduser(str(value))))
+    if not path.is_absolute():
+        path = base_dir / path
+    return path.resolve()
+
+
+def resolve_bundle_manifest(model_cfg: Mapping[str, Any]) -> Path:
+    """Resolve an explicit bundle or a standard XPolicy checkpoint run."""
+
+    checkpoint_root = resolve_checkpoint_root(
+        dict(model_cfg),
+        CHECKPOINTS_DIR,
+        policy_dir=POLICY_DIR,
+        explicit_keys=("bundle_manifest_path",),
+    )
+    manifest_path = (
+        checkpoint_root / "bundle.yaml" if checkpoint_root.is_dir() else checkpoint_root
+    )
+    if manifest_path.name != "bundle.yaml":
+        raise ValueError(f"LingBot-VLA2 bundle manifest must be named bundle.yaml: {manifest_path}")
+    return manifest_path
 
 
 def expected_training_config(checkpoint_path: Path) -> Path:
@@ -103,10 +144,16 @@ def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
     """Validate deployment metadata without importing torch or loading weights."""
 
     source_root = _resolve_path(model_cfg.get("lingbot_vla2_root"), name="lingbot_vla2_root")
-    manifest_path = _resolve_path(
-        model_cfg.get("bundle_manifest_path"), name="bundle_manifest_path"
-    )
+    try:
+        manifest_path = resolve_bundle_manifest(model_cfg)
+    except (FileNotFoundError, ValueError) as exc:
+        manifest_path = POLICY_DIR / "checkpoints" / "__missing_bundle__" / "bundle.yaml"
+        bundle_resolution_error = str(exc)
+    else:
+        bundle_resolution_error = None
     errors: list[str] = []
+    if bundle_resolution_error is not None:
+        errors.append(bundle_resolution_error)
     manifest: dict[str, Any] = {}
     if not manifest_path.is_file():
         errors.append("missing files: bundle_manifest")
@@ -442,9 +489,17 @@ def _state_value(observation: Mapping[str, Any], key: str, dim: int) -> np.ndarr
     return value
 
 
-def encode_observation(observation: Mapping[str, Any], default_prompt: str) -> dict[str, Any]:
+def encode_observation(
+    observation: Mapping[str, Any],
+    default_prompt: str,
+    robot_info: Mapping[str, Sequence[int]],
+) -> dict[str, Any]:
     """Translate one XPolicyLab YAM observation to official LingBot features."""
 
+    arm_dims = list(robot_info["arm_dim"])
+    effector_dims = list(robot_info["ee_dim"])
+    if len(arm_dims) != 2 or len(effector_dims) != 2:
+        raise ValueError("LingBot_VLA2 YAM adapter requires exactly two arms")
     prompt = observation.get("instruction") or observation.get("prompt") or default_prompt
     return {
         "observation.images.camera_top": _extract_image(observation, "cam_head"),
@@ -452,39 +507,49 @@ def encode_observation(observation: Mapping[str, Any], default_prompt: str) -> d
         "observation.images.camera_wrist_right": _extract_image(observation, "cam_right_wrist"),
         "observation.state.arm.position": np.concatenate(
             [
-                _state_value(observation, "left_arm_joint_state", 6),
-                _state_value(observation, "right_arm_joint_state", 6),
+                _state_value(observation, "left_arm_joint_state", arm_dims[0]),
+                _state_value(observation, "right_arm_joint_state", arm_dims[1]),
             ]
         ),
         "observation.state.effector.position": np.concatenate(
             [
-                _state_value(observation, "left_ee_joint_state", 1),
-                _state_value(observation, "right_ee_joint_state", 1),
+                _state_value(observation, "left_ee_joint_state", effector_dims[0]),
+                _state_value(observation, "right_ee_joint_state", effector_dims[1]),
             ]
         ),
         "task": str(prompt),
     }
 
 
-def decode_actions(result: Mapping[str, Any]) -> list[dict[str, np.ndarray]]:
+def decode_actions(
+    result: Mapping[str, Any],
+    robot_info: Mapping[str, Sequence[int]],
+) -> list[dict[str, np.ndarray]]:
     """Translate official absolute joint chunks to XPolicyLab action steps."""
 
+    arm_dims = list(robot_info["arm_dim"])
+    effector_dims = list(robot_info["ee_dim"])
+    if len(arm_dims) != 2 or len(effector_dims) != 2:
+        raise ValueError("LingBot_VLA2 YAM adapter requires exactly two arms")
+    arm_width = sum(arm_dims)
+    effector_width = sum(effector_dims)
     arms = np.asarray(result["action.arm.position"], dtype=np.float32)
     effectors = np.asarray(result["action.effector.position"], dtype=np.float32)
-    if arms.ndim != 2 or arms.shape[1] != 12:
-        raise ValueError(f"action.arm.position must be (H, 12), got {arms.shape}")
-    if effectors.shape != (arms.shape[0], 2):
+    if arms.ndim != 2 or arms.shape[1] != arm_width:
+        raise ValueError(f"action.arm.position must be (H, {arm_width}), got {arms.shape}")
+    if effectors.shape != (arms.shape[0], effector_width):
         raise ValueError(
-            f"action.effector.position must be {(arms.shape[0], 2)}, got {effectors.shape}"
+            "action.effector.position must be "
+            f"{(arms.shape[0], effector_width)}, got {effectors.shape}"
         )
     if not np.isfinite(arms).all() or not np.isfinite(effectors).all():
         raise ValueError("LingBot-VLA2 returned non-finite actions")
     return [
         {
-            "left_arm_joint_state": arms[index, :6].copy(),
-            "left_ee_joint_state": effectors[index, :1].copy(),
-            "right_arm_joint_state": arms[index, 6:].copy(),
-            "right_ee_joint_state": effectors[index, 1:].copy(),
+            "left_arm_joint_state": arms[index, : arm_dims[0]].copy(),
+            "left_ee_joint_state": effectors[index, : effector_dims[0]].copy(),
+            "right_arm_joint_state": arms[index, arm_dims[0] :].copy(),
+            "right_ee_joint_state": effectors[index, effector_dims[0] :].copy(),
         }
         for index in range(arms.shape[0])
     ]
@@ -497,9 +562,12 @@ class Model(ModelTemplate):
         self.model_cfg = dict(model_cfg)
         if self.model_cfg.get("action_type") != "joint":
             raise ValueError("LingBot_VLA2 YAM adapter only supports action_type: joint")
-        robot_info = get_robot_action_dim_info(str(self.model_cfg["env_cfg_type"]))
-        if robot_info != {"arm_dim": [6, 6], "ee_dim": [1, 1]}:
-            raise ValueError(f"LingBot_VLA2 YAM adapter requires 6+1 dual arms, got {robot_info}")
+        self.robot_info = get_robot_action_dim_info(str(self.model_cfg["env_cfg_type"]))
+        if self.robot_info != {"arm_dim": [6, 6], "ee_dim": [1, 1]}:
+            raise ValueError(
+                f"LingBot_VLA2 YAM adapter requires 6+1 dual arms, got {self.robot_info}"
+            )
+        self.action_dim = sum(self.robot_info["arm_dim"]) + sum(self.robot_info["ee_dim"])
 
         report = validate_bundle(self.model_cfg)
         if report["status"] != "ready":
@@ -519,7 +587,7 @@ class Model(ModelTemplate):
         self.model = self._load_official_server()
         from .rtc import LingBotRtcBridge
 
-        self._rtc_bridge = LingBotRtcBridge(self.model)
+        self._rtc_bridge = LingBotRtcBridge(self.model, self.robot_info)
 
     def _load_official_server(self):
         source_root = _resolve_path(self.model_cfg["lingbot_vla2_root"], name="lingbot_vla2_root")
@@ -538,14 +606,16 @@ class Model(ModelTemplate):
             use_fp32=bool(self.model_cfg.get("use_fp32", False)),
             use_compile=bool(self.model_cfg.get("use_compile", False)),
         )
+        data_config = _normalize_official_feature_literals(server.data_config)
         feature_transform = feature_module.FeatureTransform(
             self.bundle["robot_config_path"],
-            server.data_config,
+            data_config,
             server.config,
             server.processor,
             chunk_size=server.config.chunk_size,
             norm_stats_path=self.bundle["norm_stats_path"],
         )
+        server.data_config = data_config
         server.vla.feature_transform = feature_transform
         server.action_key = feature_transform.org_features["actions"]
         return server
@@ -557,7 +627,9 @@ class Model(ModelTemplate):
         self._latest_env_idx_list = [
             int(obs.get("env_idx", index)) for index, obs in enumerate(obs_list)
         ]
-        self._observations = [encode_observation(obs, self.default_prompt) for obs in obs_list]
+        self._observations = [
+            encode_observation(obs, self.default_prompt, self.robot_info) for obs in obs_list
+        ]
 
     def get_action(self, **_: Any) -> list[dict[str, np.ndarray]]:
         return self.get_action_batch([self._latest_env_idx_list[0]])[0]
@@ -572,10 +644,10 @@ class Model(ModelTemplate):
         condition = np.asarray(sampling["action_condition"], dtype=np.float32)
         weights = np.asarray(sampling["condition_weights"], dtype=np.float32)
         beta = float(sampling["beta"])
-        if condition.shape != (self.action_horizon, 14):
+        if condition.shape != (self.action_horizon, self.action_dim):
             raise ValueError(
                 "RTC action_condition must have shape "
-                f"{(self.action_horizon, 14)}, got {condition.shape}"
+                f"{(self.action_horizon, self.action_dim)}, got {condition.shape}"
             )
         if weights.shape != (self.action_horizon,):
             raise ValueError(
@@ -591,7 +663,7 @@ class Model(ModelTemplate):
         result = self._rtc_bridge.infer(
             self._observations[0], condition, weights, beta
         )
-        return decode_actions(result)
+        return decode_actions(result, self.robot_info)
 
     def get_action_batch(self, env_idx_list=None, **_: Any):
         if self._observations is None:
@@ -599,7 +671,10 @@ class Model(ModelTemplate):
         indices = list(env_idx_list or self._latest_env_idx_list)
         if len(indices) != len(self._observations):
             raise ValueError("env_idx_list size does not match the observation batch")
-        return [decode_actions(self.model.infer(observation)) for observation in self._observations]
+        return [
+            decode_actions(self.model.infer(observation), self.robot_info)
+            for observation in self._observations
+        ]
 
     def reset(self) -> None:
         self._observations = None
