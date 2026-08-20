@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -142,6 +143,7 @@ def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
             "action_space": "absolute_joint_position",
             "action_horizon": 0,
             "native_hz": 0.0,
+            "rtc_capability": "pi_guided_v1_sampler",
             "errors": errors,
         }
 
@@ -246,6 +248,7 @@ def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
         "training_config": training_config_path,
         "robot_config": robot_config_path,
         "norm_stats": norm_stats_path,
+        "rtc_integration": POLICY_DIR / "rtc.py",
     }
     missing = [name for name, path in required.items() if not path.is_file()]
     if missing:
@@ -411,6 +414,7 @@ def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
         "action_space": "absolute_joint_position",
         "action_horizon": action_horizon,
         "native_hz": native_hz,
+        "rtc_capability": "pi_guided_v1_sampler",
         "errors": errors,
     }
 
@@ -513,6 +517,9 @@ class Model(ModelTemplate):
         self._observations: list[dict[str, Any]] | None = None
         self._latest_env_idx_list = [0]
         self.model = self._load_official_server()
+        from .rtc import LingBotRtcBridge
+
+        self._rtc_bridge = LingBotRtcBridge(self.model)
 
     def _load_official_server(self):
         source_root = _resolve_path(self.model_cfg["lingbot_vla2_root"], name="lingbot_vla2_root")
@@ -554,6 +561,37 @@ class Model(ModelTemplate):
 
     def get_action(self, **_: Any) -> list[dict[str, np.ndarray]]:
         return self.get_action_batch([self._latest_env_idx_list[0]])[0]
+
+    def get_action_rtc(self, sampling: Mapping[str, Any]) -> list[dict[str, np.ndarray]]:
+        if self._observations is None or len(self._observations) != 1:
+            raise RuntimeError("RTC requires exactly one update_obs observation")
+        required = {"action_condition", "condition_weights", "beta"}
+        missing = sorted(required.difference(sampling))
+        if missing:
+            raise ValueError(f"RTC sampling is missing fields: {missing}")
+        condition = np.asarray(sampling["action_condition"], dtype=np.float32)
+        weights = np.asarray(sampling["condition_weights"], dtype=np.float32)
+        beta = float(sampling["beta"])
+        if condition.shape != (self.action_horizon, 14):
+            raise ValueError(
+                "RTC action_condition must have shape "
+                f"{(self.action_horizon, 14)}, got {condition.shape}"
+            )
+        if weights.shape != (self.action_horizon,):
+            raise ValueError(
+                f"RTC condition_weights must have shape {(self.action_horizon,)}, "
+                f"got {weights.shape}"
+            )
+        if not np.isfinite(condition).all() or not np.isfinite(weights).all():
+            raise ValueError("RTC sampling arrays must be finite")
+        if np.any(weights < 0) or np.any(weights > 1):
+            raise ValueError("RTC condition_weights must be in [0, 1]")
+        if not math.isfinite(beta) or beta <= 0:
+            raise ValueError(f"RTC beta must be finite and positive, got {beta}")
+        result = self._rtc_bridge.infer(
+            self._observations[0], condition, weights, beta
+        )
+        return decode_actions(result)
 
     def get_action_batch(self, env_idx_list=None, **_: Any):
         if self._observations is None:
