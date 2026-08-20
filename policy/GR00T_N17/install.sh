@@ -1,5 +1,5 @@
-# XPolicyLab deploy: policy server env=uv; run setup_eval_policy_server.sh with this env.
 #!/usr/bin/env bash
+# XPolicyLab deploy: policy server env=uv; run setup_eval_policy_server.sh with this env.
 set -euo pipefail
 
 POLICY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,14 +22,34 @@ cd "${GR00T_ROOT}"
 # `uv pip install -e .`, which resolves only for the *current* platform (x86_64) and
 # honors [tool.uv.sources] / [[tool.uv.index]] while ignoring required-environments.
 uv venv --clear --python 3.10
-uv pip install -e .
-uv run python -c "import gr00t; print('GR00T ok')"
+MODEL_PYTHON="${GR00T_ROOT}/.venv/bin/python"
+uv pip install --python "${MODEL_PYTHON}" -e .
+"${MODEL_PYTHON}" -c "import gr00t; print('GR00T import ok')"
 
-uv pip install -e "${XPOLICYLAB_ROOT}"
-uv pip install h5py pyyaml
-uv run python -c "import XPolicyLab; print('XPolicyLab ok')"
+uv pip install --python "${MODEL_PYTHON}" -e "${XPOLICYLAB_ROOT}"
+uv pip install --python "${MODEL_PYTHON}" h5py pyyaml
+"${MODEL_PYTHON}" - <<'PY'
+import json
+
+import flash_attn
+import torch
+import transformers
+import XPolicyLab
+
+report = {
+    "python": __import__("sys").version.split()[0],
+    "torch": torch.__version__,
+    "transformers": transformers.__version__,
+    "flash_attn": flash_attn.__version__,
+    "cuda_available": torch.cuda.is_available(),
+    "cuda_device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+    "xpolicylab_import": bool(XPolicyLab),
+}
+print(json.dumps(report, indent=2))
+if not report["cuda_available"]:
+    raise SystemExit("GR00T environment installed, but CUDA is unavailable")
+PY
 
 echo "[GR00T_N17] Installation finished."
 echo "[GR00T_N17] Policy server env: source ${GR00T_ROOT}/.venv/bin/activate"
-echo "[GR00T_N17] Eval example:"
-echo "  bash eval.sh RoboDojo sweep_blocks RoboDojo-cotrain-arx_x5-joint-0 arx_x5 joint 0 0 0 uv mibot"
+echo "[GR00T_N17] Next: run the ManiMux GR00T contract check, then start the model server."

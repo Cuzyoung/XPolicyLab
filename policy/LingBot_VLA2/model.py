@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -24,6 +25,17 @@ from XPolicyLab.utils.process_data import get_robot_action_dim_info
 POLICY_DIR = Path(__file__).resolve().parent
 OFFICIAL_DEPLOY_MODULE = "deploy.lingbot_vla_v2_policy"
 OFFICIAL_FEATURE_MODULE = "lingbotvla.data.vla_data.utils"
+BUNDLE_SCHEMA_VERSION = "manimux.lingbot_vla2_yam_bundle.v1"
+EXPECTED_CAMERAS = ["camera_top", "camera_wrist_left", "camera_wrist_right"]
+EXPECTED_JOINTS = [
+    "arm.position: 14",
+    "end.position: 14",
+    "effector.position: 2",
+    "waist.position: 4",
+    "head.position: 2",
+    "base.position: 3",
+    "hand.position: 12",
+]
 
 
 def _resolve_path(value: object, *, name: str) -> Path:
@@ -38,16 +50,196 @@ def expected_training_config(checkpoint_path: Path) -> Path:
     return checkpoint_path.parent.parent.parent / "lingbotvla_cli.yaml"
 
 
+def _bundle_artifact(bundle_root: Path, value: object, *, name: str) -> Path:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"manifest artifacts.{name} must be a non-empty relative path")
+    raw_path = Path(value)
+    if raw_path.is_absolute():
+        raise ValueError(f"manifest artifacts.{name} must be relative to the bundle root")
+    resolved = (bundle_root / raw_path).resolve()
+    try:
+        resolved.relative_to(bundle_root)
+    except ValueError as exc:
+        raise ValueError(f"manifest artifacts.{name} escapes the bundle root") from exc
+    return resolved
+
+
+def _source_revision(source_root: Path) -> str | None:
+    if not source_root.is_dir():
+        return None
+    result = subprocess.run(
+        ["git", "-C", str(source_root), "rev-parse", "HEAD"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    revision = result.stdout.strip().lower()
+    if result.returncode == 0 and len(revision) == 40:
+        return revision
+    return None
+
+
+def _check_keys(
+    value: object,
+    *,
+    label: str,
+    required: set[str],
+    errors: list[str],
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        errors.append(f"manifest {label} must be a mapping")
+        return {}
+    missing = sorted(required.difference(value))
+    unknown = sorted(set(value).difference(required))
+    if missing:
+        errors.append(f"manifest {label} is missing keys: {', '.join(missing)}")
+    if unknown:
+        errors.append(f"manifest {label} has unknown keys: {', '.join(unknown)}")
+    return value
+
+
 def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
     """Validate deployment metadata without importing torch or loading weights."""
 
     source_root = _resolve_path(model_cfg.get("lingbot_vla2_root"), name="lingbot_vla2_root")
-    checkpoint_path = _resolve_path(model_cfg.get("checkpoint_path"), name="checkpoint_path")
-    robot_config_path = _resolve_path(model_cfg.get("robot_config_path"), name="robot_config_path")
-    norm_stats_path = _resolve_path(model_cfg.get("norm_stats_path"), name="norm_stats_path")
-    training_config_path = expected_training_config(checkpoint_path)
+    manifest_path = _resolve_path(
+        model_cfg.get("bundle_manifest_path"), name="bundle_manifest_path"
+    )
+    errors: list[str] = []
+    manifest: dict[str, Any] = {}
+    if not manifest_path.is_file():
+        errors.append("missing files: bundle_manifest")
+    else:
+        try:
+            loaded = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as exc:
+            errors.append(f"invalid bundle manifest: {exc}")
+        else:
+            if isinstance(loaded, dict):
+                manifest = loaded
+            else:
+                errors.append("bundle manifest must be a mapping")
+
+    if not manifest:
+        source_files = [
+            source_root / "deploy/lingbot_vla_v2_policy.py",
+            source_root / "lingbotvla/data/vla_data/utils.py",
+        ]
+        if not all(path.is_file() for path in source_files):
+            errors.append("missing files: official_deploy, official_feature_transform")
+        return {
+            "status": "blocked",
+            "schema_version": None,
+            "manifest_path": str(manifest_path),
+            "bundle_root": str(manifest_path.parent),
+            "source_root": str(source_root),
+            "source_revision": _source_revision(source_root),
+            "expected_source_revision": None,
+            "checkpoint_path": None,
+            "training_config_path": None,
+            "robot_config_path": None,
+            "norm_stats_path": None,
+            "action_space": "absolute_joint_position",
+            "action_horizon": 0,
+            "native_hz": 0.0,
+            "errors": errors,
+        }
+
+    _check_keys(
+        manifest,
+        label="root",
+        required={"schema_version", "model", "artifacts", "control", "embodiment"},
+        errors=errors,
+    )
+    model = _check_keys(
+        manifest.get("model"),
+        label="model",
+        required={"family", "official_source_revision"},
+        errors=errors,
+    ) if manifest else {}
+    artifacts = _check_keys(
+        manifest.get("artifacts"),
+        label="artifacts",
+        required={"training_config", "checkpoint", "norm_stats", "robot_config"},
+        errors=errors,
+    ) if manifest else {}
+    control = _check_keys(
+        manifest.get("control"),
+        label="control",
+        required={"native_hz", "action_horizon", "action_space"},
+        errors=errors,
+    ) if manifest else {}
+    embodiment = _check_keys(
+        manifest.get("embodiment"),
+        label="embodiment",
+        required={"name", "arm_dofs", "gripper_dofs", "cameras"},
+        errors=errors,
+    ) if manifest else {}
+    if manifest:
+        if manifest.get("schema_version") != BUNDLE_SCHEMA_VERSION:
+            errors.append(f"schema_version must be {BUNDLE_SCHEMA_VERSION}")
+        if model.get("family") != "lingbot-vla-v2":
+            errors.append("manifest model.family must be lingbot-vla-v2")
+        revision = model.get("official_source_revision")
+        if not isinstance(revision, str) or len(revision) != 40 or any(
+            char not in "0123456789abcdef" for char in revision.lower()
+        ):
+            errors.append("manifest model.official_source_revision must be a 40-char hex commit")
+        if control.get("action_space") != "absolute_joint_position":
+            errors.append("manifest control.action_space must be absolute_joint_position")
+        if embodiment.get("name") != "yam_dual":
+            errors.append("manifest embodiment.name must be yam_dual")
+        if embodiment.get("arm_dofs") != [6, 6]:
+            errors.append("manifest embodiment.arm_dofs must be [6, 6]")
+        if embodiment.get("gripper_dofs") != [1, 1]:
+            errors.append("manifest embodiment.gripper_dofs must be [1, 1]")
+        if embodiment.get("cameras") != EXPECTED_CAMERAS:
+            errors.append(f"manifest embodiment.cameras must be {EXPECTED_CAMERAS}")
+
+    raw_action_horizon = control.get("action_horizon")
+    action_horizon = (
+        raw_action_horizon
+        if isinstance(raw_action_horizon, int) and not isinstance(raw_action_horizon, bool)
+        else 0
+    )
+    if action_horizon <= 0:
+        errors.append("manifest control.action_horizon must be a positive integer")
+    raw_native_hz = control.get("native_hz")
+    native_hz = (
+        float(raw_native_hz)
+        if isinstance(raw_native_hz, int | float) and not isinstance(raw_native_hz, bool)
+        else 0.0
+    )
+    if not np.isfinite(native_hz) or native_hz <= 0:
+        errors.append("manifest control.native_hz must be finite and positive")
+
+    bundle_root = manifest_path.parent
+    resolved_artifacts: dict[str, Path] = {}
+    for name in ("training_config", "checkpoint", "norm_stats", "robot_config"):
+        try:
+            resolved_artifacts[name] = _bundle_artifact(
+                bundle_root, artifacts.get(name), name=name
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+
+    checkpoint_path = resolved_artifacts.get("checkpoint", bundle_root / "__missing_checkpoint__")
+    training_config_path = resolved_artifacts.get(
+        "training_config", bundle_root / "__missing_training_config__"
+    )
+    norm_stats_path = resolved_artifacts.get("norm_stats", bundle_root / "__missing_stats__")
+    robot_config_path = resolved_artifacts.get(
+        "robot_config", bundle_root / "__missing_robot_config__"
+    )
+
+    if training_config_path != expected_training_config(checkpoint_path):
+        errors.append(
+            "manifest checkpoint layout is incompatible with the official loader: "
+            "training_config must equal checkpoint.parent.parent.parent/lingbotvla_cli.yaml"
+        )
 
     required = {
+        "bundle_manifest": manifest_path,
         "official_deploy": source_root / "deploy/lingbot_vla_v2_policy.py",
         "official_feature_transform": source_root / "lingbotvla/data/vla_data/utils.py",
         "checkpoint_index": checkpoint_path / "model.safetensors.index.json",
@@ -56,10 +248,21 @@ def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
         "norm_stats": norm_stats_path,
     }
     missing = [name for name, path in required.items() if not path.is_file()]
-
-    errors: list[str] = []
     if missing:
-        errors.append("missing files: " + ", ".join(missing))
+        missing_message = "missing files: " + ", ".join(missing)
+        if missing_message not in errors:
+            errors.append(missing_message)
+
+    expected_revision = model.get("official_source_revision")
+    actual_revision = _source_revision(source_root)
+    if isinstance(expected_revision, str) and len(expected_revision) == 40:
+        if actual_revision is None:
+            errors.append("official source revision cannot be verified from Git metadata")
+        elif actual_revision != expected_revision.lower():
+            errors.append(
+                f"official source revision is {actual_revision}, "
+                f"expected {expected_revision.lower()}"
+            )
 
     checkpoint_index = required["checkpoint_index"]
     if checkpoint_index.is_file():
@@ -77,40 +280,89 @@ def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
 
     robot_config: dict[str, Any] = {}
     if robot_config_path.is_file():
-        robot_config = yaml.safe_load(robot_config_path.read_text(encoding="utf-8")) or {}
+        try:
+            loaded_robot_config = yaml.safe_load(robot_config_path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as exc:
+            errors.append(f"invalid robot config: {exc}")
+            loaded_robot_config = {}
+        robot_config = loaded_robot_config if isinstance(loaded_robot_config, dict) else {}
         action_entries = robot_config.get("actions", [])
         expected_actions = {
-            "action.arm.position": False,
-            "action.effector.position": False,
+            "action.arm.position": {
+                "origin_keys": "action.arm.position",
+                "subtract_state": False,
+            },
+            "action.effector.position": {
+                "origin_keys": "action.effector.position",
+                "subtract_state": False,
+            },
         }
-        seen: dict[str, bool] = {}
+        seen_actions: dict[str, dict[str, Any]] = {}
         for entry in action_entries:
             if isinstance(entry, dict) and len(entry) == 1:
                 key, options = next(iter(entry.items()))
                 if isinstance(options, dict):
-                    seen[key] = bool(options.get("subtract_state"))
-        if seen != expected_actions:
+                    seen_actions[key] = {
+                        "origin_keys": options.get("origin_keys"),
+                        "subtract_state": options.get("subtract_state"),
+                    }
+        if seen_actions != expected_actions:
             errors.append(
                 "robot config must expose absolute action.arm.position and action.effector.position"
             )
+        state_entries = robot_config.get("states")
+        seen_states: dict[str, str] = {}
+        if isinstance(state_entries, list):
+            for entry in state_entries:
+                if isinstance(entry, dict) and len(entry) == 1:
+                    key, options = next(iter(entry.items()))
+                    if isinstance(options, dict):
+                        seen_states[key] = options.get("origin_keys")
+        expected_states = {
+            "observation.state.arm.position": "observation.state.arm.position",
+            "observation.state.effector.position": "observation.state.effector.position",
+        }
+        images = robot_config.get("images")
+        if seen_states != expected_states:
+            errors.append("robot config must expose arm and effector position states")
+        if images != [f"observation.images.{name}" for name in EXPECTED_CAMERAS]:
+            errors.append("robot config camera order does not match the bundle manifest")
 
     training_config: dict[str, Any] = {}
     if training_config_path.is_file():
-        training_config = yaml.safe_load(training_config_path.read_text(encoding="utf-8")) or {}
+        try:
+            loaded_training_config = yaml.safe_load(
+                training_config_path.read_text(encoding="utf-8")
+            )
+        except (OSError, yaml.YAMLError) as exc:
+            errors.append(f"invalid training config: {exc}")
+            loaded_training_config = {}
+        training_config = (
+            loaded_training_config if isinstance(loaded_training_config, dict) else {}
+        )
         train = training_config.get("train", {})
         data = training_config.get("data", {})
+        training_model = training_config.get("model", {})
+        if training_model.get("config_key") != "LingbotVLAV2Config":
+            errors.append("training config model.config_key must be LingbotVLAV2Config")
+        if training_model.get("post_training") is not True:
+            errors.append("training config model.post_training must be true")
         for key in ("action_dim", "max_action_dim", "max_state_dim"):
-            if int(train.get(key, -1)) != 55:
+            if train.get(key) != 55:
                 errors.append(f"training config {key} must be 55")
         cameras = list(data.get("cameras", []))
-        expected_cameras = ["camera_top", "camera_wrist_left", "camera_wrist_right"]
-        if cameras != expected_cameras:
-            errors.append(f"training config cameras must be {expected_cameras}")
-        chunk_size = int(train.get("chunk_size", 50))
-        action_horizon = int(model_cfg.get("action_horizon", 50))
-        if action_horizon > chunk_size:
+        if cameras != EXPECTED_CAMERAS:
+            errors.append(f"training config cameras must be {EXPECTED_CAMERAS}")
+        if list(data.get("joints", [])) != EXPECTED_JOINTS:
+            errors.append(f"training config joints must be {EXPECTED_JOINTS}")
+        chunk_size = train.get("chunk_size")
+        if not isinstance(chunk_size, int) or isinstance(chunk_size, bool) or chunk_size <= 0:
+            errors.append("training config train.chunk_size must be an explicit positive integer")
+            chunk_size = 0
+        if action_horizon != chunk_size:
             errors.append(
-                f"action_horizon {action_horizon} exceeds trained chunk_size {chunk_size}"
+                f"manifest action_horizon {action_horizon} must equal "
+                f"trained chunk_size {chunk_size}"
             )
 
     if norm_stats_path.is_file():
@@ -146,12 +398,19 @@ def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
 
     return {
         "status": "ready" if not errors else "blocked",
+        "schema_version": manifest.get("schema_version"),
+        "manifest_path": str(manifest_path),
+        "bundle_root": str(bundle_root),
         "source_root": str(source_root),
+        "source_revision": actual_revision,
+        "expected_source_revision": expected_revision,
         "checkpoint_path": str(checkpoint_path),
         "training_config_path": str(training_config_path),
         "robot_config_path": str(robot_config_path),
         "norm_stats_path": str(norm_stats_path),
         "action_space": "absolute_joint_position",
+        "action_horizon": action_horizon,
+        "native_hz": native_hz,
         "errors": errors,
     }
 
@@ -243,15 +502,14 @@ class Model(ModelTemplate):
             raise RuntimeError(
                 "LingBot-VLA2 deployment bundle is incomplete: " + "; ".join(report["errors"])
             )
+        self.bundle = report
 
         self.default_prompt = str(
             self.model_cfg.get("default_prompt")
             or self.model_cfg.get("task_name")
             or "Perform the instructed bimanual manipulation task."
         )
-        self.action_horizon = int(self.model_cfg.get("action_horizon", 50))
-        if self.action_horizon <= 0:
-            raise ValueError("action_horizon must be positive")
+        self.action_horizon = int(report["action_horizon"])
         self._observations: list[dict[str, Any]] | None = None
         self._latest_env_idx_list = [0]
         self.model = self._load_official_server()
@@ -265,12 +523,8 @@ class Model(ModelTemplate):
         feature_module = importlib.import_module(OFFICIAL_FEATURE_MODULE)
 
         server = deploy_module.LingbotVLAv2Server(
-            path_to_pi_model=str(
-                _resolve_path(self.model_cfg["checkpoint_path"], name="checkpoint_path")
-            ),
-            robot_norm_path=str(
-                _resolve_path(self.model_cfg["norm_stats_path"], name="norm_stats_path")
-            ),
+            path_to_pi_model=self.bundle["checkpoint_path"],
+            robot_norm_path=self.bundle["norm_stats_path"],
             use_length=self.action_horizon,
             chunk_ret=True,
             use_bf16=bool(self.model_cfg.get("use_bf16", True)),
@@ -278,14 +532,12 @@ class Model(ModelTemplate):
             use_compile=bool(self.model_cfg.get("use_compile", False)),
         )
         feature_transform = feature_module.FeatureTransform(
-            str(_resolve_path(self.model_cfg["robot_config_path"], name="robot_config_path")),
+            self.bundle["robot_config_path"],
             server.data_config,
             server.config,
             server.processor,
             chunk_size=server.config.chunk_size,
-            norm_stats_path=str(
-                _resolve_path(self.model_cfg["norm_stats_path"], name="norm_stats_path")
-            ),
+            norm_stats_path=self.bundle["norm_stats_path"],
         )
         server.vla.feature_transform = feature_transform
         server.action_key = feature_transform.org_features["actions"]

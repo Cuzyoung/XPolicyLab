@@ -11,7 +11,10 @@ it with `git submodule update --init --recursive`. Do not point this adapter at
 `policy/LingBot_VLA/lingbot_vla`: that directory is the older Qwen2.5
 implementation and is not weight-compatible with V2.
 
-Deployment additionally requires a YAM post-training checkpoint, its original
-`lingbotvla_cli.yaml`, matching YAM norm stats, and the absolute-joint robot
-profile in `robot_configs/yam_dual_absolute.yaml`. The public foundation
-checkpoint alone is not a YAM policy.
+Deployment additionally requires one bundle conforming to `bundle.schema.json`.
+The manifest pins the official source revision and declares the original
+`lingbotvla_cli.yaml`, complete `hf_ckpt`, matching YAM norm stats, training
+robot config, native control rate, and action horizon. Runtime config points to
+that single manifest; compliant post-training output can be loaded without
+changing this adapter. The public foundation checkpoint alone is not a YAM
+policy.

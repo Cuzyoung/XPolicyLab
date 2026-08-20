@@ -14,10 +14,7 @@ eval_batch: false
 
 # Pinned official source; initialize nested submodules after cloning XPolicyLab.
 lingbot_vla2_root: /home/ubuntu/manimux/XPolicyLab/policy/LingBot_VLA2/lingbot_vla_v2
-checkpoint_path: /home/ubuntu/manimux/checkpoints/pretrained/lingbot-vla-v2-yam/runs/yam/hf_ckpt
-robot_config_path: /home/ubuntu/manimux/XPolicyLab/policy/LingBot_VLA2/robot_configs/yam_dual_absolute.yaml
-norm_stats_path: /home/ubuntu/manimux/checkpoints/pretrained/lingbot-vla-v2-yam/norm_stats.json
-action_horizon: 50
+bundle_manifest_path: /home/ubuntu/manimux/checkpoints/pretrained/lingbot-vla-v2-yam/bundle.yaml
 use_bf16: true
 use_fp32: false
 use_compile: false
