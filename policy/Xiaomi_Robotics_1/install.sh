@@ -33,6 +33,7 @@ pip install -r "${POLICY_DIR}/xiaomi_robotics_1/xr1/assets/requirements.txt"
 # HDF5 -> JSON/MP4 conversion (process_data.sh). Not part of the vendored
 # requirements, which cover training and inference only.
 pip install opencv-python-headless h5py imageio imageio-ffmpeg tqdm
+pip install -e "${XPOLICYLAB_ROOT}"
 
 echo "[Xiaomi_Robotics_1] Installation finished."
 echo "[Xiaomi_Robotics_1] Activate env: conda activate ${CONDA_ENV}"
