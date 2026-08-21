@@ -401,6 +401,13 @@ class PolicyServer:
 
     async def _dispatch_frame(self, frame: Frame) -> Frame | None:
         if frame.message_type == MessageType.HELLO:
+            sampling_modes = ["default"]
+            if callable(getattr(self.model, "get_action_rtc", None)):
+                sampling_modes.append("rtc")
+            if callable(getattr(self.model, "get_action_aac", None)):
+                sampling_modes.append("aac")
+            if callable(getattr(self.model, "get_action_paint", None)):
+                sampling_modes.append("paint")
             return self._reply(
                 frame,
                 MessageType.HELLO_ACK,
@@ -408,6 +415,7 @@ class PolicyServer:
                     "ok": True,
                     "server": "xpolicylab_policy_server",
                     "server_instance_id": self._instance_id,
+                    "capabilities": {"sampling_modes": sampling_modes},
                 },
             )
         if frame.message_type == MessageType.PREPARE_CASE:
@@ -516,7 +524,7 @@ class PolicyServer:
             raise WsError(ErrorCode.INVALID_FRAME, "infer sampling must be a map")
         sampling = dict(sampling)
         mode = sampling.get("mode", "default")
-        if mode not in {"default", "rtc"}:
+        if mode not in {"default", "rtc", "aac", "paint"}:
             raise WsError(ErrorCode.INVALID_FRAME, f"unsupported sampling mode: {mode!r}")
 
         try:
@@ -531,11 +539,16 @@ class PolicyServer:
                 update_obs = getattr(self.model, "update_obs", None)
                 action_method = getattr(
                     self.model,
-                    "get_action" if mode == "default" else "get_action_rtc",
+                    {
+                        "default": "get_action",
+                        "rtc": "get_action_rtc",
+                        "aac": "get_action_aac",
+                        "paint": "get_action_paint",
+                    }[mode],
                     None,
                 )
-                if mode == "rtc" and not callable(action_method):
-                    raise AttributeError("model does not support RTC sampling")
+                if mode != "default" and not callable(action_method):
+                    raise AttributeError(f"model does not support {mode.upper()} sampling")
                 if callable(update_obs) and callable(action_method):
                     if not inspect.iscoroutinefunction(
                         update_obs
@@ -576,7 +589,8 @@ class PolicyServer:
                 else:
                     if mode != "default":
                         raise AttributeError(
-                            "RTC sampling requires update_obs() and get_action_rtc()"
+                            f"{mode.upper()} sampling requires update_obs() and "
+                            f"get_action_{mode}()"
                         )
                     infer = getattr(self.model, "infer", None)
                     if not callable(infer):

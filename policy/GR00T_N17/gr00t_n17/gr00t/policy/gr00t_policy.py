@@ -405,13 +405,20 @@ class Gr00tPolicy(BasePolicy):
 
         # Step 4: Run model inference to predict actions
         with torch.inference_mode():
-            model_pred = self.model.get_action(**collated_inputs)
+            model_pred = self.model.get_action(**collated_inputs, options=options)
         normalized_action = model_pred["action_pred"].float()
 
         # Step 5: Decode actions from normalized space back to physical units
         batched_states = {}
         for k in self.modality_configs["state"].modality_keys:
             batched_states[k] = np.stack([s[k] for s in states], axis=0)  # (B, T, D)
+        if normalized_action.shape[0] != len(states):
+            if len(states) != 1:
+                raise ValueError("multi-sample action decoding requires one observation")
+            batched_states = {
+                key: np.repeat(value, normalized_action.shape[0], axis=0)
+                for key, value in batched_states.items()
+            }
         unnormalized_action = self.processor.decode_action(
             normalized_action.cpu().numpy(), self.embodiment_tag, batched_states
         )

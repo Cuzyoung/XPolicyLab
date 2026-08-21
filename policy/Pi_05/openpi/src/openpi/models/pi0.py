@@ -16,6 +16,63 @@ from openpi.shared import array_typing as at
 logger = logging.getLogger("openpi")
 
 
+def _repeat_sample_batch(observation, prefix_mask, kv_cache, num_samples: int):
+    observation = jax.tree.map(
+        lambda value: jnp.repeat(value, num_samples, axis=0),
+        observation,
+    )
+    prefix_mask = jnp.repeat(prefix_mask, num_samples, axis=0)
+    kv_cache = jax.tree.map(
+        lambda value: jnp.repeat(value, num_samples, axis=1),
+        kv_cache,
+    )
+    return observation, prefix_mask, kv_cache
+
+
+def _paint_euler_sample(
+    predict_velocity,
+    free_noise,
+    action_condition,
+    delay_steps,
+    num_steps,
+):
+    """Algorithm 1 in the Pi0 time convention: noise at 1, actions at 0."""
+    step_size = 1.0 / num_steps
+
+    def forward_step(_index, carry):
+        x_t, time = carry
+        return x_t - step_size * predict_velocity(x_t, time), time - step_size
+
+    def integrate_forward(initial_noise):
+        actions, _ = jax.lax.fori_loop(
+            0,
+            num_steps,
+            forward_step,
+            (initial_noise, 1.0),
+        )
+        return actions
+
+    naive_actions = integrate_forward(free_noise)
+    paint_mask = (
+        jnp.arange(free_noise.shape[1])[None, :, None]
+        < jnp.asarray(delay_steps)
+    )
+    target_actions = jnp.where(paint_mask, action_condition, naive_actions)
+
+    def inverse_step(_index, carry):
+        x_t, time = carry
+        return x_t + step_size * predict_velocity(x_t, time), time + step_size
+
+    inverted_noise, _ = jax.lax.fori_loop(
+        0,
+        num_steps,
+        inverse_step,
+        (target_actions, 0.0),
+    )
+    repainted_noise = jnp.where(paint_mask, inverted_noise, free_noise)
+    return integrate_forward(repainted_noise)
+
+
 def make_attn_mask(input_mask, mask_ar):
     """Adapted from big_vision.
 
@@ -220,26 +277,68 @@ class Pi0(_model.BaseModel):
         observation: _model.Observation,
         *,
         num_steps: int | at.Int[at.Array, ""] = 10,
+        num_samples: int = 1,
         noise: at.Float[at.Array, "b ah ad"] | None = None,
         action_condition: at.Float[at.Array, "b ah ad"] | None = None,
         condition_weights: at.Float[at.Array, "b ah 1"] | None = None,
         rtc_beta: float = 5.0,
+        paint_action_condition: at.Float[at.Array, "b ah ad"] | None = None,
+        paint_delay_steps: int | at.Int[at.Array, ""] | None = None,
     ) -> _model.Actions:
         if (action_condition is None) != (condition_weights is None):
             raise ValueError("action_condition and condition_weights must be provided together")
+        if (paint_action_condition is None) != (paint_delay_steps is None):
+            raise ValueError(
+                "paint_action_condition and paint_delay_steps must be provided together"
+            )
+        if num_samples <= 0:
+            raise ValueError(f"num_samples must be positive, got {num_samples}")
+        if num_samples > 1 and action_condition is not None:
+            raise ValueError("multi-sample inference cannot be combined with RTC conditioning")
+        if num_samples > 1 and paint_action_condition is not None:
+            raise ValueError("multi-sample inference cannot be combined with PAINT")
+        if action_condition is not None and paint_action_condition is not None:
+            raise ValueError("RTC conditioning cannot be combined with PAINT")
         observation = _model.preprocess_observation(None, observation, train=False)
         # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
         # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
         dt = -1.0 / num_steps
-        batch_size = observation.state.shape[0]
-        if noise is None:
-            noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
+        input_batch_size = observation.state.shape[0]
+        if num_samples > 1 and input_batch_size != 1:
+            raise ValueError(
+                "multi-sample inference requires one observation, got batch size "
+                f"{input_batch_size}"
+            )
 
         # first fill KV cache with a forward pass of the prefix
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
         prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
         positions = jnp.cumsum(prefix_mask, axis=1) - 1
         _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
+
+        if num_samples > 1:
+            observation, prefix_mask, kv_cache = _repeat_sample_batch(
+                observation,
+                prefix_mask,
+                kv_cache,
+                num_samples,
+            )
+        batch_size = input_batch_size * num_samples
+        expected_noise_shape = (batch_size, self.action_horizon, self.action_dim)
+        if noise is None:
+            noise = jax.random.normal(rng, expected_noise_shape)
+        elif noise.shape != expected_noise_shape:
+            raise ValueError(
+                f"noise must have shape {expected_noise_shape}, got {noise.shape}"
+            )
+        if (
+            paint_action_condition is not None
+            and paint_action_condition.shape != expected_noise_shape
+        ):
+            raise ValueError(
+                "paint_action_condition must have shape "
+                f"{expected_noise_shape}, got {paint_action_condition.shape}"
+            )
 
         def predict_velocity(x_t, time):
             suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(
@@ -272,7 +371,7 @@ class Pi0(_model.BaseModel):
             assert prefix_out is None
             return self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
-        def step(carry):
+        def forward_step(carry):
             x_t, time = carry
             if action_condition is None:
                 v_t = predict_velocity(x_t, time)
@@ -293,10 +392,27 @@ class Pi0(_model.BaseModel):
 
             return x_t + dt * v_t, time + dt
 
-        def cond(carry):
+        def forward_cond(carry):
             x_t, time = carry
+            del x_t
             # robust to floating-point error
             return time >= -dt / 2
 
-        x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
-        return x_0
+        def integrate_forward(initial_noise):
+            actions, _ = jax.lax.while_loop(
+                forward_cond,
+                forward_step,
+                (initial_noise, 1.0),
+            )
+            return actions
+
+        if paint_action_condition is None:
+            return integrate_forward(noise)
+
+        return _paint_euler_sample(
+            predict_velocity,
+            noise,
+            paint_action_condition,
+            paint_delay_steps,
+            num_steps,
+        )

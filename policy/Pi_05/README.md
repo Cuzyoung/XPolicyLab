@@ -71,3 +71,26 @@ Environment variables used by the adapter scripts:
 | `OPENPI_LOCAL_CACHE_ROOT` | Per-host local cache root for the HF datasets / JAX compilation caches; defaults to `/tmp/openpi-cache-$(hostname)`. |
 
 `OPENPI_ROOT` and `OPENPI_SRC` are additional overrides consumed by the local scripts.
+
+## Inference Sampling Capabilities
+
+The adapter exposes four explicit WebSocket sampling modes:
+
+| Mode | Adapter method | OpenPI path |
+|---|---|---|
+| `default` | `get_action` | unchanged official single-sample inference |
+| `rtc` | `get_action_rtc` | JAX Pi-guided conditioning hook |
+| `aac` | `get_action_aac` | one prefix/KV-cache pass followed by an `N`-sample denoising batch |
+| `paint` | `get_action_paint` | paper Algorithm 1: naive forward, backward Euler, prefix noise repaint, final forward |
+
+AAC accepts `{"mode": "aac", "num_samples": N}` for exactly one observation and returns `N`
+native action chunks. It is JAX-only and cannot be combined with RTC conditioning. The adapter does
+not calculate entropy, robot kinematics, motion thresholds or candidate selection; those remain
+client/runtime responsibilities. Calls that omit AAC parameters continue through the original
+single-sample callable.
+
+PAINT accepts `{"mode": "paint", "action_prefix": A[s:s+d], "delay_steps": d}`. The adapter
+normalizes the raw robot-unit prefix with the same official input transform as model actions, then
+runs `3N` velocity evaluations without gradients. The public PAINT repository currently contains
+documentation rather than source code, so this path is an explicit paper reproduction of
+arXiv:2606.19774, not an upstream-code claim.

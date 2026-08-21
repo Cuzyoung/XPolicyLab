@@ -231,6 +231,88 @@ class Model(ModelTemplate):
             rtc_beta=beta,
         )
 
+    def get_action_paint(self, sampling: dict[str, Any]):
+        required = {"action_prefix", "delay_steps"}
+        missing = sorted(required - set(sampling))
+        if missing:
+            raise ValueError(f"PAINT sampling is missing fields: {missing}")
+
+        delay_steps = int(sampling["delay_steps"])
+        expected_action_dim = self.robot_action_dim or self.action_dim
+        prefix = np.asarray(sampling["action_prefix"], dtype=np.float32)
+        if not 0 < delay_steps < self.action_horizon:
+            raise ValueError(
+                "PAINT delay_steps must satisfy "
+                f"0 < d < {self.action_horizon}, got {delay_steps}"
+            )
+        if prefix.shape != (delay_steps, expected_action_dim):
+            raise ValueError(
+                "PAINT action_prefix must have shape "
+                f"{(delay_steps, expected_action_dim)}, got {prefix.shape}"
+            )
+        if not np.isfinite(prefix).all():
+            raise ValueError("PAINT action_prefix must be finite")
+
+        condition = np.zeros(
+            (self.action_horizon, expected_action_dim),
+            dtype=np.float32,
+        )
+        condition[:delay_steps] = prefix
+        actions = self.get_action(
+            paint_action_condition=condition,
+            paint_delay_steps=delay_steps,
+        )
+        return {
+            "actions": actions,
+            "paint": {
+                "delay_steps": delay_steps,
+                "num_steps": self.num_steps,
+                "model_evaluations": 3 * self.num_steps,
+                "inversion": "backward_euler",
+            },
+        }
+
+    def get_action_aac(self, sampling: dict[str, Any]):
+        if self.observation_window is None:
+            raise AssertionError("update_obs or update_obs_batch first!")
+        if len(self._latest_env_idx_list) != 1:
+            raise ValueError("AAC sampling requires exactly one observation")
+
+        num_samples = int(sampling.get("num_samples", 20))
+        if num_samples <= 1:
+            raise ValueError("AAC num_samples must be greater than one")
+
+        single_observation = slice_stacked_obs(self.observation_window, 0)
+        actions = np.asarray(
+            self.policy.infer(
+                single_observation,
+                num_steps=self.num_steps,
+                num_samples=num_samples,
+            )["actions"]
+        )
+        expected_action_dim = self.robot_action_dim or self.action_dim
+        expected_shape = (num_samples, self.action_horizon, expected_action_dim)
+        if actions.shape != expected_shape:
+            raise ValueError(
+                f"Pi05 AAC actions must have shape {expected_shape}, got {actions.shape}"
+            )
+        if not np.isfinite(actions).all():
+            raise ValueError("Pi05 AAC actions must be finite")
+
+        if self.robot_action_dim_info is None:
+            candidates = [sample for sample in actions]
+        else:
+            candidates = [
+                unpack_robot_state(
+                    sample,
+                    self.action_type,
+                    self.robot_action_dim_info,
+                    source_type="obs",
+                )
+                for sample in actions
+            ]
+        return {"actions": candidates}
+
     def get_action_batch(self, env_idx_list=None, **kwargs):
         if self.observation_window is None:
             raise AssertionError("update_obs or update_obs_batch first!")

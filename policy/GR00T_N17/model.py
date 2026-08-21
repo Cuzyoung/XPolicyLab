@@ -521,6 +521,31 @@ class Model(ModelTemplate):
             )
         return action_list
 
+    def get_action_aac(self, sampling: dict[str, Any]):
+        if len(self._obs_list) != 1:
+            raise ValueError("AAC sampling requires exactly one observation")
+        num_samples = int(sampling.get("num_samples", 20))
+        if num_samples <= 1:
+            raise ValueError("AAC num_samples must be greater than one")
+
+        encoded_obs = self._obs_list[0]
+        decoded_action, _ = self.policy.get_action(
+            encoded_obs,
+            options={"n_samples": num_samples},
+        )
+        return {
+            "actions": [
+                _gr00t_action_to_env(
+                    {key: values[index : index + 1] for key, values in decoded_action.items()},
+                    self.action_type,
+                    self.observation_profile,
+                    self.arm_dims,
+                    self.ee_dims,
+                )
+                for index in range(num_samples)
+            ]
+        }
+
     def reset(self):
         self._obs_list = []
         self._latest_env_idx_list = [0]

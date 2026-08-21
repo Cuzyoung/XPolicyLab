@@ -328,6 +328,29 @@ class Gr00tN1d7ActionHead(nn.Module):
             backbone_output: Output from the backbone model
         """
         vl_embeds = backbone_features
+        num_samples = 1 if options is None else int(options.get("n_samples", 1))
+        if num_samples <= 0:
+            raise ValueError("n_samples must be positive")
+        if num_samples > 1:
+            if vl_embeds.shape[0] != 1:
+                raise ValueError("multi-sample inference requires a single observation")
+            vl_embeds = vl_embeds.expand(num_samples, -1, -1)
+            state_features = state_features.expand(num_samples, -1, -1)
+            embodiment_id = embodiment_id.expand(num_samples)
+            if self.config.use_alternate_vl_dit:
+                image_mask = backbone_output.image_mask.expand(
+                    num_samples, *([-1] * (backbone_output.image_mask.ndim - 1))
+                )
+                backbone_attention_mask = backbone_output.backbone_attention_mask.expand(
+                    num_samples,
+                    *([-1] * (backbone_output.backbone_attention_mask.ndim - 1)),
+                )
+            else:
+                image_mask = None
+                backbone_attention_mask = None
+        else:
+            image_mask = getattr(backbone_output, "image_mask", None)
+            backbone_attention_mask = getattr(backbone_output, "backbone_attention_mask", None)
 
         # Set initial actions as the sampled noise.
         batch_size = vl_embeds.shape[0]
@@ -404,8 +427,8 @@ class Gr00tN1d7ActionHead(nn.Module):
                     hidden_states=sa_embs,
                     encoder_hidden_states=vl_embeds,
                     timestep=timesteps_tensor,
-                    image_mask=backbone_output.image_mask,
-                    backbone_attention_mask=backbone_output.backbone_attention_mask,
+                    image_mask=image_mask,
+                    backbone_attention_mask=backbone_attention_mask,
                 )
             else:
                 model_output = self.model(

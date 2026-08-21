@@ -63,6 +63,10 @@ class Policy(BasePolicy):
         else:
             # JAX model setup
             self._sample_actions = nnx_utils.module_jit(model.sample_actions)
+            self._sample_actions_multi = nnx_utils.module_jit(
+                model.sample_actions,
+                static_argnames=("num_samples",),
+            )
             self._rng = rng or jax.random.key(0)
 
     @override
@@ -72,30 +76,62 @@ class Policy(BasePolicy):
         *,
         noise: np.ndarray | None = None,
         num_steps: int | None = None,
+        num_samples: int = 1,
         action_condition: np.ndarray | None = None,
         condition_weights: np.ndarray | None = None,
         rtc_beta: float = 5.0,
+        paint_action_condition: np.ndarray | None = None,
+        paint_delay_steps: int | None = None,
     ) -> dict:  # type: ignore[misc]
         if num_steps is not None and num_steps <= 0:
             raise ValueError(f"num_steps must be positive, got {num_steps}")
+        if num_samples <= 0:
+            raise ValueError(f"num_samples must be positive, got {num_samples}")
         if not math.isfinite(rtc_beta) or rtc_beta <= 0:
             raise ValueError(f"rtc_beta must be finite and positive, got {rtc_beta}")
         if (action_condition is None) != (condition_weights is None):
             raise ValueError("action_condition and condition_weights must be provided together")
+        if (paint_action_condition is None) != (paint_delay_steps is None):
+            raise ValueError(
+                "paint_action_condition and paint_delay_steps must be provided together"
+            )
         if action_condition is not None and self._is_pytorch_model:
             raise NotImplementedError("RTC action conditioning is only implemented for JAX Pi0")
+        if paint_action_condition is not None and self._is_pytorch_model:
+            raise NotImplementedError("PAINT is only implemented for JAX Pi0")
+        if num_samples > 1 and self._is_pytorch_model:
+            raise NotImplementedError("multi-sample inference is only implemented for JAX Pi0")
+        if num_samples > 1 and action_condition is not None:
+            raise ValueError("multi-sample inference cannot be combined with RTC conditioning")
+        if num_samples > 1 and paint_action_condition is not None:
+            raise ValueError("multi-sample inference cannot be combined with PAINT")
+        if action_condition is not None and paint_action_condition is not None:
+            raise ValueError("RTC conditioning cannot be combined with PAINT")
+        if paint_delay_steps is not None:
+            if isinstance(paint_delay_steps, bool) or not isinstance(paint_delay_steps, int):
+                raise ValueError("paint_delay_steps must be an integer")
+            if not 0 < paint_delay_steps < self._model.action_horizon:
+                raise ValueError(
+                    "paint_delay_steps must satisfy "
+                    f"0 < d < {self._model.action_horizon}, got {paint_delay_steps}"
+                )
 
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
-        if action_condition is not None:
-            inputs["actions"] = np.asarray(action_condition, dtype=np.float32)
+        raw_condition = (
+            action_condition
+            if action_condition is not None
+            else paint_action_condition
+        )
+        if raw_condition is not None:
+            inputs["actions"] = np.asarray(raw_condition, dtype=np.float32)
         inputs = self._input_transform(inputs)
-        transformed_condition = inputs.pop("actions", None) if action_condition is not None else None
+        transformed_condition = inputs.pop("actions", None) if raw_condition is not None else None
 
         is_batched = False
         if "state" in inputs:
             is_batched = np.asarray(inputs["state"]).ndim > 1
-        elif "image" in inputs and inputs["image"]:
+        elif inputs.get("image"):
             first_image = next(iter(inputs["image"].values()))
             is_batched = np.asarray(first_image).ndim > 3
 
@@ -119,6 +155,8 @@ class Policy(BasePolicy):
         sample_kwargs = dict(self._sample_kwargs)
         if num_steps is not None:
             sample_kwargs["num_steps"] = int(num_steps)
+        if num_samples > 1:
+            sample_kwargs["num_samples"] = int(num_samples)
         if noise is not None:
             noise = torch.from_numpy(noise).to(self._pytorch_device) if self._is_pytorch_model else jnp.asarray(noise)
 
@@ -130,37 +168,49 @@ class Policy(BasePolicy):
             target = jnp.asarray(transformed_condition)
             if not is_batched and target.ndim == 2:
                 target = target[None, ...]
-            weights = jnp.asarray(condition_weights, dtype=target.dtype)
-            if not is_batched and weights.ndim == 1:
-                weights = weights[None, ...]
-            if weights.ndim == 2:
-                weights = weights[..., None]
             expected_target = (
                 inputs["state"].shape[0],
                 self._model.action_horizon,
                 self._model.action_dim,
             )
-            expected_weights = (*expected_target[:2], 1)
             if target.shape != expected_target:
                 raise ValueError(
-                    "transformed action_condition must have shape "
+                    "transformed action condition must have shape "
                     f"{expected_target}, got {target.shape}"
                 )
-            if weights.shape != expected_weights:
-                raise ValueError(
-                    f"condition_weights must have shape {expected_weights}, got {weights.shape}"
+            if paint_action_condition is not None:
+                sample_kwargs.update(
+                    paint_action_condition=target,
+                    paint_delay_steps=int(paint_delay_steps),
                 )
-            sample_kwargs.update(
-                action_condition=target,
-                condition_weights=weights,
-                rtc_beta=float(rtc_beta),
-            )
+            else:
+                weights = jnp.asarray(condition_weights, dtype=target.dtype)
+                if not is_batched and weights.ndim == 1:
+                    weights = weights[None, ...]
+                if weights.ndim == 2:
+                    weights = weights[..., None]
+                expected_weights = (*expected_target[:2], 1)
+                if weights.shape != expected_weights:
+                    raise ValueError(
+                        f"condition_weights must have shape {expected_weights}, got {weights.shape}"
+                    )
+                sample_kwargs.update(
+                    action_condition=target,
+                    condition_weights=weights,
+                    rtc_beta=float(rtc_beta),
+                )
 
         observation = _model.Observation.from_dict(inputs)
         start_time = time.monotonic()
+        sample_actions = (
+            self._sample_actions_multi if num_samples > 1 else self._sample_actions
+        )
+        output_state = inputs["state"]
+        if num_samples > 1:
+            output_state = jnp.repeat(output_state, num_samples, axis=0)
         outputs = {
-            "state": inputs["state"],
-            "actions": self._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs),
+            "state": output_state,
+            "actions": sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs),
         }
         model_time = time.monotonic() - start_time
         if self._is_pytorch_model:
@@ -168,11 +218,10 @@ class Policy(BasePolicy):
                 outputs = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), outputs)
             else:
                 outputs = jax.tree.map(lambda x: np.asarray(x.detach().cpu()), outputs)
+        elif not is_batched and num_samples == 1:
+            outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
         else:
-            if not is_batched:
-                outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
-            else:
-                outputs = jax.tree.map(np.asarray, outputs)
+            outputs = jax.tree.map(np.asarray, outputs)
 
         outputs = self._output_transform(outputs)
         outputs["policy_timing"] = {
