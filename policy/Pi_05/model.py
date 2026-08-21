@@ -141,6 +141,17 @@ class Model(ModelTemplate):
         self._latest_env_idx_list: list[int] = [0]
 
         self._train_config = _resolve_train_config(model_cfg)
+        expected_profile = (
+            "yam_native"
+            if type(self._train_config.data).__name__ == "LeRobotYamDataConfig"
+            else "aloha"
+        )
+        self.observation_profile = model_cfg.get("observation_profile", expected_profile)
+        if self.observation_profile != expected_profile:
+            raise ValueError(
+                f"train_config_name={self._train_config.name!r} requires "
+                f"observation_profile={expected_profile!r}, got {self.observation_profile!r}"
+            )
         self.action_horizon = int(self._train_config.model.action_horizon)
         self.action_dim = int(self._train_config.model.action_dim)
         self.num_steps = int(model_cfg.get("num_steps", 10))
@@ -175,7 +186,13 @@ class Model(ModelTemplate):
             obs.get("env_idx", index) for index, obs in enumerate(obs_list)
         ]
         encoded_obs_list = [
-            encode_obs(obs, self.action_type, self.robot_action_dim_info) for obs in obs_list
+            encode_obs(
+                obs,
+                self.action_type,
+                self.robot_action_dim_info,
+                observation_profile=self.observation_profile,
+            )
+            for obs in obs_list
         ]
         self.observation_window = stack_obs(encoded_obs_list)
 
@@ -247,7 +264,18 @@ class Model(ModelTemplate):
         self.reset()
 
 
-def encode_obs(observation, action_type, robot_action_dim_info):
+def encode_obs(
+    observation,
+    action_type,
+    robot_action_dim_info,
+    *,
+    observation_profile="aloha",
+):
+    if observation_profile == "yam_native":
+        return encode_yam_obs(observation, action_type, robot_action_dim_info)
+    if observation_profile != "aloha":
+        raise ValueError(f"Unsupported Pi05 observation profile: {observation_profile!r}")
+
     if "images" in observation and "state" in observation:
         state = np.asarray(observation["state"], dtype=np.float32)
         images = {
@@ -275,7 +303,62 @@ def encode_obs(observation, action_type, robot_action_dim_info):
     return {"state": state, "images": images, "prompt": prompt}
 
 
+def encode_yam_obs(observation, action_type, robot_action_dim_info):
+    if robot_action_dim_info is None:
+        raise ValueError("env_cfg_type is required when encoding YAM observations.")
+
+    if "observation/state" in observation:
+        state = np.asarray(observation["observation/state"], dtype=np.float32)
+    elif "state" in observation and not isinstance(observation["state"], dict):
+        state = np.asarray(observation["state"], dtype=np.float32)
+    else:
+        state = pack_robot_state(
+            observation,
+            action_type,
+            robot_action_dim_info,
+            source_type="obs",
+        ).astype(np.float32)
+
+    def raw_image(key, candidates):
+        if key in observation:
+            return np.asarray(observation[key])
+        return np.asarray(extract_image(observation, candidates))
+
+    return {
+        "observation/image": raw_image(
+            "observation/image",
+            ["cam_high", "cam_head", "head_camera", "top_camera"],
+        ),
+        "observation/left_wrist": raw_image(
+            "observation/left_wrist",
+            ["cam_left_wrist", "left_camera", "left_wrist", "wrist_left"],
+        ),
+        "observation/right_wrist": raw_image(
+            "observation/right_wrist",
+            ["cam_right_wrist", "right_camera", "right_wrist", "wrist_right"],
+        ),
+        "observation/state": state,
+        "prompt": observation.get("instruction", observation.get("prompt")),
+    }
+
+
 def stack_obs(obs_list: list[dict[str, Any]]) -> dict[str, Any]:
+    if "observation/state" in obs_list[0]:
+        return {
+            "observation/state": np.stack(
+                [obs["observation/state"] for obs in obs_list], axis=0
+            ),
+            "observation/image": np.stack(
+                [obs["observation/image"] for obs in obs_list], axis=0
+            ),
+            "observation/left_wrist": np.stack(
+                [obs["observation/left_wrist"] for obs in obs_list], axis=0
+            ),
+            "observation/right_wrist": np.stack(
+                [obs["observation/right_wrist"] for obs in obs_list], axis=0
+            ),
+            "prompt": [obs["prompt"] for obs in obs_list],
+        }
     return {
         "state": np.stack([obs["state"] for obs in obs_list], axis=0),
         "images": {
@@ -288,6 +371,14 @@ def stack_obs(obs_list: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def slice_stacked_obs(obs: dict[str, Any], batch_index: int) -> dict[str, Any]:
+    if "observation/state" in obs:
+        return {
+            "observation/state": obs["observation/state"][batch_index],
+            "observation/image": obs["observation/image"][batch_index],
+            "observation/left_wrist": obs["observation/left_wrist"][batch_index],
+            "observation/right_wrist": obs["observation/right_wrist"][batch_index],
+            "prompt": obs["prompt"][batch_index],
+        }
     return {
         "state": obs["state"][batch_index],
         "images": {
@@ -300,7 +391,7 @@ def slice_stacked_obs(obs: dict[str, Any], batch_index: int) -> dict[str, Any]:
 
 
 def extract_image(observation, candidate_names):
-    vision = observation.get("vision", {})
+    vision = observation.get("vision", observation.get("images", {}))
     for candidate_name in candidate_names:
         if candidate_name not in vision:
             continue
