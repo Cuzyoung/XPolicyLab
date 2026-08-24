@@ -15,6 +15,10 @@ expert_data_num=${5:-}
 
 POLICY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GR00T_ROOT="${POLICY_DIR}/gr00t_n17"
+ENV_DIR="${GR00T_ENV_DIR:-${GR00T_ROOT}/.venv}"
+PYTHON="${ENV_DIR}/bin/python"
+CONVERT_ENV_DIR="${GR00T_CONVERT_ENV_DIR:-${ENV_DIR%/.venv}/convert-venv}"
+CONVERT_PYTHON="${CONVERT_ENV_DIR}/bin/python"
 DATA_ROOT="${GR00T_LEROBOT_HOME:-}"
 if [[ -z "${DATA_ROOT}" ]]; then
   echo "Set GR00T_LEROBOT_HOME to the LeRobot datasets root." >&2
@@ -32,6 +36,9 @@ resolve_src_dataset() {
   case "${env_cfg_type}" in
     arx_x5)
       echo "RoboDojo_sim_arx-x5_v30"
+      ;;
+    yam_dual)
+      echo "yam_pick_red_ball_box_v1"
       ;;
     *)
       echo "Unsupported env_cfg_type: ${env_cfg_type}. Set GR00T_SRC_DATASET explicitly." >&2
@@ -57,6 +64,32 @@ write_modality_json() {
     "front": { "original_key": "observation.images.cam_high" },
     "left_wrist": { "original_key": "observation.images.cam_left_wrist" },
     "right_wrist": { "original_key": "observation.images.cam_right_wrist" }
+  },
+  "annotation": {
+    "human.task_description": { "original_key": "task_index" }
+  }
+}
+EOF
+      ;;
+    yam_dual)
+      cat > "${dataset_path}/meta/modality.json" <<'EOF'
+{
+  "state": {
+    "left_arm": { "start": 0, "end": 6 },
+    "left_gripper": { "start": 6, "end": 7 },
+    "right_arm": { "start": 7, "end": 13 },
+    "right_gripper": { "start": 13, "end": 14 }
+  },
+  "action": {
+    "left_arm": { "start": 0, "end": 6 },
+    "left_gripper": { "start": 6, "end": 7 },
+    "right_arm": { "start": 7, "end": 13 },
+    "right_gripper": { "start": 13, "end": 14 }
+  },
+  "video": {
+    "base_view": { "original_key": "observation.images.top_rgb" },
+    "left_wrist_view": { "original_key": "observation.images.left_rgb" },
+    "right_wrist_view": { "original_key": "observation.images.right_rgb" }
   },
   "annotation": {
     "human.task_description": { "original_key": "task_index" }
@@ -123,6 +156,12 @@ register_modality_config(
 )
 PY
       ;;
+    yam_dual)
+      if [[ ! -f "${modality_config}" ]]; then
+        echo "Missing checked-in YAM modality config: ${modality_config}" >&2
+        exit 1
+      fi
+      ;;
     *)
       echo "No modality config template for env_cfg_type=${env_cfg_type}" >&2
       exit 1
@@ -131,12 +170,18 @@ PY
 }
 
 install_conversion_deps() {
-  if python -c "import lerobot" >/dev/null 2>&1; then
-    return
+  if [[ ! -x "${CONVERT_PYTHON}" ]]; then
+    echo "[GR00T_N17] Creating isolated LeRobot conversion environment..."
+    uv venv --python 3.10 "${CONVERT_ENV_DIR}"
   fi
-  echo "[GR00T_N17] Installing lerobot conversion dependencies into gr00t .venv..."
-  GIT_LFS_SKIP_SMUDGE=1 uv pip install --python .venv/bin/python \
-    "lerobot @ git+https://github.com/huggingface/lerobot.git@c75455a6de5c818fa1bb69fb2d92423e86c70475"
+  if ! "${CONVERT_PYTHON}" -c "import lerobot" >/dev/null 2>&1; then
+    echo "[GR00T_N17] Installing LeRobot conversion dependencies into isolated environment..."
+    uv pip install --python "${CONVERT_PYTHON}" \
+      "${GR00T_LEROBOT_SPEC:-lerobot==0.4.2}"
+  fi
+  ffmpeg_exe="$("${CONVERT_PYTHON}" -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
+  ln -sfn "${ffmpeg_exe}" "${CONVERT_ENV_DIR}/bin/ffmpeg"
+  "${CONVERT_ENV_DIR}/bin/ffmpeg" -version
 }
 
 src_dataset="$(resolve_src_dataset)"
@@ -156,7 +201,11 @@ echo "[GR00T_N17] src_dataset=${src_path}"
 echo "[GR00T_N17] output_dataset=${dataset_path}"
 
 cd "${GR00T_ROOT}"
-source .venv/bin/activate
+if [[ ! -x "${PYTHON}" ]]; then
+  echo "GR00T environment not found: ${PYTHON}. Run install.sh first." >&2
+  exit 1
+fi
+source "${ENV_DIR}/bin/activate"
 
 if [[ ! -d "${src_path}" ]]; then
   echo "Source dataset not found: ${src_path}" >&2
@@ -168,16 +217,16 @@ if [[ ! -d "${dataset_path}" ]]; then
   cp -a "${src_path}" "${dataset_path}"
 fi
 
-codebase_version="$(python -c "import json; print(json.load(open('${dataset_path}/meta/info.json'))['codebase_version'])")"
+codebase_version="$("${PYTHON}" -c "import json; print(json.load(open('${dataset_path}/meta/info.json'))['codebase_version'])")"
 echo "[GR00T_N17] current codebase_version=${codebase_version}"
 
 if [[ "${codebase_version}" == "v3.0" ]]; then
   echo "[GR00T_N17] Converting LeRobot v3.0 -> v2.1..."
   install_conversion_deps
-  uv run --no-sync python scripts/lerobot_conversion/convert_v3_to_v2.py \
+  PATH="${CONVERT_ENV_DIR}/bin:${PATH}" "${CONVERT_PYTHON}" scripts/lerobot_conversion/convert_v3_to_v2.py \
     --root "${DATA_ROOT}" \
     --repo-id "${data_setting}"
-  codebase_version="$(python -c "import json; print(json.load(open('${dataset_path}/meta/info.json'))['codebase_version'])")"
+  codebase_version="$("${PYTHON}" -c "import json; print(json.load(open('${dataset_path}/meta/info.json'))['codebase_version'])")"
 fi
 
 if [[ "${codebase_version}" != "v2.1" ]]; then
@@ -190,7 +239,7 @@ write_modality_json
 write_modality_config
 
 echo "[GR00T_N17] Generating dataset stats..."
-uv run --no-sync python gr00t/data/stats.py \
+"${PYTHON}" gr00t/data/stats.py \
   --dataset-path "${dataset_path}" \
   --embodiment-tag NEW_EMBODIMENT \
   --modality-config-path "${modality_config}"

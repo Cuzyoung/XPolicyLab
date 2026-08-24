@@ -41,6 +41,14 @@ class FakeModel:
         self.calls.append(("get_action_paint", sampling))
         return [4]
 
+    def get_action_autohorizon(self, sampling: dict[str, Any]) -> list[int]:
+        self.calls.append(("get_action_autohorizon", sampling))
+        return [5]
+
+    def get_action_dvac(self, sampling: dict[str, Any]) -> list[int]:
+        self.calls.append(("get_action_dvac", sampling))
+        return [6]
+
 
 def _frame(sampling: dict[str, Any] | None = None) -> Frame:
     payload: dict[str, Any] = {"observation": {"state": [1, 2, 3]}}
@@ -72,6 +80,8 @@ def test_hello_advertises_available_sampling_modes() -> None:
         "rtc",
         "aac",
         "paint",
+        "autohorizon",
+        "dvac",
     ]
 
 
@@ -81,7 +91,13 @@ def test_hello_does_not_advertise_rtc_without_a_sampler_hook() -> None:
     reply = asyncio.run(PolicyServer(model)._dispatch_frame(_hello_frame()))
 
     assert reply is not None
-    assert reply.payload["capabilities"]["sampling_modes"] == ["default", "aac", "paint"]
+    assert reply.payload["capabilities"]["sampling_modes"] == [
+        "default",
+        "aac",
+        "paint",
+        "autohorizon",
+        "dvac",
+    ]
 
 
 def test_default_infer_updates_observation_then_gets_action() -> None:
@@ -145,4 +161,31 @@ def test_paint_infer_updates_observation_then_uses_paint_action() -> None:
 
     assert reply.payload["actions"] == [4]
     assert [name for name, _ in model.calls] == ["update_obs", "get_action_paint"]
+    assert model.calls[-1][1] == sampling
+
+
+def test_autohorizon_infer_updates_observation_then_uses_attention_action() -> None:
+    model = FakeModel()
+    sampling = {"mode": "autohorizon"}
+    reply = asyncio.run(PolicyServer(model)._handle_infer(_frame(sampling)))
+
+    assert reply.payload["actions"] == [5]
+    assert [name for name, _ in model.calls] == ["update_obs", "get_action_autohorizon"]
+    assert model.calls[-1][1] == sampling
+
+
+def test_dvac_infer_updates_observation_then_uses_variance_action() -> None:
+    model = FakeModel()
+    sampling = {
+        "mode": "dvac",
+        "tail_steps": 5,
+        "alpha": 2.0,
+        "rolling_window_size": 5,
+        "min_execution_steps": 1,
+        "max_execution_steps": 50,
+    }
+    reply = asyncio.run(PolicyServer(model)._handle_infer(_frame(sampling)))
+
+    assert reply.payload["actions"] == [6]
+    assert [name for name, _ in model.calls] == ["update_obs", "get_action_dvac"]
     assert model.calls[-1][1] == sampling

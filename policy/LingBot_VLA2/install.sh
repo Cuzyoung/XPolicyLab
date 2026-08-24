@@ -5,10 +5,13 @@ set -euo pipefail
 POLICY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LINGBOT_ROOT="${POLICY_DIR}/lingbot_vla_v2"
 XPOLICYLAB_ROOT="$(cd "${POLICY_DIR}/../.." && pwd)"
+UTILS3D_WHEEL="${LINGBOT_VLA2_UTILS3D_WHEEL:-${POLICY_DIR}/vendor/utils3d-1.3-py3-none-any.whl}"
 WORKSPACE_ROOT="$(cd "${XPOLICYLAB_ROOT}/.." && pwd)"
 VENV_DIR="${LINGBOT_VLA2_ENV_DIR:-${WORKSPACE_ROOT}/envs/lingbot-vla2/.venv}"
 PYTHON="${VENV_DIR}/bin/python"
 FLASH_ATTN_WHEEL="${FLASH_ATTN_WHEEL:-}"
+PYTORCH_INDEX_URL="${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
+LEROBOT_SPEC="${LINGBOT_VLA2_LEROBOT_SPEC:-lerobot==0.4.2}"
 RECREATE=0
 
 usage() {
@@ -83,7 +86,7 @@ export UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-600}"
 uv pip install --python "${PYTHON}" pip setuptools wheel packaging ninja
 uv pip install --python "${PYTHON}" \
   torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 \
-  --index-url https://download.pytorch.org/whl/cu128
+  --index-url "${PYTORCH_INDEX_URL}"
 uv pip install --python "${PYTHON}" torchdata==0.11.0 torchcodec==0.6.0
 uv pip install --python "${PYTHON}" -r "${LINGBOT_ROOT}/requirements.txt"
 uv pip install --python "${PYTHON}" numpydantic==1.9.0 --no-deps
@@ -98,24 +101,19 @@ else
   uv pip install --python "${PYTHON}" flash-attn==2.8.3 --no-build-isolation
 fi
 
-uv pip install --python "${PYTHON}" --no-deps \
-  "lerobot @ https://github.com/huggingface/lerobot/archive/refs/tags/v0.4.2.tar.gz"
+uv pip install --python "${PYTHON}" --no-deps "${LEROBOT_SPEC}"
 uv pip install --python "${PYTHON}" --no-deps -e "${LINGBOT_ROOT}"
 uv pip install --python "${PYTHON}" -r "${LINGBOT_ROOT}/requirements-depth.txt"
 
-"${PYTHON}" - <<PY
-import site
-from pathlib import Path
-
-site_packages = Path(site.getsitepackages()[0])
-pth = site_packages / "stablevla_local_depth.pth"
-pth.write_text("${LINGBOT_ROOT}/lingbotvla/models/vla/vision_models/morgbd_clean/3rd/utils3d\n")
-print("wrote", pth)
-PY
+if [[ ! -f "${UTILS3D_WHEEL}" ]]; then
+  echo "Pinned offline utils3d wheel not found: ${UTILS3D_WHEEL}" >&2
+  exit 1
+fi
+uv pip install --python "${PYTHON}" --no-deps "${UTILS3D_WHEEL}"
 
 uv pip install --python "${PYTHON}" --no-deps -e \
   "${LINGBOT_ROOT}/lingbotvla/models/vla/vision_models/lingbot-depth"
-uv pip install --python "${PYTHON}" -e \
+uv pip install --python "${PYTHON}" --no-deps -e \
   "${LINGBOT_ROOT}/lingbotvla/models/vla/vision_models/MoGe"
 
 # Depth packages have broad dependencies; restore the official pinned core stack.
@@ -132,6 +130,9 @@ import torch
 import transformers
 import XPolicyLab
 import lingbotvla
+import mdm
+import moge
+import utils3d
 
 report = {
     "python": sys.version.split()[0],
@@ -141,6 +142,7 @@ report = {
     "cuda_available": torch.cuda.is_available(),
     "cuda_device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
     "lingbotvla_import": bool(lingbotvla),
+    "depth_imports": bool(mdm and moge and utils3d),
     "xpolicylab_import": bool(XPolicyLab),
 }
 print(json.dumps(report, indent=2))

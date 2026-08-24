@@ -12,6 +12,10 @@ runs/
 Log/
 logs/
 
+# Optional locally cached binary used by the GR00T installer. GitHub rejects it
+# and install.sh also accepts an explicit FLASH_ATTN_WHEEL path.
+policy/GR00T_N17/vendor/*.whl
+
 # H_RDT local artifacts and large model assets
 policy/H_RDT/.cache/
 policy/H_RDT/H_RDT/.cache/

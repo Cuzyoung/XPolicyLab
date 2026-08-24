@@ -1,0 +1,50 @@
+# YAM LeRobot v3 layout shared with the Pi05 post-training run. The packed
+# vectors are [left arm 6, left gripper 1, right arm 6, right gripper 1].
+states:
+  - observation.state.arm.position:
+      origin_keys:
+        - observation.state:
+            start: 0
+            end: 6
+        - observation.state:
+            start: 7
+            end: 13
+  - observation.state.effector.position:
+      origin_keys:
+        - observation.state:
+            start: 6
+            end: 7
+        - observation.state:
+            start: 13
+            end: 14
+
+actions:
+  - action.arm.position:
+      origin_keys:
+        - action:
+            start: 0
+            end: 6
+        - action:
+            start: 7
+            end: 13
+      subtract_state: false
+  - action.effector.position:
+      origin_keys:
+        - action:
+            start: 6
+            end: 7
+        - action:
+            start: 13
+            end: 14
+      subtract_state: false
+
+images:
+  - observation.images.camera_top:
+      origin_keys: observation.images.top_rgb
+  - observation.images.camera_wrist_left:
+      origin_keys: observation.images.left_rgb
+  - observation.images.camera_wrist_right:
+      origin_keys: observation.images.right_rgb
+
+# The training launcher passes the dataset-specific stats path explicitly.
+norm_stats: null

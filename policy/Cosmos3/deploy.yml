@@ -1,0 +1,41 @@
+policy_name: Cosmos3
+protocol: ws
+host: 127.0.0.1
+port: null
+bench_name: null
+task_name: null
+ckpt_name: null
+env_cfg_type: droid_single
+seed: 0
+action_type: joint
+gpu_id: null
+eval_batch: false
+
+# Official Cosmos3-Edge-Policy-DROID serving arguments.
+checkpoint_path: nvidia/Cosmos3-Edge-Policy-DROID
+hf_revision: main
+domain_name: droid_lerobot
+decode_video: false
+sampler: unipc
+deterministic_seed: false
+guidance: 3.0
+guidance_interval: [960, 1001]
+num_steps: 4
+shift: 5.0
+resolution: "480"
+conditioning_fps: 15.0
+action_chunk_size: 32
+action_dim: 8
+image_height: 540
+image_width: 640
+action_space: joint_pos
+use_state: true
+history_length: 1
+format_prompt_as_json: true
+
+# XPolicy-to-DROID field mapping only; images stay RGB and unmodified.
+wrist_camera: cam_left_wrist
+exterior_camera_1: cam_head
+exterior_camera_2: cam_right_wrist
+default_prompt: Perform the instructed single-arm manipulation task.
+request_timeout_s: 1200

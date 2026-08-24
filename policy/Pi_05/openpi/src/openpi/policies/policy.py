@@ -18,8 +18,26 @@ from openpi import transforms as _transforms
 from openpi.models import model as _model
 from openpi.shared import array_typing as at
 from openpi.shared import nnx_utils
+from openpi.models_pytorch.autohorizon_official import (
+    UPSTREAM_COMMIT as AUTOHORIZON_UPSTREAM_COMMIT,
+)
+from openpi.models_pytorch.autohorizon_official import bidir_soft_pointer
 
 BasePolicy: TypeAlias = _base_policy.BasePolicy
+
+
+def compute_dvac_variance(clean_tail: np.ndarray, action_dim: int) -> np.ndarray:
+    tail = np.asarray(clean_tail, dtype=np.float32)
+    if tail.ndim != 4:
+        raise ValueError(f"DVAC clean estimates must be [L, B, H, D], got {tail.shape}")
+    if isinstance(action_dim, bool) or not isinstance(action_dim, int):
+        raise ValueError("DVAC action_dim must be an integer")
+    if not 0 < action_dim <= tail.shape[-1]:
+        raise ValueError(
+            f"DVAC action_dim must satisfy 1 <= D <= {tail.shape[-1]}, got {action_dim}"
+        )
+    valid_tail = tail[..., :action_dim]
+    return np.var(valid_tail, axis=0, ddof=0).sum(axis=-1)
 
 
 class Policy(BasePolicy):
@@ -62,10 +80,22 @@ class Policy(BasePolicy):
             self._sample_actions = model.sample_actions
         else:
             # JAX model setup
-            self._sample_actions = nnx_utils.module_jit(model.sample_actions)
+            self._sample_actions = nnx_utils.module_jit(
+                model.sample_actions,
+                static_argnames=(
+                    "return_attention",
+                    "return_denoising_variance",
+                    "dvac_tail_steps",
+                ),
+            )
             self._sample_actions_multi = nnx_utils.module_jit(
                 model.sample_actions,
-                static_argnames=("num_samples",),
+                static_argnames=(
+                    "num_samples",
+                    "return_attention",
+                    "return_denoising_variance",
+                    "dvac_tail_steps",
+                ),
             )
             self._rng = rng or jax.random.key(0)
 
@@ -82,6 +112,10 @@ class Policy(BasePolicy):
         rtc_beta: float = 5.0,
         paint_action_condition: np.ndarray | None = None,
         paint_delay_steps: int | None = None,
+        autohorizon: bool = False,
+        dvac: bool = False,
+        dvac_tail_steps: int = 5,
+        dvac_action_dim: int | None = None,
     ) -> dict:  # type: ignore[misc]
         if num_steps is not None and num_steps <= 0:
             raise ValueError(f"num_steps must be positive, got {num_steps}")
@@ -107,6 +141,45 @@ class Policy(BasePolicy):
             raise ValueError("multi-sample inference cannot be combined with PAINT")
         if action_condition is not None and paint_action_condition is not None:
             raise ValueError("RTC conditioning cannot be combined with PAINT")
+        if autohorizon and self._is_pytorch_model:
+            raise NotImplementedError("the XPolicy AutoHorizon hook is implemented for JAX Pi0")
+        if autohorizon and num_samples > 1:
+            raise ValueError("AutoHorizon cannot be combined with multi-sample inference")
+        if autohorizon and action_condition is not None:
+            raise ValueError("AutoHorizon cannot be combined with RTC conditioning")
+        if autohorizon and paint_action_condition is not None:
+            raise ValueError("AutoHorizon cannot be combined with PAINT")
+        if dvac and self._is_pytorch_model:
+            raise NotImplementedError("the XPolicy DVAC hook is implemented for JAX Pi0")
+        if dvac and num_samples > 1:
+            raise ValueError("DVAC cannot be combined with multi-sample inference")
+        if dvac and action_condition is not None:
+            raise ValueError("DVAC cannot be combined with RTC conditioning")
+        if dvac and paint_action_condition is not None:
+            raise ValueError("DVAC cannot be combined with PAINT")
+        if dvac and autohorizon:
+            raise ValueError("DVAC cannot be combined with AutoHorizon")
+        if dvac:
+            if isinstance(dvac_tail_steps, bool) or not isinstance(dvac_tail_steps, int):
+                raise ValueError("dvac_tail_steps must be an integer")
+            if dvac_tail_steps <= 0:
+                raise ValueError("dvac_tail_steps must be positive")
+            effective_num_steps = int(num_steps or self._sample_kwargs.get("num_steps", 10))
+            if dvac_tail_steps > effective_num_steps:
+                raise ValueError(
+                    f"dvac_tail_steps must be <= num_steps ({effective_num_steps})"
+                )
+            if dvac_action_dim is None:
+                dvac_action_dim = int(self._model.action_dim)
+            if (
+                isinstance(dvac_action_dim, bool)
+                or not isinstance(dvac_action_dim, int)
+                or not 0 < dvac_action_dim <= self._model.action_dim
+            ):
+                raise ValueError(
+                    "dvac_action_dim must satisfy "
+                    f"1 <= D <= {self._model.action_dim}, got {dvac_action_dim!r}"
+                )
         if paint_delay_steps is not None:
             if isinstance(paint_delay_steps, bool) or not isinstance(paint_delay_steps, int):
                 raise ValueError("paint_delay_steps must be an integer")
@@ -208,9 +281,64 @@ class Policy(BasePolicy):
         output_state = inputs["state"]
         if num_samples > 1:
             output_state = jnp.repeat(output_state, num_samples, axis=0)
+        autohorizon_metadata = None
+        dvac_metadata = None
+        if autohorizon:
+            actions, attention = sample_actions(
+                sample_rng_or_pytorch_device,
+                observation,
+                return_attention=True,
+                **sample_kwargs,
+            )
+            attention_tensor = torch.from_numpy(np.asarray(attention, dtype=np.float32))
+            execution_steps, diagnostics = bidir_soft_pointer(attention_tensor)
+            autohorizon_metadata = {
+                "execution_steps": int(execution_steps.item()),
+                "attention_step": 3,
+                "hold_threshold": 0.3,
+                "entropy_quantile": 0.9,
+                "run_length": 1,
+                "method": diagnostics["method"],
+                "forward_horizon": int(diagnostics["N_forward"]),
+                "backward_horizon": int(diagnostics["N_backward"]),
+                "join_row": diagnostics["join_row"],
+                "framework": "jax_attention_port",
+                "upstream_commit": AUTOHORIZON_UPSTREAM_COMMIT,
+            }
+        elif dvac:
+            actions, clean_tail = sample_actions(
+                sample_rng_or_pytorch_device,
+                observation,
+                return_denoising_variance=True,
+                dvac_tail_steps=dvac_tail_steps,
+                **sample_kwargs,
+            )
+            clean_tail_array = np.asarray(clean_tail, dtype=np.float32)
+            if clean_tail_array.shape != (
+                dvac_tail_steps,
+                inputs["state"].shape[0],
+                self._model.action_horizon,
+                self._model.action_dim,
+            ):
+                raise ValueError(
+                    "DVAC clean estimates have unexpected shape: "
+                    f"{clean_tail_array.shape}"
+                )
+            variance = compute_dvac_variance(clean_tail_array, dvac_action_dim)
+            if variance.shape[0] != 1:
+                raise ValueError("DVAC requires one observation")
+            dvac_metadata = {
+                "variance": variance[0].astype(np.float64).tolist(),
+                "total_variance": float(np.sum(variance[0], dtype=np.float64)),
+                "tail_steps": dvac_tail_steps,
+                "action_dim": dvac_action_dim,
+                "variance_space": "normalized_valid_action",
+            }
+        else:
+            actions = sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs)
         outputs = {
             "state": output_state,
-            "actions": sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs),
+            "actions": actions,
         }
         model_time = time.monotonic() - start_time
         if self._is_pytorch_model:
@@ -227,6 +355,10 @@ class Policy(BasePolicy):
         outputs["policy_timing"] = {
             "infer_ms": model_time * 1000,
         }
+        if autohorizon_metadata is not None:
+            outputs["autohorizon"] = autohorizon_metadata
+        if dvac_metadata is not None:
+            outputs["dvac"] = dvac_metadata
         return outputs
 
     @property

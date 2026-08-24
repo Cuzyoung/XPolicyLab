@@ -5,6 +5,8 @@ set -euo pipefail
 POLICY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GR00T_ROOT="${POLICY_DIR}/gr00t_n17"
 XPOLICYLAB_ROOT="$(cd "${POLICY_DIR}/../.." && pwd)"
+ENV_DIR="${GR00T_ENV_DIR:-${GR00T_ROOT}/.venv}"
+FLASH_ATTN_WHEEL="${GR00T_FLASH_ATTN_WHEEL:-${POLICY_DIR}/vendor/flash_attn-2.7.4.post1-cp310-cp310-linux_x86_64.whl}"
 
 echo "[GR00T_N17] GR00T_ROOT=${GR00T_ROOT}"
 echo "[GR00T_N17] XPOLICYLAB_ROOT=${XPOLICYLAB_ROOT}"
@@ -21,8 +23,14 @@ cd "${GR00T_ROOT}"
 # must resolve the (missing) aarch64 wheels. We instead create the venv and use
 # `uv pip install -e .`, which resolves only for the *current* platform (x86_64) and
 # honors [tool.uv.sources] / [[tool.uv.index]] while ignoring required-environments.
-uv venv --clear --python 3.10
-MODEL_PYTHON="${GR00T_ROOT}/.venv/bin/python"
+uv venv --clear --python 3.10 "${ENV_DIR}"
+MODEL_PYTHON="${ENV_DIR}/bin/python"
+if [[ -f "${FLASH_ATTN_WHEEL}" ]]; then
+  uv pip install --python "${MODEL_PYTHON}" --no-deps "${FLASH_ATTN_WHEEL}"
+elif [[ "${UV_NO_SOURCES:-0}" == "1" ]]; then
+  echo "Pinned offline flash-attn wheel not found: ${FLASH_ATTN_WHEEL}" >&2
+  exit 1
+fi
 uv pip install --python "${MODEL_PYTHON}" -e .
 "${MODEL_PYTHON}" -c "import gr00t; print('GR00T import ok')"
 
@@ -51,5 +59,5 @@ if not report["cuda_available"]:
 PY
 
 echo "[GR00T_N17] Installation finished."
-echo "[GR00T_N17] Policy server env: source ${GR00T_ROOT}/.venv/bin/activate"
+echo "[GR00T_N17] Policy server env: source ${ENV_DIR}/bin/activate"
 echo "[GR00T_N17] Next: run the ManiMux GR00T contract check, then start the model server."

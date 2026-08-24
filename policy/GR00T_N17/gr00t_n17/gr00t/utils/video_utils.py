@@ -163,6 +163,29 @@ def _get_video_info_ffmpeg(video_path: str) -> dict:
             "duration": duration,
             "codec": codec,
         }
+    except FileNotFoundError:
+        logger.warning("ffprobe is unavailable; reading video metadata with PyAV: %s", video_path)
+        with av.open(video_path) as container:
+            stream = container.streams.video[0]
+            rate = stream.average_rate or stream.base_rate
+            fps = float(rate) if rate is not None else 0.0
+            duration = (
+                float(stream.duration * stream.time_base)
+                if stream.duration is not None and stream.time_base is not None
+                else float(container.duration / av.time_base)
+                if container.duration is not None
+                else 0.0
+            )
+            nb_frames = int(stream.frames or 0)
+            codec = stream.codec_context.name or None
+            if nb_frames <= 0:
+                nb_frames = sum(1 for _ in container.decode(video=0))
+            return {
+                "nb_frames": nb_frames,
+                "fps": fps,
+                "duration": duration,
+                "codec": codec,
+            }
     except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError) as e:
         raise ValueError(f"Failed to get video info for {video_path}: {e}")
 

@@ -17,6 +17,7 @@ gpu_id=$6
 
 POLICY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GR00T_ROOT="${POLICY_DIR}/gr00t_n17"
+ENV_DIR="${GR00T_ENV_DIR:-${GR00T_ROOT}/.venv}"
 DATA_ROOT="${GR00T_LEROBOT_HOME:-}"
 if [[ -z "${DATA_ROOT}" ]]; then
   echo "Set GR00T_LEROBOT_HOME to the LeRobot datasets root." >&2
@@ -30,7 +31,7 @@ data_setting="${bench_name}-${ckpt_name}-${env_cfg_type}-${action_type}"
 ckpt_setting="${bench_name}-${ckpt_name}-${env_cfg_type}-${action_type}-${seed}"
 dataset_path="${DATA_ROOT}/${data_setting}"
 modality_config="${POLICY_DIR}/configs/${env_cfg_type}_config.py"
-output_dir="${POLICY_DIR}/checkpoints/${ckpt_setting}"
+output_dir="${GR00T_CHECKPOINT_DIR:-${POLICY_DIR}/checkpoints/${ckpt_setting}}"
 
 export CUDA_VISIBLE_DEVICES="${gpu_id}"
 export NUM_GPUS="${NUM_GPUS:-$(tr ',' '\n' <<< "${gpu_id}" | sed '/^$/d' | wc -l | xargs)}"
@@ -72,8 +73,9 @@ SAVE_STEPS="${SAVE_STEPS:-1000}"
 GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-640}"
 USE_WANDB="${USE_WANDB:-0}"
 DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-8}"
+WANDB_PROJECT="${WANDB_PROJECT:-yam-gr00t-n17}"
 
-export MAX_STEPS SAVE_STEPS GLOBAL_BATCH_SIZE USE_WANDB DATALOADER_NUM_WORKERS
+export MAX_STEPS SAVE_STEPS GLOBAL_BATCH_SIZE USE_WANDB DATALOADER_NUM_WORKERS WANDB_PROJECT
 
 echo "[GR00T_N17] dataset_path=${dataset_path}"
 echo "[GR00T_N17] base_model=${base_model}"
@@ -87,12 +89,17 @@ echo "[GR00T_N17] max_steps=${MAX_STEPS}"
 echo "[GR00T_N17] save_steps=${SAVE_STEPS}"
 
 cd "${GR00T_ROOT}"
-source .venv/bin/activate
+if [[ ! -x "${ENV_DIR}/bin/python" ]]; then
+  echo "GR00T environment not found: ${ENV_DIR}. Run install.sh first." >&2
+  exit 1
+fi
+source "${ENV_DIR}/bin/activate"
 
-uv run --no-sync bash examples/finetune.sh \
+bash examples/finetune.sh \
   --base-model-path "${base_model}" \
   --dataset-path "${dataset_path}" \
   --embodiment-tag NEW_EMBODIMENT \
   --modality-config-path "${modality_config}" \
   --output-dir "${output_dir}" \
-  --experiment-name "${ckpt_setting}"
+  --experiment-name "${ckpt_setting}" \
+  --wandb-project "${WANDB_PROJECT}"

@@ -284,7 +284,10 @@ class Pi0(_model.BaseModel):
         rtc_beta: float = 5.0,
         paint_action_condition: at.Float[at.Array, "b ah ad"] | None = None,
         paint_delay_steps: int | at.Int[at.Array, ""] | None = None,
-    ) -> _model.Actions:
+        return_attention: bool = False,
+        return_denoising_variance: bool = False,
+        dvac_tail_steps: int = 5,
+    ):
         if (action_condition is None) != (condition_weights is None):
             raise ValueError("action_condition and condition_weights must be provided together")
         if (paint_action_condition is None) != (paint_delay_steps is None):
@@ -299,6 +302,22 @@ class Pi0(_model.BaseModel):
             raise ValueError("multi-sample inference cannot be combined with PAINT")
         if action_condition is not None and paint_action_condition is not None:
             raise ValueError("RTC conditioning cannot be combined with PAINT")
+        if return_attention and num_samples > 1:
+            raise ValueError("AutoHorizon attention requires one action sample")
+        if return_attention and action_condition is not None:
+            raise ValueError("AutoHorizon attention cannot be combined with RTC conditioning")
+        if return_attention and paint_action_condition is not None:
+            raise ValueError("AutoHorizon attention cannot be combined with PAINT")
+        if return_denoising_variance and num_samples > 1:
+            raise ValueError("DVAC requires one action sample")
+        if return_denoising_variance and action_condition is not None:
+            raise ValueError("DVAC cannot be combined with RTC conditioning")
+        if return_denoising_variance and paint_action_condition is not None:
+            raise ValueError("DVAC cannot be combined with PAINT")
+        if return_denoising_variance and return_attention:
+            raise ValueError("DVAC cannot be combined with AutoHorizon attention")
+        if dvac_tail_steps <= 0:
+            raise ValueError("DVAC tail steps must be positive")
         observation = _model.preprocess_observation(None, observation, train=False)
         # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
         # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
@@ -361,15 +380,25 @@ class Pi0(_model.BaseModel):
             # `positions` is shape (b, suffix_len) indicating the positions of the suffix tokens
             positions = jnp.sum(prefix_mask, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
 
-            (prefix_out, suffix_out), _ = self.PaliGemma.llm(
+            llm_outputs = self.PaliGemma.llm(
                 [None, suffix_tokens],
                 mask=full_attn_mask,
                 positions=positions,
                 kv_cache=kv_cache,
                 adarms_cond=[None, adarms_cond],
+                return_attention=return_attention,
             )
+            if return_attention:
+                (prefix_out, suffix_out), _, attention = llm_outputs
+            else:
+                (prefix_out, suffix_out), _ = llm_outputs
             assert prefix_out is None
-            return self.action_out_proj(suffix_out[:, -self.action_horizon :])
+            velocity = self.action_out_proj(suffix_out[:, -self.action_horizon :])
+            if not return_attention:
+                return velocity
+            action_attention = attention[..., -self.action_horizon :]
+            action_attention = jnp.mean(action_attention, axis=(0, 1, 2)) / num_steps
+            return velocity, action_attention
 
         def forward_step(carry):
             x_t, time = carry
@@ -399,6 +428,61 @@ class Pi0(_model.BaseModel):
             return time >= -dt / 2
 
         def integrate_forward(initial_noise):
+            if return_attention:
+                def attention_step(carry):
+                    x_t, time, step_index, selected_attention = carry
+                    v_t, action_attention = predict_velocity(x_t, time)
+                    selected_attention = jnp.where(
+                        step_index == 2,
+                        action_attention,
+                        selected_attention,
+                    )
+                    return x_t + dt * v_t, time + dt, step_index + 1, selected_attention
+
+                def attention_cond(carry):
+                    _, time, _, _ = carry
+                    return time >= -dt / 2
+
+                actions, _, _, action_attention = jax.lax.while_loop(
+                    attention_cond,
+                    attention_step,
+                    (
+                        initial_noise,
+                        1.0,
+                        jnp.asarray(0, dtype=jnp.int32),
+                        jnp.zeros(
+                            (self.action_horizon, self.action_horizon),
+                            dtype=prefix_tokens.dtype,
+                        ),
+                    ),
+                )
+                return actions, action_attention
+            if return_denoising_variance:
+                def dvac_step(carry):
+                    x_t, time, clean_tail = carry
+                    v_t = predict_velocity(x_t, time)
+                    clean_estimate = x_t - time * v_t
+                    clean_tail = jnp.roll(clean_tail, -1, axis=0)
+                    clean_tail = clean_tail.at[-1].set(clean_estimate)
+                    return x_t + dt * v_t, time + dt, clean_tail
+
+                def dvac_cond(carry):
+                    _, time, _ = carry
+                    return time >= -dt / 2
+
+                actions, _, clean_tail = jax.lax.while_loop(
+                    dvac_cond,
+                    dvac_step,
+                    (
+                        initial_noise,
+                        1.0,
+                        jnp.zeros(
+                            (dvac_tail_steps, *initial_noise.shape),
+                            dtype=initial_noise.dtype,
+                        ),
+                    ),
+                )
+                return actions, clean_tail
             actions, _ = jax.lax.while_loop(
                 forward_cond,
                 forward_step,

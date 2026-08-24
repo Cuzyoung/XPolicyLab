@@ -2,6 +2,9 @@ model:
   model_path: null
   tokenizer_path: null
   post_training: true
+  # The public base includes depth/video distillation heads, but our YAM dataset
+  # has action supervision only. Keep strict loading for all non-distillation weights.
+  ignore_pretraining_alignment_heads: true
   adanorm_time: true
   config_key: LingbotVLAV2Config
   moe_implementation: fused
@@ -32,6 +35,9 @@ data:
     - base.position: meanstd
     - hand.position: meanstd
   num_workers: 8
+  # Cluster images do not ship the system FFmpeg sonames required by TorchCodec.
+  # PyAV is pinned in the LingBot environment and is validated on this dataset.
+  video_backend: pyav
   use_future_image: false
 
 train:
