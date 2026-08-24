@@ -210,8 +210,12 @@ class Model(ModelTemplate):
         if missing:
             raise ValueError(f"RTC sampling is missing fields: {missing}")
 
-        condition = np.asarray(sampling["action_condition"], dtype=np.float32)
-        weights = np.asarray(sampling["condition_weights"], dtype=np.float32)
+        condition = np.array(
+            sampling["action_condition"], dtype=np.float32, copy=True
+        )
+        weights = np.array(
+            sampling["condition_weights"], dtype=np.float32, copy=True
+        )
         beta = float(sampling["beta"])
         expected_action_dim = self.robot_action_dim or self.action_dim
         if condition.shape != (self.action_horizon, expected_action_dim):
