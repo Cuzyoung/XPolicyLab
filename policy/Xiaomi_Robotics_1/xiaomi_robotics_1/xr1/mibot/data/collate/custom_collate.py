@@ -18,8 +18,11 @@ class CustomCollate:
         self.max_length = int(os.environ.get("MAX_LENGTH", 4096))
         special_tokens = {"score": "<score>", "state": "<state>"}
         special_tokens.update({f"a_{index}": f"<a_{index}>" for index in range(60)})
+        processor_source = os.environ.get(
+            "XR1_QWEN_VL_CONFIG_SOURCE", "Qwen/Qwen3-VL-4B-Instruct"
+        )
         self.processor = AutoProcessor.from_pretrained(
-            "Qwen/Qwen3-VL-4B-Instruct", use_fast=True, extra_special_tokens=special_tokens
+            processor_source, use_fast=True, extra_special_tokens=special_tokens
         )
         token_ids = self.processor.tokenizer.convert_tokens_to_ids(
             ["<score>", "<state>", "<a_0>", "<a_59>"]

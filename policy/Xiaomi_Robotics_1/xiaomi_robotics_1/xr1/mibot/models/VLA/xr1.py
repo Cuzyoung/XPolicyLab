@@ -1,6 +1,7 @@
 # Copyright (C) 2026 Xiaomi Corporation.
 import contextlib
 import math
+import os
 import random
 
 import torch
@@ -23,7 +24,9 @@ from mibot.models.VLM.qwen3vl import (
 )
 from mibot.utils.model_utils import auto_cast
 
-QWEN_VL_CONFIG_SOURCE = "Qwen/Qwen3-VL-4B-Instruct"
+QWEN_VL_CONFIG_SOURCE = os.environ.get(
+    "XR1_QWEN_VL_CONFIG_SOURCE", "Qwen/Qwen3-VL-4B-Instruct"
+)
 
 
 def modulate(x, shift, scale):
