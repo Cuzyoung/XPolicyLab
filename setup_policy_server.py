@@ -10,6 +10,27 @@ import traceback
 from client_server.tcp.model_server import ModelServer
 
 
+_MODEL_IDENTITY_KEYS = (
+    "policy_name",
+    "task_name",
+    "checkpoint_variant",
+    "checkpoint_source",
+    "norm_stats_source",
+    "train_config_name",
+    "observation_profile",
+    "repo_id",
+    "model_path",
+    "norm_stats_path",
+    "action_horizon",
+    "num_steps",
+    "action_type",
+)
+
+
+def _deployment_model_metadata(deploy_cfg):
+    return {key: deploy_cfg[key] for key in _MODEL_IDENTITY_KEYS if key in deploy_cfg}
+
+
 def _default_protocol() -> str:
     """Default to the websocket policy protocol."""
     return "ws"
@@ -64,6 +85,7 @@ def main(deploy_cfg):
                 port=int(port),
                 ws_ping_interval_s=deploy_cfg.get("ws_ping_interval_s", 20.0),
                 ws_ping_timeout_s=deploy_cfg.get("ws_ping_timeout_s", 20.0),
+                model_metadata=_deployment_model_metadata(deploy_cfg),
             ),
         )
         try:

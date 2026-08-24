@@ -4,7 +4,7 @@ import asyncio
 from typing import Any
 
 import pytest
-from client_server.ws.model_server import PolicyServer
+from client_server.ws.model_server import PolicyServer, PolicyServerConfig
 from client_server.ws.protocol.exceptions import ErrorCode, WsError
 from client_server.ws.protocol.messages import MessageType
 from client_server.ws.protocol.schemas import Frame
@@ -91,6 +91,25 @@ def test_hello_advertises_available_sampling_modes() -> None:
         "class": "FakeModel",
         "checkpoint": "fake-step-1000",
     }
+
+
+def test_hello_merges_configured_checkpoint_identity() -> None:
+    server = PolicyServer(
+        FakeModel(),
+        PolicyServerConfig(
+            model_metadata={
+                "checkpoint_variant": "pi05-step-1000",
+                "checkpoint_source": "local-finetune",
+            }
+        ),
+    )
+
+    reply = asyncio.run(server._dispatch_frame(_hello_frame()))
+
+    assert reply is not None
+    assert reply.payload["model_metadata"]["checkpoint_variant"] == "pi05-step-1000"
+    assert reply.payload["model_metadata"]["checkpoint_source"] == "local-finetune"
+    assert reply.payload["model_metadata"]["checkpoint"] == "fake-step-1000"
 
 
 def test_hello_does_not_advertise_rtc_without_a_sampler_hook() -> None:

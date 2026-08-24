@@ -72,6 +72,7 @@ class PolicyServerConfig:
     port: int = 19000
     ws_ping_interval_s: float | None = 20.0
     ws_ping_timeout_s: float | None = 20.0
+    model_metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.ws_ping_interval_s = normalize_ws_ping(
@@ -430,6 +431,7 @@ class PolicyServer:
             model_metadata: dict[str, Any] = {
                 "module": type(self.model).__module__,
                 "class": type(self.model).__name__,
+                **self.config.model_metadata,
             }
             metadata_method = getattr(self.model, "runtime_metadata", None)
             if callable(metadata_method):
