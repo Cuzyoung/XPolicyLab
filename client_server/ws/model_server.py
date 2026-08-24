@@ -7,25 +7,40 @@ import asyncio
 import importlib
 import inspect
 import logging
+import subprocess
 import time
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import yaml
-from websockets.asyncio.server import Server, ServerConnection, serve
-from websockets.exceptions import ConnectionClosed
-
 from client_server.ws.protocol.codec import decode_envelope, decode_frame, encode_frame
 from client_server.ws.protocol.exceptions import ErrorCode, WsError
 from client_server.ws.protocol.keepalive import normalize_ws_ping
 from client_server.ws.protocol.messages import MessageType
 from client_server.ws.protocol.schemas import Frame
+from websockets.asyncio.server import Server, ServerConnection, serve
+from websockets.exceptions import ConnectionClosed
+
 from XPolicyLab.utils.process_data import decode_obs_images
 
 logger = logging.getLogger(__name__)
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _git_revision() -> str | None:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=_REPO_ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
 
 # Bound on cached responses kept for duplicate-request replay. The client
 # retries a request at most once and immediately, so the replay window is a
@@ -412,6 +427,16 @@ class PolicyServer:
                 sampling_modes.append("autohorizon")
             if callable(getattr(self.model, "get_action_dvac", None)):
                 sampling_modes.append("dvac")
+            model_metadata: dict[str, Any] = {
+                "module": type(self.model).__module__,
+                "class": type(self.model).__name__,
+            }
+            metadata_method = getattr(self.model, "runtime_metadata", None)
+            if callable(metadata_method):
+                reported = await self._call_model_method(metadata_method)
+                if not isinstance(reported, dict):
+                    raise TypeError("model runtime_metadata() must return a dict")
+                model_metadata.update(reported)
             return self._reply(
                 frame,
                 MessageType.HELLO_ACK,
@@ -419,7 +444,9 @@ class PolicyServer:
                     "ok": True,
                     "server": "xpolicylab_policy_server",
                     "server_instance_id": self._instance_id,
+                    "server_revision": _git_revision(),
                     "capabilities": {"sampling_modes": sampling_modes},
+                    "model_metadata": model_metadata,
                 },
             )
         if frame.message_type == MessageType.PREPARE_CASE:

@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-
 from openpi.policies import policy_config as _policy_config
 from openpi.shared import normalize as _normalize
 from openpi.training import config as _config
@@ -22,7 +21,6 @@ from XPolicyLab.utils.process_data import (
     pack_robot_state,
     unpack_robot_state,
 )
-
 
 _POLICY_DIR = Path(__file__).resolve().parent
 _CHECKPOINTS_DIR = _POLICY_DIR / "checkpoints"
@@ -167,19 +165,40 @@ class Model(ModelTemplate):
     def get_model(self, model_cfg: dict[str, Any]):
         repo_id = model_cfg.get("repo_id", "1118")
         model_root = _resolve_pi05_model_root(model_cfg)
+        self.model_root = model_root
 
         norm_stats = None
         norm_stats_path = model_cfg.get("norm_stats_path")
         if norm_stats_path is not None:
-            norm_stats = _normalize.load(Path(str(norm_stats_path)).expanduser().resolve())
+            self.norm_stats_path = Path(str(norm_stats_path)).expanduser().resolve()
+            norm_stats = _normalize.load(self.norm_stats_path)
         elif repo_id is not None:
-            norm_stats = _normalize.load(model_root / "assets" / str(repo_id))
+            self.norm_stats_path = model_root / "assets" / str(repo_id)
+            norm_stats = _normalize.load(self.norm_stats_path)
+        else:
+            self.norm_stats_path = None
 
         return _policy_config.create_trained_policy(
             self._train_config,
             str(model_root),
             norm_stats=norm_stats,
         )
+
+    def runtime_metadata(self) -> dict[str, Any]:
+        return {
+            "policy_family": "pi05",
+            "task_name": self.task_name,
+            "action_type": self.action_type,
+            "train_config_name": self._train_config.name,
+            "model_root": str(self.model_root.resolve()),
+            "norm_stats_path": (
+                None if self.norm_stats_path is None else str(self.norm_stats_path.resolve())
+            ),
+            "action_horizon": self.action_horizon,
+            "action_dim": self.action_dim,
+            "num_steps": self.num_steps,
+            "observation_profile": self.observation_profile,
+        }
 
     def update_obs(self, obs):
         self.update_obs_batch([obs])

@@ -25,6 +25,9 @@ class FakeModel:
     def update_obs(self, observation: dict[str, Any]) -> None:
         self.calls.append(("update_obs", observation))
 
+    def runtime_metadata(self) -> dict[str, Any]:
+        return {"checkpoint": "fake-step-1000"}
+
     def get_action(self) -> list[int]:
         self.calls.append(("get_action", None))
         return [1]
@@ -83,6 +86,11 @@ def test_hello_advertises_available_sampling_modes() -> None:
         "autohorizon",
         "dvac",
     ]
+    assert reply.payload["model_metadata"] == {
+        "module": __name__,
+        "class": "FakeModel",
+        "checkpoint": "fake-step-1000",
+    }
 
 
 def test_hello_does_not_advertise_rtc_without_a_sampler_hook() -> None:
