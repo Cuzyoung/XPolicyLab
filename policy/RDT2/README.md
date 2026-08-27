@@ -96,6 +96,17 @@ EVAL_ENV_TYPE=debug bash eval.sh RoboDojo exchange_ball demo umi_dual ee 0 0 0 r
 
 Standard 10 positional arguments, no extras. Supported: `action_type: ee` only (the adapter raises on `joint`); `env_cfg_type`: any dual-arm robot whose `arm_dim` + `ee_dim` sum to 20 with `ee_dim: [1, 1]` — in practice `umi_dual`.
 
+### The eval path is not wired to the uv venv yet
+
+`install.sh` builds a **uv** venv at `$RDT2_ROOT/.venv`, but
+`setup_eval_policy_server.sh` here is byte-identical to `policy/demo_policy` and
+does `conda activate "${policy_conda_env}"` — it cannot activate that venv.
+Training drives the uv venv directly and is unaffected; **evaluation is not**.
+Making arg 9 accept `uv` needs the `resolve_uv_env` pattern from
+`policy/Pi_05/setup_eval_policy_server.sh` plus a `policy_uv_env_path` key in
+`deploy.yml`. Until that lands, pass a conda env that carries the upstream deps,
+or start the server by hand from the uv venv.
+
 ### Debug mode does not load the model
 
 Under `EVAL_ENV_TYPE=debug`, `debug_load_model` defaults to **false** and the adapter runs a loudly-announced stub that holds the current observed pose. This is deliberate: a wiring check does not need weights, and loading the 7B backbone on a 30 GB-RAM host risks an OOM that takes the user's input method with it. The stub still routes through the **real** decode path — arm swap, gripper scaling, relative→absolute reconstruction, 6D→quaternion — so the debug loop exercises everything except the network forward. Set `debug_load_model: true` to override.
