@@ -158,7 +158,7 @@ Verified empirically: the shipped env client rejects a 9-D pose. This adapter th
 
 ## Notes
 
-- Robot registration: `umi_dual` (`arm_dim: [9, 9]`, `ee_dim: [1, 1]`) was already present in both `env_cfg/robot/_robot_info.json` and `utils/robot/_robot_info.json`; this adapter adds nothing there.
+- Robot registration: `umi_dual` (`arm_dim: [9, 9]`, `ee_dim: [1, 1]`) is registered in both `utils/robot/_robot_info.json` (here) and `env_cfg/robot/_robot_info.json` (parent workspace). AGENTS.md requires both, or training and evaluation disagree about the action dim.
 - `deploy.py`, `__init__.py`, `eval.sh`, `setup_eval_*.sh` are byte-identical to `policy/demo_policy`.
 - Unit tests: `tests/unit/test_rdt2_umi_conventions.py` (32 tests) cover the arm-swap round trip, 6D↔matrix↔quaternion, the image concat shape/dtype/halves, the gripper mappings, and the relative↔absolute chunk reconstruction.
 
@@ -167,10 +167,10 @@ Verified empirically: the shipped env client rejects a 9-D pose. This adapter th
 Be blunt about what this is: **wiring, not results.** Nothing below has been measured.
 
 1. **No real inference has ever run.** The debug loop passed in stub mode only. At the time of writing `ckpt/RDT2-VQ` was 113 MB of 16.6 GB, so the backbone could not load. `_build_upstream_policy` and `_forward`'s real branch are **untested code**.
-2. **No training, no data conversion.** `process_data.sh` and `train.sh` are loud stubs; the converter does not exist. There is no fine-tuned checkpoint, so zero-shot is not applicable either — upstream requires their exact gripper and camera geometry, which our YAM rig does not have.
+2. **Training runs and the loss descends; nothing beyond that is measured.** The converter now exists (`manimux/scripts/lerobot_to_rdt2_shards.py`) and a fine-tune of the FM expert has run end to end: 1500 steps at batch 8 on one RTX 5090, loss 0.0192 → 0.0057, head-to-tail drop clearing the head window's own sd. That establishes the plumbing, **not** that the resulting policy is any good — no checkpoint has been evaluated, in sim or on hardware. `process_data.sh` and `train.sh` here remain loud wrappers around the parent repo's converter and the upstream `finetune_rdt.sh`.
 3. **`rot6d_layout` is a guess for our own data.** `cols` is verified against *upstream*. Our `exchange_ball_v0` columns `left_tcp.r1..r6` come from a capture pipeline outside this repo and have **not** been checked against either convention. If the converter and this key disagree, nothing raises.
-4. **`gripper_mapping` is a modelling choice, not a fact.** Our `linear_4310` opens 0.096 m; RDT2 assumes 0.088 m. `full_open_normalized` compresses one into the other. How much fine-tuning absorbs is unknown, and the converter must make the same choice.
-5. **`relative_translation_frame: anchor` matches upstream but not necessarily our converter**, which does not exist yet.
+4. **`gripper_mapping` is a modelling choice, not a fact.** Our `linear_4310` opens 0.096 m; RDT2 assumes 0.088 m. `full_open_normalized` compresses one into the other. The converter now defaults to the same mapping, so the two agree — but how much fine-tuning absorbs is still unknown.
+5. **`relative_translation_frame: anchor` matches upstream, and now matches the converter too** (`to_relative(anchor, ...)` expresses translation in the anchor frame). Deploy-side and training-side agree; neither has been checked against a real rollout.
 6. **The tracker→TCP conjugation is not implemented.** Upstream conjugates the relative pose by `C = inv(T_tracker_to_tcp) @ T_tracker_to_policy` (`real_inference_util.py:191-226`) with hard-coded UMI-gripper geometry. Our TCP definition differs, and fine-tuning on our own data should bake the frame in, so this adapter omits it. If a fine-tune trained in the UMI tool frame, it will be needed.
 7. **The normalizer's internals are unverified by this adapter.** `RDTInferencer` unnormalizes internally, so nothing here touches it. It reportedly contains `eef_rot_axis_angle` (axis-angle) entries while the action vector is 6-D; that relationship has not been traced.
 8. **Peak host RAM for a real load is unmeasured.** Upstream's own table says inference wants > 32 GB RAM; this host has 30 GB. That was the runbook's step-0 blocking question and it is still open.
