@@ -9,16 +9,36 @@ Shared conventions — argument meanings, checkpoint naming, split-machine deplo
 ## Installation
 
 ```bash
-git clone https://github.com/thu-ml/RDT2.git ~/Desktop/project/RDT2   # outside this workspace
-conda create -n rdt2 python=3.11 -y
-conda activate rdt2
 cd XPolicyLab/policy/RDT2
-bash install.sh ~/Desktop/project/RDT2
+bash install.sh [/path/to/RDT2]        # default: <workspace parent>/RDT2
 ```
 
-`install.sh` installs XPolicyLab in editable mode, then the upstream `requirements.txt` if the tree is found. It exits 0 with a loud message (not an error) when the RDT2 tree is missing, so the XPolicyLab half still lands.
+`install.sh` clones the upstream tree if it is missing and pins it to
+`RDT2_GIT_COMMIT` (`0797b4c`), then builds a uv venv at `$RDT2_ROOT/.venv` and
+installs XPolicyLab into it editable. Upstream is **not vendored and not a
+submodule** — pinning by commit follows `policy/LingBot_VLA`, which pins lerobot
+the same way. The script refuses to run if the upstream tree has local edits to
+tracked files: the arm-order and gripper-unit contract in `model.py` cites line
+numbers in this exact tree.
 
-Upstream needs `flash-attn` and pins `transformers==4.51.3`; both come from its `requirements.txt`.
+Two things upstream's `requirements.txt` does **not** pin, and this script does:
+
+- **torch 2.7.1+cu128.** The default PyPI wheel is cu126 and carries no `sm_120`
+  kernels, so it cannot run on Blackwell at all.
+- **flash-attn 2.8.3.post1, built from source.** That is the first upstream
+  release emitting `arch=compute_120,code=sm_120`; no prebuilt wheel covers
+  Blackwell. It is not optional — `rdt/train.py:134` hardcodes
+  `attn_implementation="flash_attention_2"` with no fallback, and
+  `configs/rdt/post_train.yaml` sets `use_flash_attn: true` for the action expert.
+  Budget 30–80 min; `MAX_JOBS` defaults to 4 because each nvcc job on these
+  kernels peaks near 4GB. Set `RDT2_FLASH_ATTN_WHEEL` to skip the build.
+
+`vllm` is filtered out of `requirements.txt`: only `deploy/vllm_utils.py` and
+`deploy/inference_real_vq.py` import it, lazily, on the VQ inference path.
+Nothing under `rdt/` touches it and resolving it drags in a conflicting torch.
+
+Validated on one RTX 5090 (32GB): 1500 steps at batch 8, loss 0.0192 → 0.0057,
+23.8/32.6 GiB, 10m05s.
 
 ## Model Assets
 
