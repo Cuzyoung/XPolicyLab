@@ -1,0 +1,159 @@
+# RDT2 (thu-ml/RDT2) policy deployment config -- bimanual UMI rig.
+# Standard XPolicyLab key set first; per-run fields are overridden at launch.
+policy_name: RDT2
+protocol: ws
+host: localhost
+port: 6000
+bench_name: null
+task_name: null
+ckpt_name: null
+env_cfg_type: umi_dual
+seed: null
+action_type: ee
+gpu_id: null
+eval_batch: false
+
+# --- Upstream source tree -----------------------------------------------------
+# RDT2 is deliberately NOT vendored into XPolicyLab and NOT a submodule (see
+# docs/rdt2-umi-runbook.md, "git 追踪"). Clone it beside the workspace and point
+# here. Relative paths resolve against this policy dir; $RDT2_ROOT overrides;
+# the final fallback is <workspace>/../RDT2.
+rdt2_root: /home/jw/Desktop/project/RDT2
+
+# Upstream FM inference config. state_dim/action_chunk_size are read from it and
+# cross-checked against action_chunk_size below.
+rdt2_model_config: configs/rdt/post_train.yaml
+
+# --- Weights ------------------------------------------------------------------
+# checkpoint_path: the RDT2-FM action expert (HF robotics-diffusion-transformer/
+#   RDT2-FM, ~0.98 GB), or your fine-tune. Left null it falls back to the shared
+#   checkpoint_resolver precedence, i.e. checkpoints/<bench>-<ckpt>-<env_cfg>-
+#   <action_type>-<seed>/.
+# normalizer_path: umi_normalizer_wo_downsample_indentity_rot.pt, which ships in
+#   the RVQActionTokenizer repo (~1.75 GB), NOT in RDT2-FM.
+# vlm_path: the Qwen2.5-VL-7B backbone. NOTE: the FM path loads this too -- see
+#   RDT2/models/rdt_inferencer.py:115-124. It is the RDT2-VQ repo (~16.6 GB), so
+#   "we only need RDT2-FM" is wrong for inference. ~16.5 GB VRAM in bf16.
+checkpoint_path: null
+normalizer_path: ckpt/RVQ/umi_normalizer_wo_downsample_indentity_rot.pt
+vlm_path: ckpt/RDT2-VQ
+
+device: cuda
+dtype: bfloat16
+# RDTInferencer.reset() calls torch.compile() unconditionally
+# (RDT2/models/rdt_inferencer.py:154); its Inductor workers are host-RAM hungry
+# on the first step. Set true on a memory-constrained host (this one has 30 GB).
+disable_torch_compile: true
+
+# debug_load_model: under EVAL_ENV_TYPE=debug, load the real model anyway.
+# Default false ON PURPOSE. The FM path pulls a full Qwen2.5-VL-7B into memory
+# (RDT2/models/rdt_inferencer.py:115-124, ~16.5 GB bf16) plus torch.compile
+# workers; this host has 30 GB RAM and an OOM here kills the user's input
+# method. A wiring check does not need weights -- the adapter falls back to a
+# loudly-announced stub that holds the current pose and still exercises the arm
+# swap, gripper scaling, relative->absolute and 6D->quat paths.
+debug_load_model: false
+
+# --- Chunk shape and execution cadence ---------------------------------------
+# RDT2 predicts 24 steps @ 30 Hz = 0.8 s (RDT2/configs/rdt/post_train.yaml:5).
+# exc_action_size     : how many of those steps to execute per network forward.
+# exc_action_interval : execute every N-th step (1 = consecutive).
+# Naming follows policy/Hy_Embodied_05_VLA (the clearest of the several
+# conventions in this repo: replan_steps / num_open_loop_steps / action_length).
+# exc_action_size * exc_action_interval must be <= action_chunk_size.
+action_chunk_size: 24
+exc_action_size: 12
+exc_action_interval: 1
+
+# --- Images -------------------------------------------------------------------
+# Each wrist frame is resized to image_size x image_size; RDTInferencer
+# concatenates them internally to (384, 768, 3) with the LEFT wrist on the left
+# half (RDT2/models/rdt_inferencer.py:180-186). RGB end to end, no channel swap.
+image_size: 384
+
+# --- Layout conventions (each of these fails SILENTLY if wrong) ---------------
+# swap_arm_order: our data is left-arm-first [L(10) R(10)]; RDT2 is right-arm-
+#   first [R(10) L(10)] (RDT2/README.md:267-276). Keep true for stock RDT2.
+swap_arm_order: true
+#
+# rot6d_layout: how to read the 6 rotation numbers.
+#   cols -> first two COLUMNS of R, matching RDT2/data/umi/pose_util.py:152-156
+#           (mat_to_rot6d takes mat[..., :, 0] and mat[..., :, 1]).
+#   rows -> first two ROWS (pytorch3d / policy/GR00T_N17 convention).
+# The two differ by a transpose and both give a valid rotation.
+# UNVERIFIED: our own exchange_ball_v0 6D columns (left_tcp.r1..r6) have not
+# been checked against either convention -- the capture pipeline is upstream of
+# this repo. If the shard converter and this key disagree, nothing raises.
+rot6d_layout: cols
+#
+# relative_translation_frame: how the relative chunk's translation is defined.
+#   anchor -> abs_pos = anchor_pos + anchor_rotm @ rel_pos  (upstream:
+#             T_abs = T_anchor @ T_rel, RDT2/data/umi/common/pose_repr_util.py:37)
+#   world  -> abs_pos = anchor_pos + rel_pos  (plain coordinate differences)
+# Must match whatever the offline shard converter (step 1 of the runbook) does.
+relative_translation_frame: anchor
+#
+# ee_pose_format: width of the emitted {left,right}_ee_pose action.
+#   quat  -> 7-D [x, y, z, qw, qx, qy, qz]. Required by the environment-side
+#            validator, which hard-codes 7 (XPolicyLab/debug_env_client.py:258).
+#   rot6d -> 9-D [x, y, z, r1..r6], matching umi_dual's arm_dim=9 and what
+#            unpack_robot_state / policy/Pi_05 produce.
+# These two XPolicyLab contracts genuinely disagree for umi_dual; 'quat' is the
+# default because it is what the shipped env client accepts.
+ee_pose_format: quat
+
+# --- Gripper ------------------------------------------------------------------
+# Our *_ee_joint_state is a NORMALIZED [0, 1] fraction of the gripper slide
+# stroke, not metres (manimux/src/manimux/kinematics/yam.py:135; and
+# exchange_ball_v0/meta/stats.json has right_gripper.pos maxing at exactly 1.0).
+#
+# RDT2's channel is "gripper width, normalized to [0, 0.088], 0.088 means fully
+# open" (RDT2/ckpt/RVQ/README.md:59 and :62) -- metres on the UMI-gripper scale,
+# and that is exactly what the training shards hold (RDT2/data/umi_video_dataset.py:423
+# slices the raw action with no rescale).
+#
+# gripper_stroke_m: full stroke in metres for OUR gripper. 0.096 for linear_4310
+#   (i2rt/i2rt/robots/config/linear_4310.yml:43); crank_4310 is 0.071 -- so this
+#   is a config key, never a constant in model.py.
+gripper_stroke_m: 0.096
+rdt2_gripper_width_max_m: 0.088
+#
+# gripper_mapping: how our [0,1] fraction maps into RDT2's [0, 0.088] channel.
+#   full_open_normalized -> pos=1.0 maps to 0.088. Full-open to full-open;
+#                           everything stays inside the pre-training range.
+#   stroke_absolute      -> pos=1.0 maps to 0.096 (our literal metres). Honest
+#                           about absolute width, but pos > 0.917 is OUT of the
+#                           range the model was trained on.
+# UNRESOLVED MODELLING CHOICE, not a fact: our YAM linear_4310 is not the UMI
+# gripper RDT2 assumes, so full-open-to-full-open compresses 0.096 m of real
+# travel into 0.088 m of model units. How much fine-tuning absorbs is unknown.
+# THE OFFLINE SHARD CONVERTER MUST MAKE THE SAME CHOICE -- nothing detects a
+# mismatch at runtime.
+gripper_mapping: full_open_normalized
+#
+# Reference only, NOT applied by this adapter: upstream's deploy scripts rescale
+# the model's width by /0.088*0.10 (RDT2/deploy/inference_real_fm.py:408, :414,
+# :423) to fit the Franka/zhixing gripper whose open_width is 0.12 m
+# (RDT2/configs/robots/eval_bimanual_fr3_config.yaml:57). That is a per-robot
+# calibration for THEIR hardware, and it appears nowhere in data/ or train.py.
+# Applying it here as well would stretch our range by 1.14x for nothing.
+rdt2_gripper_deploy_open_width_m: 0.1
+
+# --- Proprio ------------------------------------------------------------------
+# Upstream's FM deploy loop sends np.zeros(20) and the README says so outright
+# ("use zero input current state for currently", RDT2/README.md:311-313), so the
+# released checkpoint has never seen a real proprio vector. Set false only if
+# you fine-tuned with a real state.
+feed_zero_state: true
+
+# --- Language -----------------------------------------------------------------
+# RDT2 requires a non-empty instruction (RDT2/models/rdt_inferencer.py:188-200).
+# Recommended format is "Verb + object." with a trailing period
+# (RDT2/README.md:262-263). Used when the observation carries no `instruction`.
+default_prompt: "Exchange the ball."
+
+# --- Server -------------------------------------------------------------------
+# One forward is a full Qwen2.5-VL-7B prefill plus 5 flow-matching steps, and
+# the first call also pays a torch.compile. The 120 s client default is not
+# enough.
+request_timeout_s: 1200
