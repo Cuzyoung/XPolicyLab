@@ -24,6 +24,12 @@ from XPolicyLab.utils.process_data import (
 
 _POLICY_DIR = Path(__file__).resolve().parent
 _CHECKPOINTS_DIR = _POLICY_DIR / "checkpoints"
+# Each openpi data config pins the observation contract its transforms expect.
+# Anything not listed here keeps the historical Aloha-style repack.
+_OBSERVATION_PROFILES = {
+    "LeRobotYamDataConfig": "yam_native",
+    "LeRobotUmiDataConfig": "umi_native",
+}
 
 
 def _extract_step_number(value: Any) -> int | None:
@@ -95,7 +101,14 @@ def _resolve_pi05_model_root(model_cfg: dict[str, Any]) -> Path:
 def _resolve_train_config(model_cfg: dict[str, Any]):
     config = _config.get_config(model_cfg.get("train_config_name", "pi05_aloha"))
     data_updates: dict[str, Any] = {}
-    for key in ("repo_id", "use_delta_joint_actions", "adapt_to_pi"):
+    # Only keys present in the server config are forwarded, so this list may name
+    # fields that belong to a single data config (delta flags are per-robot).
+    for key in (
+        "repo_id",
+        "use_delta_joint_actions",
+        "use_delta_translation_actions",
+        "adapt_to_pi",
+    ):
         if key in model_cfg:
             data_updates[key] = model_cfg[key]
 
@@ -142,10 +155,8 @@ class Model(ModelTemplate):
         self._dvac_history_size: int | None = None
 
         self._train_config = _resolve_train_config(model_cfg)
-        expected_profile = (
-            "yam_native"
-            if type(self._train_config.data).__name__ == "LeRobotYamDataConfig"
-            else "aloha"
+        expected_profile = _OBSERVATION_PROFILES.get(
+            type(self._train_config.data).__name__, "aloha"
         )
         self.observation_profile = model_cfg.get("observation_profile", expected_profile)
         if self.observation_profile != expected_profile:
@@ -565,6 +576,8 @@ def encode_obs(
 ):
     if observation_profile == "yam_native":
         return encode_yam_obs(observation, action_type, robot_action_dim_info)
+    if observation_profile == "umi_native":
+        return encode_umi_obs(observation, action_type, robot_action_dim_info)
     if observation_profile != "aloha":
         raise ValueError(f"Unsupported Pi05 observation profile: {observation_profile!r}")
 
@@ -595,62 +608,82 @@ def encode_obs(
     return {"state": state, "images": images, "prompt": prompt}
 
 
-def encode_yam_obs(observation, action_type, robot_action_dim_info):
+def native_state(observation, action_type, robot_action_dim_info):
+    """Read an already packed state vector, or pack one from the raw observation."""
     if robot_action_dim_info is None:
-        raise ValueError("env_cfg_type is required when encoding YAM observations.")
+        raise ValueError("env_cfg_type is required when encoding native observations.")
 
     if "observation/state" in observation:
-        state = np.asarray(observation["observation/state"], dtype=np.float32)
-    elif "state" in observation and not isinstance(observation["state"], dict):
-        state = np.asarray(observation["state"], dtype=np.float32)
-    else:
-        state = pack_robot_state(
-            observation,
-            action_type,
-            robot_action_dim_info,
-            source_type="obs",
-        ).astype(np.float32)
+        return np.asarray(observation["observation/state"], dtype=np.float32)
+    if "state" in observation and not isinstance(observation["state"], dict):
+        return np.asarray(observation["state"], dtype=np.float32)
+    return pack_robot_state(
+        observation,
+        action_type,
+        robot_action_dim_info,
+        source_type="obs",
+    ).astype(np.float32)
 
-    def raw_image(key, candidates):
-        if key in observation:
-            return np.asarray(observation[key])
-        return np.asarray(extract_image(observation, candidates))
 
+def native_image(observation, key, candidates):
+    """Native profiles keep raw HWC frames; openpi transforms do the resizing."""
+    if key in observation:
+        return np.asarray(observation[key])
+    return np.asarray(extract_image(observation, candidates))
+
+
+def encode_yam_obs(observation, action_type, robot_action_dim_info):
     return {
-        "observation/image": raw_image(
+        "observation/image": native_image(
+            observation,
             "observation/image",
             ["cam_high", "cam_head", "head_camera", "top_camera"],
         ),
-        "observation/left_wrist": raw_image(
+        "observation/left_wrist": native_image(
+            observation,
             "observation/left_wrist",
             ["cam_left_wrist", "left_camera", "left_wrist", "wrist_left"],
         ),
-        "observation/right_wrist": raw_image(
+        "observation/right_wrist": native_image(
+            observation,
             "observation/right_wrist",
             ["cam_right_wrist", "right_camera", "right_wrist", "wrist_right"],
         ),
-        "observation/state": state,
+        "observation/state": native_state(observation, action_type, robot_action_dim_info),
+        "prompt": observation.get("instruction", observation.get("prompt")),
+    }
+
+
+def encode_umi_obs(observation, action_type, robot_action_dim_info):
+    # The UMI rig has no third-person camera: UmiInputs pads that slot itself,
+    # so this profile carries the two wrist streams only.
+    return {
+        "observation/left_wrist": native_image(
+            observation,
+            "observation/left_wrist",
+            ["cam_left_wrist", "left_camera", "left_wrist", "wrist_left"],
+        ),
+        "observation/right_wrist": native_image(
+            observation,
+            "observation/right_wrist",
+            ["cam_right_wrist", "right_camera", "right_wrist", "wrist_right"],
+        ),
+        "observation/state": native_state(observation, action_type, robot_action_dim_info),
         "prompt": observation.get("instruction", observation.get("prompt")),
     }
 
 
 def stack_obs(obs_list: list[dict[str, Any]]) -> dict[str, Any]:
     if "observation/state" in obs_list[0]:
-        return {
-            "observation/state": np.stack(
-                [obs["observation/state"] for obs in obs_list], axis=0
-            ),
-            "observation/image": np.stack(
-                [obs["observation/image"] for obs in obs_list], axis=0
-            ),
-            "observation/left_wrist": np.stack(
-                [obs["observation/left_wrist"] for obs in obs_list], axis=0
-            ),
-            "observation/right_wrist": np.stack(
-                [obs["observation/right_wrist"] for obs in obs_list], axis=0
-            ),
-            "prompt": [obs["prompt"] for obs in obs_list],
+        # Native profiles differ in which cameras they carry, so stack whatever
+        # keys the encoder produced instead of naming them here.
+        stacked = {
+            key: np.stack([obs[key] for obs in obs_list], axis=0)
+            for key in obs_list[0]
+            if key != "prompt"
         }
+        stacked["prompt"] = [obs["prompt"] for obs in obs_list]
+        return stacked
     return {
         "state": np.stack([obs["state"] for obs in obs_list], axis=0),
         "images": {
@@ -664,13 +697,7 @@ def stack_obs(obs_list: list[dict[str, Any]]) -> dict[str, Any]:
 
 def slice_stacked_obs(obs: dict[str, Any], batch_index: int) -> dict[str, Any]:
     if "observation/state" in obs:
-        return {
-            "observation/state": obs["observation/state"][batch_index],
-            "observation/image": obs["observation/image"][batch_index],
-            "observation/left_wrist": obs["observation/left_wrist"][batch_index],
-            "observation/right_wrist": obs["observation/right_wrist"][batch_index],
-            "prompt": obs["prompt"][batch_index],
-        }
+        return {key: value[batch_index] for key, value in obs.items()}
     return {
         "state": obs["state"][batch_index],
         "images": {
