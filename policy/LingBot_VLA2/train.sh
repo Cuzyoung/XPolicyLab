@@ -75,6 +75,8 @@ PATH="${VENV_DIR}/bin:${PATH}" bash -o pipefail "${LINGBOT_ROOT}/train.sh" \
   --train.chunk_size "${action_horizon}" \
   --train.micro_batch_size "${LINGBOT_VLA2_MICRO_BATCH_SIZE:-1}" \
   --train.gradient_accumulation_steps "${LINGBOT_VLA2_GRAD_ACCUM_STEPS:-1}" \
+  --train.data_parallel_mode "${LINGBOT_VLA2_DATA_PARALLEL_MODE:-fsdp2}" \
+  --train.enable_fsdp_offload "${LINGBOT_VLA2_ENABLE_FSDP_OFFLOAD:-false}" \
   --train.max_steps "${LINGBOT_VLA2_MAX_STEPS:-60000}" \
   --train.save_steps "${LINGBOT_VLA2_SAVE_STEPS:-1000}" \
   --train.enable_resume "${LINGBOT_VLA2_ENABLE_RESUME:-false}" \
