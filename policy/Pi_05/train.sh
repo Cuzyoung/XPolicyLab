@@ -53,6 +53,7 @@ train_args=(
 [[ -n "${OPENPI_NUM_TRAIN_STEPS:-}" ]] && train_args+=("--num-train-steps=${OPENPI_NUM_TRAIN_STEPS}")
 [[ -n "${OPENPI_SAVE_INTERVAL:-}" ]] && train_args+=("--save-interval=${OPENPI_SAVE_INTERVAL}")
 [[ -n "${OPENPI_MAX_TO_KEEP:-}" ]] && train_args+=("--max-to-keep=${OPENPI_MAX_TO_KEEP}")
+[[ -n "${OPENPI_ASSETS_BASE_DIR:-}" ]] && train_args+=("--assets-base-dir=${OPENPI_ASSETS_BASE_DIR}")
 if [[ "${OPENPI_RESUME:-0}" == "1" ]]; then
   train_args+=(--resume)
 else

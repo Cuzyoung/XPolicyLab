@@ -682,13 +682,15 @@ _CONFIGS = [
         name="pi05_yam",
         model=pi0_config.Pi0Config(pi05=True, action_horizon=50),
         data=LeRobotYamDataConfig(
-            repo_id="yam_pick_red_ball_box_v1",
+            repo_id=os.environ.get("OPENPI_LEROBOT_REPO_ID", "yam_pick_red_ball_box_v1"),
             base_config=DataConfig(prompt_from_task=True, video_backend="pyav"),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader(
             os.environ.get("OPENPI_BASE_PARAMS", "gs://openpi-assets/checkpoints/pi05_base/params")
         ),
         batch_size=8,
+        num_workers=int(os.environ.get("OPENPI_NUM_WORKERS", "2")),
+        assets_base_dir=os.environ.get("OPENPI_ASSETS_BASE_DIR", "./assets"),
         num_train_steps=10_000,
         save_interval=500,
         keep_period=2_500,
