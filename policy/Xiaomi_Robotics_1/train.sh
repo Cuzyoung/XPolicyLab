@@ -126,10 +126,7 @@ ln -sfn "${artifact_dir}" "${ckpt_dir}"
 export CUDA_VISIBLE_DEVICES="${gpu_id}"
 export RESOURCE_GPU="${RESOURCE_GPU:-$(tr ',' '\n' <<< "${gpu_id}" | sed '/^$/d' | wc -l | xargs)}"
 export MAX_LENGTH="${MAX_LENGTH:-20000}"
-# Offline by default: tools/train.py always builds a WandbLogger, and an
-# unauthenticated online run would block on the interactive login prompt.
-export WANDB_MODE="${WANDB_MODE:-offline}"
-export WANDB_DIR="${WANDB_DIR:-${run_root}}"
+export XR1_LOGGER="${XR1_LOGGER:-tensorboard}"
 
 echo "[Xiaomi_Robotics_1] dataset     : ${output_dir}/data"
 echo "[Xiaomi_Robotics_1] data config : configs/data/${data_config_name}.yaml"
@@ -138,7 +135,7 @@ echo "[Xiaomi_Robotics_1] run root    : ${run_root}"
 echo "[Xiaomi_Robotics_1] checkpoint  : ${ckpt_dir} -> ${artifact_dir}"
 echo "[Xiaomi_Robotics_1] gpus        : ${gpu_id}" \
      "(${RESOURCE_GPU} per node, ${WORLD_SIZE:-1} node(s))"
-echo "[Xiaomi_Robotics_1] wandb mode  : ${WANDB_MODE}"
+echo "[Xiaomi_Robotics_1] local logger: ${XR1_LOGGER}"
 
 # Run from XR1_DIR: the launcher puts it on PYTHONPATH and process_save_cfg
 # also dumps the resolved config to ./assets/config.py.
