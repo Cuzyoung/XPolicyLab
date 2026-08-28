@@ -48,7 +48,7 @@ train_args=(
   "--fsdp-devices=${fsdp_devices}"
   "--checkpoint-dir-override=${ckpt_dir}"
   "--seed=${seed}"
-  "--wandb-enabled=false"
+  "--no-wandb-enabled"
 )
 [[ -n "${OPENPI_BATCH_SIZE:-}" ]] && train_args+=("--batch-size=${OPENPI_BATCH_SIZE}")
 [[ -n "${OPENPI_NUM_WORKERS:-}" ]] && train_args+=("--num-workers=${OPENPI_NUM_WORKERS}")
