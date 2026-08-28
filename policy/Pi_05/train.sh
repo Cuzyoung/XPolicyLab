@@ -14,6 +14,8 @@ seed=$5
 gpu_id=$6
 
 POLICY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_DIR="${UV_PROJECT_ENVIRONMENT:-${POLICY_DIR}/openpi/.venv}"
+PYTHON="${OPENPI_PYTHON:-${VENV_DIR}/bin/python}"
 # ckpt_setting is the run directory name; pass it verbatim as ckpt_name to eval.sh.
 ckpt_setting="${bench_name}-${ckpt_name}-${env_cfg_type}-${action_type}-${seed}"
 ckpt_dir="${OPENPI_CHECKPOINT_DIR:-${POLICY_DIR}/checkpoints/${ckpt_setting}}"
@@ -62,4 +64,4 @@ fi
 
 cd "${POLICY_DIR}/openpi/"
 XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.9}" \
-  uv run scripts/train.py "${train_args[@]}"
+  "${PYTHON}" scripts/train.py "${train_args[@]}"
