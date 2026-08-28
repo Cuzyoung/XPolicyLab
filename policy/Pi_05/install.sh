@@ -5,8 +5,10 @@ set -euo pipefail
 POLICY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENPI_ROOT="${POLICY_DIR}/openpi"
 XPOLICYLAB_ROOT="$(cd "${POLICY_DIR}/../.." && pwd)"
+VENV_DIR="${UV_PROJECT_ENVIRONMENT:-${OPENPI_ROOT}/.venv}"
 
 echo "[Pi_05] OPENPI_ROOT=${OPENPI_ROOT}"
+echo "[Pi_05] VENV_DIR=${VENV_DIR}"
 
 if ! command -v uv >/dev/null 2>&1; then
   echo "uv not found. Install via: curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
@@ -21,4 +23,4 @@ uv pip install -e "${XPOLICYLAB_ROOT}"
 uv run python -c "import XPolicyLab; print('XPolicyLab ok')"
 
 echo "[Pi_05] Installation finished."
-echo "[Pi_05] Activate: source ${OPENPI_ROOT}/.venv/bin/activate"
+echo "[Pi_05] Activate: source ${VENV_DIR}/bin/activate"
