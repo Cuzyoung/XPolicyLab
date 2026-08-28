@@ -5,6 +5,7 @@ from collections.abc import Sequence
 import dataclasses
 import difflib
 import logging
+import os
 import pathlib
 from typing import Any, Literal, Protocol, TypeAlias
 
@@ -631,6 +632,8 @@ class TrainConfig:
     save_interval: int = 1000
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
     keep_period: int | None = 5000
+    # Maximum number of recent checkpoints to retain in addition to keep_period checkpoints.
+    max_to_keep: int | None = 1
 
     # If true, will overwrite the checkpoint directory if it already exists.
     overwrite: bool = False
@@ -680,15 +683,16 @@ _CONFIGS = [
         model=pi0_config.Pi0Config(pi05=True, action_horizon=50),
         data=LeRobotYamDataConfig(
             repo_id="yam_pick_red_ball_box_v1",
-            base_config=DataConfig(prompt_from_task=True),
+            base_config=DataConfig(prompt_from_task=True, video_backend="pyav"),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader(
-            "gs://openpi-assets/checkpoints/pi05_base/params"
+            os.environ.get("OPENPI_BASE_PARAMS", "gs://openpi-assets/checkpoints/pi05_base/params")
         ),
         batch_size=8,
         num_train_steps=10_000,
         save_interval=500,
         keep_period=2_500,
+        max_to_keep=10,
     ),
     TrainConfig(
         name="pi05_base_aloha_full_sim_arx-x5_seed_0",

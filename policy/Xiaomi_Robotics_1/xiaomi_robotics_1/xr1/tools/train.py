@@ -1,12 +1,13 @@
 # Copyright (C) 2026 Xiaomi Corporation.
 import logging
+import os
 import warnings
 from typing import Any, Dict, List, Optional, Tuple
 
 import hydra
 from lightning import LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.callbacks import ModelCheckpoint, ModelSummary
-from lightning.pytorch.loggers import WandbLogger
+from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger
 
 from mmengine import Config, DATASETS
 from omegaconf import DictConfig
@@ -34,13 +35,28 @@ def prepare(cfg: Dict[str, Any]) -> Tuple[Config, LightningDataModule, Lightning
         ),
     ]
 
-    logger: List[Any] = [
-        WandbLogger(
-            project=cfg.trainer.pop("project"),
-            name=cfg.trainer.pop("exp_name"),
-            config=cfg,
-        )
-    ]
+    project = cfg.trainer.pop("project")
+    exp_name = cfg.trainer.pop("exp_name")
+    logger_name = os.environ.get("XR1_LOGGER", "tensorboard").lower()
+    if logger_name == "tensorboard":
+        logger: List[Any] = [
+            TensorBoardLogger(
+                save_dir=cfg.trainer.default_root_dir,
+                name=f"project_{project}",
+                version=exp_name,
+                default_hp_metric=False,
+            )
+        ]
+    elif logger_name == "csv":
+        logger = [
+            CSVLogger(
+                save_dir=cfg.trainer.default_root_dir,
+                name=f"project_{project}",
+                version=exp_name,
+            )
+        ]
+    else:
+        raise ValueError(f"XR1_LOGGER must be tensorboard or csv, got {logger_name!r}")
 
     logging.getLogger("lightning.pytorch").setLevel(logging.INFO)
 

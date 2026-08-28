@@ -16,8 +16,8 @@ gpu_id=$6
 POLICY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ckpt_setting is the run directory name; pass it verbatim as ckpt_name to eval.sh.
 ckpt_setting="${bench_name}-${ckpt_name}-${env_cfg_type}-${action_type}-${seed}"
-ckpt_dir="${POLICY_DIR}/checkpoints/${ckpt_setting}"
-train_config_name="${OPENPI_TRAIN_CONFIG_NAME:-pi05_base_aloha_full_sim_arx-x5_seed_0}"
+ckpt_dir="${OPENPI_CHECKPOINT_DIR:-${POLICY_DIR}/checkpoints/${ckpt_setting}}"
+train_config_name="${OPENPI_TRAIN_CONFIG_NAME:-pi05_yam}"
 lerobot_repo_id="${OPENPI_LEROBOT_REPO_ID:-${bench_name}-${ckpt_name}-${env_cfg_type}-${action_type}}"
 gpu_count=$(awk -F',' '{print NF}' <<<"${gpu_id}")
 fsdp_devices="${OPENPI_FSDP_DEVICES:-$(( gpu_count < 2 ? 1 : 2 ))}"
@@ -39,12 +39,26 @@ echo "[Pi_05] fsdp_devices=${fsdp_devices}"
 echo "[Pi_05] local_cache_root=${LOCAL_CACHE_ROOT}"
 echo "[Pi_05] checkpoint_dir=${ckpt_dir}"
 
+train_args=(
+  "${train_config_name}"
+  "--exp-name=${ckpt_setting}"
+  "--data.repo-id=${lerobot_repo_id}"
+  "--fsdp-devices=${fsdp_devices}"
+  "--checkpoint-dir-override=${ckpt_dir}"
+  "--seed=${seed}"
+  "--wandb-enabled=false"
+)
+[[ -n "${OPENPI_BATCH_SIZE:-}" ]] && train_args+=("--batch-size=${OPENPI_BATCH_SIZE}")
+[[ -n "${OPENPI_NUM_WORKERS:-}" ]] && train_args+=("--num-workers=${OPENPI_NUM_WORKERS}")
+[[ -n "${OPENPI_NUM_TRAIN_STEPS:-}" ]] && train_args+=("--num-train-steps=${OPENPI_NUM_TRAIN_STEPS}")
+[[ -n "${OPENPI_SAVE_INTERVAL:-}" ]] && train_args+=("--save-interval=${OPENPI_SAVE_INTERVAL}")
+[[ -n "${OPENPI_MAX_TO_KEEP:-}" ]] && train_args+=("--max-to-keep=${OPENPI_MAX_TO_KEEP}")
+if [[ "${OPENPI_RESUME:-0}" == "1" ]]; then
+  train_args+=(--resume)
+else
+  train_args+=(--overwrite)
+fi
+
 cd "${POLICY_DIR}/openpi/"
 XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.9}" \
-  uv run scripts/train.py "${train_config_name}" \
-    --exp-name="${ckpt_setting}" \
-    --data.repo-id="${lerobot_repo_id}" \
-    --fsdp-devices="${fsdp_devices}" \
-    --checkpoint-dir-override="${ckpt_dir}" \
-    --seed="${seed}" \
-    --overwrite
+  uv run scripts/train.py "${train_args[@]}"
