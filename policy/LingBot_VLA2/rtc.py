@@ -206,18 +206,32 @@ def normalize_condition(
     feature_transform: Any,
     raw_actions: Mapping[str, np.ndarray],
     condition_weights: np.ndarray,
+    current_state: Mapping[str, np.ndarray],
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Normalize and pad one raw condition into LingBot's 55-D model space."""
 
-    if any(feature_transform.action_subtract_state.values()):
-        raise NotImplementedError(
-            "RTC requires an absolute-action robot config; "
-            "delta actions need state-aware conversion"
-        )
-    condition_item = {
+    converted = {
         key: torch.as_tensor(value, dtype=torch.float32) for key, value in raw_actions.items()
     }
-    converted = feature_transform.convert_features(condition_item, w_action=True)
+    for action_feature, subtract_state in feature_transform.action_subtract_state.items():
+        if not subtract_state:
+            continue
+        relative_type = feature_transform.action_relative_type.get(action_feature)
+        if relative_type != "vector":
+            raise NotImplementedError(
+                f"RTC only supports vector-relative joint conditions, got {relative_type!r}"
+            )
+        state_feature = action_feature.replace("action.", "observation.state.")
+        if action_feature not in converted or state_feature not in current_state:
+            raise ValueError(
+                f"RTC relative condition requires {action_feature} and {state_feature}"
+            )
+        anchor = torch.as_tensor(current_state[state_feature], dtype=torch.float32)
+        if anchor.ndim != 1 or anchor.shape[-1] != converted[action_feature].shape[-1]:
+            raise ValueError(
+                f"RTC anchor {state_feature} has incompatible shape {tuple(anchor.shape)}"
+            )
+        converted[action_feature] = converted[action_feature] - anchor.unsqueeze(0)
     normalized = feature_transform.normalizer.normalize(converted)
     horizon = next(iter(normalized.values())).shape[0]
     chunks: list[torch.Tensor] = []
@@ -267,8 +281,18 @@ class LingBotRtcBridge:
         beta: float,
     ) -> dict[str, np.ndarray]:
         raw_actions = encode_raw_condition(action_condition, self.robot_info)
+        current_state = {
+            key: np.asarray(observation[key], dtype=np.float32)
+            for key in (
+                "observation.state.arm.position",
+                "observation.state.effector.position",
+            )
+        }
         target, weights = normalize_condition(
-            self.server.vla.feature_transform, raw_actions, condition_weights
+            self.server.vla.feature_transform,
+            raw_actions,
+            condition_weights,
+            current_state,
         )
 
         item = dict(observation)

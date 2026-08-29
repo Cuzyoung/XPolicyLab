@@ -337,15 +337,9 @@ def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
             loaded_robot_config = {}
         robot_config = loaded_robot_config if isinstance(loaded_robot_config, dict) else {}
         action_entries = robot_config.get("actions", [])
-        expected_actions = {
-            "action.arm.position": {
-                "origin_keys": "action.arm.position",
-                "subtract_state": False,
-            },
-            "action.effector.position": {
-                "origin_keys": "action.effector.position",
-                "subtract_state": False,
-            },
+        expected_action_keys = {
+            "action.arm.position",
+            "action.effector.position",
         }
         seen_actions: dict[str, dict[str, Any]] = {}
         for entry in action_entries:
@@ -355,27 +349,47 @@ def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
                     seen_actions[key] = {
                         "origin_keys": options.get("origin_keys"),
                         "subtract_state": options.get("subtract_state"),
+                        "relative_type": options.get("relative_type"),
                     }
-        if seen_actions != expected_actions:
+        if set(seen_actions) != expected_action_keys:
             errors.append(
-                "robot config must expose absolute action.arm.position and action.effector.position"
+                "robot config must expose action.arm.position and action.effector.position"
             )
+        else:
+            arm_action = seen_actions["action.arm.position"]
+            arm_is_relative = arm_action["subtract_state"] is True
+            arm_is_absolute = arm_action["subtract_state"] is False
+            if not (
+                arm_is_absolute
+                or (arm_is_relative and arm_action["relative_type"] == "vector")
+            ):
+                errors.append(
+                    "robot config arm actions must be absolute or vector-relative qpos"
+                )
+            if seen_actions["action.effector.position"]["subtract_state"] is not False:
+                errors.append("robot config effector actions must remain absolute")
         state_entries = robot_config.get("states")
-        seen_states: dict[str, str] = {}
+        seen_states: set[str] = set()
         if isinstance(state_entries, list):
             for entry in state_entries:
                 if isinstance(entry, dict) and len(entry) == 1:
-                    key, options = next(iter(entry.items()))
-                    if isinstance(options, dict):
-                        seen_states[key] = options.get("origin_keys")
+                    key, _ = next(iter(entry.items()))
+                    seen_states.add(key)
         expected_states = {
-            "observation.state.arm.position": "observation.state.arm.position",
-            "observation.state.effector.position": "observation.state.effector.position",
+            "observation.state.arm.position",
+            "observation.state.effector.position",
         }
         images = robot_config.get("images")
         if seen_states != expected_states:
             errors.append("robot config must expose arm and effector position states")
-        if images != [f"observation.images.{name}" for name in EXPECTED_CAMERAS]:
+        seen_images = []
+        if isinstance(images, list):
+            for entry in images:
+                if isinstance(entry, str):
+                    seen_images.append(entry)
+                elif isinstance(entry, dict) and len(entry) == 1:
+                    seen_images.append(next(iter(entry)))
+        if seen_images != [f"observation.images.{name}" for name in EXPECTED_CAMERAS]:
             errors.append("robot config camera order does not match the bundle manifest")
 
     training_config: dict[str, Any] = {}
