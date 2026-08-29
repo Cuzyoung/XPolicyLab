@@ -29,6 +29,7 @@ actions:
             start: 7
             end: 13
       subtract_state: true
+      relative_type: vector
   - action.effector.position:
       origin_keys:
         - action:
