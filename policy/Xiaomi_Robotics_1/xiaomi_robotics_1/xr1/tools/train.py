@@ -37,29 +37,26 @@ def prepare(cfg: Dict[str, Any]) -> Tuple[Config, LightningDataModule, Lightning
 
     project = cfg.trainer.pop("project")
     exp_name = cfg.trainer.pop("exp_name")
-    logger_backend = os.environ.get("XR1_LOGGER", "tensorboard").lower()
-    if logger_backend == "tensorboard":
+    logger_name = os.environ.get("XR1_LOGGER", "tensorboard").lower()
+    if logger_name == "tensorboard":
         logger: List[Any] = [
             TensorBoardLogger(
                 save_dir=cfg.trainer.default_root_dir,
-                name="tensorboard",
+                name=f"project_{project}",
                 version=exp_name,
+                default_hp_metric=False,
             )
         ]
-    elif logger_backend == "csv":
+    elif logger_name == "csv":
         logger = [
             CSVLogger(
                 save_dir=cfg.trainer.default_root_dir,
-                name="csv",
+                name=f"project_{project}",
                 version=exp_name,
             )
         ]
     else:
-        raise ValueError(
-            f"Unsupported XR1_LOGGER={logger_backend!r}; expected 'tensorboard' or 'csv'. "
-            "Network loggers are intentionally disabled for YAM training."
-        )
-    logging.info("XR-1 local logger=%s project_label=%s", logger_backend, project)
+        raise ValueError(f"XR1_LOGGER must be tensorboard or csv, got {logger_name!r}")
 
     logging.getLogger("lightning.pytorch").setLevel(logging.INFO)
 

@@ -87,5 +87,5 @@ train:
   save_hf_weights: true
   async_save_hf_weights: false
   enable_fp32: true
-  enable_resume: true
+  enable_resume: false
   align_params: {}

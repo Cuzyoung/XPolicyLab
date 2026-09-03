@@ -27,7 +27,7 @@
 #   SAVE_INTERVAL    trainer.save_interval (default: 10000)
 #   ASYNC_TRAIN      model.params.model.async_train (default: true)
 #   MAX_LENGTH       per-sample token budget of the collate (default: 20000)
-#   WANDB_MODE       wandb mode (default: offline; set to online to upload)
+#   XR1_LOGGER       local logger: tensorboard or csv (default: tensorboard)
 #   ALLOW_NON_EE_ACTION  set to 1 to train with action_type != ee anyway
 #
 # Multi-node: WORLD_SIZE, RANK, MASTER_ADDR, and MASTER_PORT are read by the
@@ -135,7 +135,7 @@ echo "[Xiaomi_Robotics_1] run root    : ${run_root}"
 echo "[Xiaomi_Robotics_1] checkpoint  : ${ckpt_dir} -> ${artifact_dir}"
 echo "[Xiaomi_Robotics_1] gpus        : ${gpu_id}" \
      "(${RESOURCE_GPU} per node, ${WORLD_SIZE:-1} node(s))"
-echo "[Xiaomi_Robotics_1] local logger: ${XR1_LOGGER}"
+echo "[Xiaomi_Robotics_1] logger      : ${XR1_LOGGER} (local only)"
 
 # Run from XR1_DIR: the launcher puts it on PYTHONPATH and process_save_cfg
 # also dumps the resolved config to ./assets/config.py.

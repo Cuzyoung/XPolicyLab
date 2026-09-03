@@ -76,9 +76,8 @@ PATH="${VENV_DIR}/bin:${PATH}" bash -o pipefail "${LINGBOT_ROOT}/train.sh" \
   --train.gradient_accumulation_steps "${LINGBOT_VLA2_GRAD_ACCUM_STEPS:-1}" \
   --train.max_steps "${LINGBOT_VLA2_MAX_STEPS:-60000}" \
   --train.save_steps "${LINGBOT_VLA2_SAVE_STEPS:-1000}" \
-  --train.use_wandb "${LINGBOT_VLA2_USE_WANDB:-false}" \
-  --train.wandb_project "${LINGBOT_VLA2_WANDB_PROJECT:-lingbotvla}" \
-  --train.wandb_name "${LINGBOT_VLA2_WANDB_NAME:-${setting}}"
+  --train.enable_resume "${LINGBOT_VLA2_ENABLE_RESUME:-false}" \
+  --train.use_wandb false
 
 cp -f "${norm_stats_path}" "${checkpoint_dir}/norm_stats.json"
 cp -f "${robot_config}" "${checkpoint_dir}/robot_config.yaml"
