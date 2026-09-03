@@ -26,7 +26,8 @@ LingBot-VLA2 packages, LeRobot, depth dependencies and XPolicyLab. Set
 
 ## Model Assets
 
-Inference needs a complete post-training bundle. Training additionally needs:
+Inference needs a complete post-training checkpoint plus its matching training
+config, robot config and norm stats. Training additionally needs:
 
 - `robbyant/lingbot-vla-v2-6b` as `LINGBOT_VLA2_MODEL_PATH`;
 - `Qwen/Qwen3-VL-4B-Instruct` as `LINGBOT_VLA2_TOKENIZER_PATH` or `QWEN3_PATH`;

@@ -29,7 +29,6 @@ tokenizer_path="${LINGBOT_VLA2_TOKENIZER_PATH:-${QWEN3_PATH:-}}"
 robot_name="${LINGBOT_VLA2_ROBOT_NAME:-yam_dual_absolute}"
 robot_config="${POLICY_DIR}/robot_configs/${robot_name}.yaml"
 action_horizon="${LINGBOT_VLA2_ACTION_HORIZON:-50}"
-native_hz="${LINGBOT_VLA2_NATIVE_HZ:-30}"
 checkpoint_dir="${LINGBOT_VLA2_CHECKPOINT_DIR:-${checkpoint_dir}}"
 
 if [[ "${env_cfg_type}" != "yam_dual" || "${action_type}" != "joint" ]]; then
@@ -81,12 +80,11 @@ PATH="${VENV_DIR}/bin:${PATH}" bash -o pipefail "${LINGBOT_ROOT}/train.sh" \
   --train.wandb_project "${LINGBOT_VLA2_WANDB_PROJECT:-lingbotvla}" \
   --train.wandb_name "${LINGBOT_VLA2_WANDB_NAME:-${setting}}"
 
-"${PYTHON}" "${POLICY_DIR}/prepare_bundle.py" \
-  --run-dir "${checkpoint_dir}" \
-  --source-root "${LINGBOT_ROOT}" \
-  --norm-stats "${norm_stats_path}" \
-  --robot-config "${robot_config}" \
-  --native-hz "${native_hz}" \
-  --action-horizon "${action_horizon}"
+cp -f "${norm_stats_path}" "${checkpoint_dir}/norm_stats.json"
+cp -f "${robot_config}" "${checkpoint_dir}/robot_config.yaml"
 
-echo "[LingBot_VLA2] bundle=${checkpoint_dir}/bundle.yaml"
+echo "[LingBot_VLA2] deployment artifacts:"
+echo "  model_root=${checkpoint_dir}/checkpoints/global_step_<N>/hf_ckpt"
+echo "  training_config_path=${checkpoint_dir}/lingbotvla_cli.yaml"
+echo "  robot_config_path=${checkpoint_dir}/robot_config.yaml"
+echo "  norm_stats_path=${checkpoint_dir}/norm_stats.json"

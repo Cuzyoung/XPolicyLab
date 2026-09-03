@@ -120,7 +120,6 @@ def _camera_image(obs: Mapping[str, Any], name: str) -> np.ndarray:
 
 def _load_spatial_align(model_cfg: Mapping[str, Any]) -> Any:
     root = ensure_sapolicy_on_path(model_cfg.get("sapolicy_root") or DEFAULT_SAPOLICY_ROOT)
-    camera_names = model_cfg.get("camera_names")
     return get_model(
         {
             "sapolicy_cfg": model_cfg["cfg_file"],
@@ -131,8 +130,6 @@ def _load_spatial_align(model_cfg: Mapping[str, Any]) -> Any:
             "use_ema": bool(model_cfg.get("use_ema", True)),
             "backbone_path": model_cfg.get("backbone_path"),
             "normalizer_path": model_cfg.get("normalizer_path"),
-            "warmup_iterations": int(model_cfg.get("warmup_iterations", 0)),
-            "warmup_camera_names": list(camera_names) if camera_names else None,
             "sapolicy_root": str(root),
             # ABC / ManiMux wire is TCP. RoboTwin eval still defaults to 0.12.
             "tcp_forward_offset_m": float(model_cfg.get("tcp_forward_offset_m", 0.0)),

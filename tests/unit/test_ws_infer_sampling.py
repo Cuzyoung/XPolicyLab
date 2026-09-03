@@ -127,6 +127,15 @@ def test_hello_does_not_advertise_rtc_without_a_sampler_hook() -> None:
     ]
 
 
+def test_hello_respects_model_declared_sampling_modes() -> None:
+    model = FakeModel()
+    model.sampling_modes = lambda: ["default"]  # type: ignore[attr-defined]
+    reply = asyncio.run(PolicyServer(model)._dispatch_frame(_hello_frame()))
+
+    assert reply is not None
+    assert reply.payload["capabilities"]["sampling_modes"] == ["default"]
+
+
 def test_default_infer_updates_observation_then_gets_action() -> None:
     model = FakeModel()
     reply = asyncio.run(PolicyServer(model)._handle_infer(_frame()))

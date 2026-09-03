@@ -69,12 +69,12 @@ The wrapper calls the official `tasks/vla/train_lingbotvla.py` with
 `training/yam_dual.yaml`. It writes the standard run directory
 `checkpoints/<bench>-<ckpt>-yam_dual-joint-<seed>/`, preserves the official
 `lingbotvla_cli.yaml`, saves HF checkpoints under
-`checkpoints/global_step_*/hf_ckpt/`, and generates `bundle.yaml` for direct
-evaluation through the same adapter.
+`checkpoints/global_step_*/hf_ckpt/`, and copies the matching norm stats and
+robot config beside the training config.
 
 Useful overrides are `LINGBOT_VLA2_MAX_STEPS`, `LINGBOT_VLA2_SAVE_STEPS`,
 `LINGBOT_VLA2_MICRO_BATCH_SIZE`, `LINGBOT_VLA2_GRAD_ACCUM_STEPS`,
-`LINGBOT_VLA2_ACTION_HORIZON` and `LINGBOT_VLA2_NATIVE_HZ`.
+and `LINGBOT_VLA2_ACTION_HORIZON`.
 
 ## Evaluation
 
@@ -97,8 +97,8 @@ XPolicy's standard Conda workflow.
 
 For split-machine deployment, use `setup_eval_policy_server.sh` and
 `setup_eval_env_client.sh` as documented in the
-[Deployment Flow](../../README.md#-deployment-flow). An explicit external
-bundle can be selected with `LINGBOT_VLA2_DEPLOY_CONFIG=/path/to/deploy.yml`.
+[Deployment Flow](../../README.md#-deployment-flow). An explicit deployment
+config can be selected with `LINGBOT_VLA2_DEPLOY_CONFIG=/path/to/deploy.yml`.
 
 ## Model Assets
 
@@ -106,7 +106,6 @@ One deployable run contains:
 
 ```text
 checkpoints/<bench>-<ckpt>-yam_dual-joint-<seed>/
-├── bundle.yaml
 ├── lingbotvla_cli.yaml
 ├── norm_stats.json
 ├── robot_config.yaml
@@ -116,25 +115,32 @@ checkpoints/<bench>-<ckpt>-yam_dual-joint-<seed>/
     └── model-*.safetensors
 ```
 
-`bundle.yaml` pins the official source revision, training config, checkpoint,
-norm stats, robot mapping, action horizon and control frequency. The public
-foundation checkpoint alone is not a YAM post-trained policy.
+The server config points directly to these four artifacts and declares the
+action horizon and native waypoint frequency. The public foundation checkpoint
+alone is not a YAM post-trained policy.
 
 ## Configuration
 
-`deploy.yml` keeps the standard XPolicy key set. `ckpt_name` resolves through
-`XPolicyLab.utils.checkpoint_resolver`; `bundle_manifest_path` is an optional
-explicit override for an external bundle. Model-specific keys are
-`lingbot_vla2_root`, `checkpoint_variant`, `checkpoint_source`,
-`norm_stats_role`, `policy_uv_env_path`, `use_bf16`, `use_fp32`, `use_compile`
-and `default_prompt`.
+`deploy.yml` accepts `model_root`, `training_config_path`, `robot_config_path`,
+`norm_stats_path`, and the local Qwen processor directory `qwen3vl_path`
+directly. The adapter passes that directory through the official
+`QWEN3VL_PATH` loader override without editing the saved training config. In
+the standard positional XPolicy workflow, `ckpt_name` resolves the run
+directory and the adapter selects its latest complete `global_step_*/hf_ckpt`;
+the three matching metadata files are read from that run directory.
+`action_horizon` and `native_hz` remain explicit. Other model-specific keys are
+`lingbot_vla2_root`, `official_source_revision`,
+`checkpoint_variant`, `checkpoint_source`, `norm_stats_role`,
+`policy_uv_env_path`, `use_bf16`, `use_fp32`, `use_compile` and
+`default_prompt`.
 
 ## Notes
 
 - The normal path delegates model construction, `FeatureTransform`,
   normalization and 10-step flow sampling to the official implementation.
-- The adapter learns and returns absolute joint positions. Do not use a
-  relative-action robot config without adding the corresponding runtime decode.
+- The XPolicy adapter preserves the checkpoint's native action semantics.
+  ManiMux uses `lingbot_vla2_yam` to convert anchor-relative arm actions to
+  canonical absolute joints while leaving grippers absolute.
 - `rtc.py` is an XPolicy sampler extension and is not part of the upstream
   LingBot-VLA2 release; it must be evaluated separately from normal inference.
 - Training, simulator task success and real-robot success require separate

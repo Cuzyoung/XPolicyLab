@@ -417,17 +417,29 @@ class PolicyServer:
 
     async def _dispatch_frame(self, frame: Frame) -> Frame | None:
         if frame.message_type == MessageType.HELLO:
-            sampling_modes = ["default"]
-            if callable(getattr(self.model, "get_action_rtc", None)):
-                sampling_modes.append("rtc")
-            if callable(getattr(self.model, "get_action_aac", None)):
-                sampling_modes.append("aac")
-            if callable(getattr(self.model, "get_action_paint", None)):
-                sampling_modes.append("paint")
-            if callable(getattr(self.model, "get_action_autohorizon", None)):
-                sampling_modes.append("autohorizon")
-            if callable(getattr(self.model, "get_action_dvac", None)):
-                sampling_modes.append("dvac")
+            sampling_modes_method = getattr(self.model, "sampling_modes", None)
+            if callable(sampling_modes_method):
+                sampling_modes = await self._call_model_method(sampling_modes_method)
+                if (
+                    not isinstance(sampling_modes, list)
+                    or not sampling_modes
+                    or not all(isinstance(mode, str) for mode in sampling_modes)
+                ):
+                    raise TypeError(
+                        "model sampling_modes() must return a non-empty list of strings"
+                    )
+            else:
+                sampling_modes = ["default"]
+                if callable(getattr(self.model, "get_action_rtc", None)):
+                    sampling_modes.append("rtc")
+                if callable(getattr(self.model, "get_action_aac", None)):
+                    sampling_modes.append("aac")
+                if callable(getattr(self.model, "get_action_paint", None)):
+                    sampling_modes.append("paint")
+                if callable(getattr(self.model, "get_action_autohorizon", None)):
+                    sampling_modes.append("autohorizon")
+                if callable(getattr(self.model, "get_action_dvac", None)):
+                    sampling_modes.append("dvac")
             model_metadata: dict[str, Any] = {
                 "module": type(self.model).__module__,
                 "class": type(self.model).__name__,

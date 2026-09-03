@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+import os
 
 import numpy as np
 
@@ -8,6 +8,23 @@ from XPolicyLab.policy.LingBot_VLA2 import model
 from XPolicyLab.policy.LingBot_VLA2.process_data import split_yam_vector
 
 ROBOT_INFO = {"arm_dim": [6, 6], "ee_dim": [1, 1]}
+
+
+def test_temporary_environment_restores_missing_variable() -> None:
+    os.environ.pop("LINGBOT_TEST_PATH", None)
+    with model._temporary_environment("LINGBOT_TEST_PATH", "/local/processor"):
+        assert os.environ["LINGBOT_TEST_PATH"] == "/local/processor"
+    assert "LINGBOT_TEST_PATH" not in os.environ
+
+
+def test_temporary_environment_restores_existing_variable() -> None:
+    os.environ["LINGBOT_TEST_PATH"] = "/existing/processor"
+    try:
+        with model._temporary_environment("LINGBOT_TEST_PATH", "/local/processor"):
+            assert os.environ["LINGBOT_TEST_PATH"] == "/local/processor"
+        assert os.environ["LINGBOT_TEST_PATH"] == "/existing/processor"
+    finally:
+        os.environ.pop("LINGBOT_TEST_PATH", None)
 
 
 def _observation() -> dict:
@@ -69,29 +86,3 @@ def test_training_converter_splits_packed_yam_order() -> None:
     arms, effectors = split_yam_vector(packed)
     assert arms[0].tolist() == [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12]
     assert effectors[0].tolist() == [6, 13]
-
-
-def test_explicit_bundle_uses_shared_checkpoint_resolver(tmp_path: Path) -> None:
-    manifest = tmp_path / "bundle.yaml"
-    manifest.write_text("schema_version: test\n", encoding="utf-8")
-    assert model.resolve_bundle_manifest({"bundle_manifest_path": str(manifest)}) == manifest
-
-
-def test_standard_run_name_resolves_bundle(
-    tmp_path: Path, monkeypatch
-) -> None:
-    run_dir = tmp_path / "RoboDojo-demo-yam_dual-joint-0"
-    run_dir.mkdir()
-    manifest = run_dir / "bundle.yaml"
-    manifest.touch()
-    monkeypatch.setattr(model, "CHECKPOINTS_DIR", tmp_path)
-    resolved = model.resolve_bundle_manifest(
-        {
-            "bench_name": "RoboDojo",
-            "ckpt_name": "demo",
-            "env_cfg_type": "yam_dual",
-            "action_type": "joint",
-            "seed": 0,
-        }
-    )
-    assert resolved == manifest

@@ -7,6 +7,8 @@ feature normalization and flow sampling remain in the official implementation.
 
 from __future__ import annotations
 
+import ast
+import contextlib
 import importlib
 import json
 import math
@@ -28,7 +30,8 @@ POLICY_DIR = Path(__file__).resolve().parent
 CHECKPOINTS_DIR = POLICY_DIR / "checkpoints"
 OFFICIAL_DEPLOY_MODULE = "deploy.lingbot_vla_v2_policy"
 OFFICIAL_FEATURE_MODULE = "lingbotvla.data.vla_data.utils"
-BUNDLE_SCHEMA_VERSION = "xpolicylab.lingbot_vla2_yam_bundle.v1"
+ABSOLUTE_ACTION_SEMANTICS = "absolute_joint_position"
+RELATIVE_ACTION_SEMANTICS = "anchor_relative_arm_absolute_gripper"
 EXPECTED_CAMERAS = ["camera_top", "camera_wrist_left", "camera_wrist_right"]
 EXPECTED_JOINTS = [
     {"arm.position": 14},
@@ -60,6 +63,26 @@ def _normalize_official_feature_literals(data_config: Any) -> Any:
     return data_config
 
 
+def _parse_feature_literals(values: object) -> list[dict[str, Any]]:
+    if not isinstance(values, Sequence) or isinstance(values, str | bytes):
+        return []
+    parsed: list[dict[str, Any]] = []
+    for value in values:
+        if isinstance(value, Mapping):
+            parsed.append(dict(value))
+            continue
+        if not isinstance(value, str):
+            return []
+        try:
+            literal = ast.literal_eval(value)
+        except (SyntaxError, ValueError):
+            return []
+        if not isinstance(literal, dict):
+            return []
+        parsed.append(literal)
+    return parsed
+
+
 def _resolve_path(value: object, *, name: str, base_dir: Path = POLICY_DIR) -> Path:
     if value is None or not str(value).strip():
         raise ValueError(f"{name} must be configured")
@@ -69,21 +92,17 @@ def _resolve_path(value: object, *, name: str, base_dir: Path = POLICY_DIR) -> P
     return path.resolve()
 
 
-def resolve_bundle_manifest(model_cfg: Mapping[str, Any]) -> Path:
-    """Resolve an explicit bundle or a standard XPolicy checkpoint run."""
-
-    checkpoint_root = resolve_checkpoint_root(
-        dict(model_cfg),
-        CHECKPOINTS_DIR,
-        policy_dir=POLICY_DIR,
-        explicit_keys=("bundle_manifest_path",),
-    )
-    manifest_path = (
-        checkpoint_root / "bundle.yaml" if checkpoint_root.is_dir() else checkpoint_root
-    )
-    if manifest_path.name != "bundle.yaml":
-        raise ValueError(f"LingBot-VLA2 bundle manifest must be named bundle.yaml: {manifest_path}")
-    return manifest_path
+@contextlib.contextmanager
+def _temporary_environment(name: str, value: str):
+    previous = os.environ.get(name)
+    os.environ[name] = value
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = previous
 
 
 def expected_training_config(checkpoint_path: Path) -> Path:
@@ -92,18 +111,32 @@ def expected_training_config(checkpoint_path: Path) -> Path:
     return checkpoint_path.parent.parent.parent / "lingbotvla_cli.yaml"
 
 
-def _bundle_artifact(bundle_root: Path, value: object, *, name: str) -> Path:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"manifest artifacts.{name} must be a non-empty relative path")
-    raw_path = Path(value)
-    if raw_path.is_absolute():
-        raise ValueError(f"manifest artifacts.{name} must be relative to the bundle root")
-    resolved = (bundle_root / raw_path).resolve()
+def _checkpoint_step(path: Path) -> int:
     try:
-        resolved.relative_to(bundle_root)
-    except ValueError as exc:
-        raise ValueError(f"manifest artifacts.{name} escapes the bundle root") from exc
-    return resolved
+        return int(path.parent.name.removeprefix("global_step_"))
+    except ValueError:
+        return -1
+
+
+def _resolve_model_root(model_cfg: Mapping[str, Any]) -> Path:
+    checkpoint_root = resolve_checkpoint_root(
+        dict(model_cfg),
+        CHECKPOINTS_DIR,
+        policy_dir=POLICY_DIR,
+        explicit_keys=("model_root",),
+    )
+    if (checkpoint_root / "model.safetensors.index.json").is_file():
+        return checkpoint_root
+    candidates = sorted(
+        checkpoint_root.glob("checkpoints/global_step_*/hf_ckpt"),
+        key=_checkpoint_step,
+    )
+    complete = [
+        path for path in candidates if (path / "model.safetensors.index.json").is_file()
+    ]
+    if not complete:
+        raise FileNotFoundError(f"no complete HuggingFace checkpoint under {checkpoint_root}")
+    return complete[-1]
 
 
 def _source_revision(source_root: Path) -> str | None:
@@ -121,180 +154,84 @@ def _source_revision(source_root: Path) -> str | None:
     return None
 
 
-def _check_keys(
-    value: object,
-    *,
-    label: str,
-    required: set[str],
-    errors: list[str],
-) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        errors.append(f"manifest {label} must be a mapping")
-        return {}
-    missing = sorted(required.difference(value))
-    unknown = sorted(set(value).difference(required))
-    if missing:
-        errors.append(f"manifest {label} is missing keys: {', '.join(missing)}")
-    if unknown:
-        errors.append(f"manifest {label} has unknown keys: {', '.join(unknown)}")
-    return value
-
-
-def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
+def validate_deployment(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
     """Validate deployment metadata without importing torch or loading weights."""
 
-    source_root = _resolve_path(model_cfg.get("lingbot_vla2_root"), name="lingbot_vla2_root")
-    try:
-        manifest_path = resolve_bundle_manifest(model_cfg)
-    except (FileNotFoundError, ValueError) as exc:
-        manifest_path = POLICY_DIR / "checkpoints" / "__missing_bundle__" / "bundle.yaml"
-        bundle_resolution_error = str(exc)
-    else:
-        bundle_resolution_error = None
     errors: list[str] = []
-    if bundle_resolution_error is not None:
-        errors.append(bundle_resolution_error)
-    manifest: dict[str, Any] = {}
-    if not manifest_path.is_file():
-        errors.append("missing files: bundle_manifest")
-    else:
+    resolved_paths: dict[str, Path] = {}
+    for key in ("lingbot_vla2_root", "qwen3vl_path"):
         try:
-            loaded = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, yaml.YAMLError) as exc:
-            errors.append(f"invalid bundle manifest: {exc}")
-        else:
-            if isinstance(loaded, dict):
-                manifest = loaded
-            else:
-                errors.append("bundle manifest must be a mapping")
+            resolved_paths[key] = _resolve_path(model_cfg.get(key), name=key)
+        except ValueError as exc:
+            errors.append(str(exc))
 
-    if not manifest:
-        source_files = [
-            source_root / "deploy/lingbot_vla_v2_policy.py",
-            source_root / "lingbotvla/data/vla_data/utils.py",
-        ]
-        if not all(path.is_file() for path in source_files):
-            errors.append("missing files: official_deploy, official_feature_transform")
-        return {
-            "status": "blocked",
-            "schema_version": None,
-            "manifest_path": str(manifest_path),
-            "bundle_root": str(manifest_path.parent),
-            "source_root": str(source_root),
-            "source_revision": _source_revision(source_root),
-            "expected_source_revision": None,
-            "checkpoint_path": None,
-            "training_config_path": None,
-            "robot_config_path": None,
-            "norm_stats_path": None,
-            "action_space": "absolute_joint_position",
-            "action_horizon": 0,
-            "native_hz": 0.0,
-            "rtc_capability": "pi_guided_v1_sampler",
-            "errors": errors,
-        }
+    try:
+        checkpoint_path = _resolve_model_root(model_cfg)
+    except (FileNotFoundError, ValueError) as exc:
+        checkpoint_path = POLICY_DIR / "__missing_checkpoint__"
+        errors.append(str(exc))
+    run_root = checkpoint_path.parent.parent.parent
+    for key, default in (
+        ("training_config_path", run_root / "lingbotvla_cli.yaml"),
+        ("robot_config_path", run_root / "robot_config.yaml"),
+        ("norm_stats_path", run_root / "norm_stats.json"),
+    ):
+        value = model_cfg.get(key)
+        if value is None or not str(value).strip():
+            resolved_paths[key] = default
+            continue
+        try:
+            resolved_paths[key] = _resolve_path(value, name=key)
+        except ValueError as exc:
+            errors.append(str(exc))
 
-    _check_keys(
-        manifest,
-        label="root",
-        required={"schema_version", "model", "artifacts", "control", "embodiment"},
-        errors=errors,
+    source_root = resolved_paths.get(
+        "lingbot_vla2_root", POLICY_DIR / "__missing_source__"
     )
-    model = _check_keys(
-        manifest.get("model"),
-        label="model",
-        required={"family", "official_source_revision"},
-        errors=errors,
-    ) if manifest else {}
-    artifacts = _check_keys(
-        manifest.get("artifacts"),
-        label="artifacts",
-        required={"training_config", "checkpoint", "norm_stats", "robot_config"},
-        errors=errors,
-    ) if manifest else {}
-    control = _check_keys(
-        manifest.get("control"),
-        label="control",
-        required={"native_hz", "action_horizon", "action_space"},
-        errors=errors,
-    ) if manifest else {}
-    embodiment = _check_keys(
-        manifest.get("embodiment"),
-        label="embodiment",
-        required={"name", "arm_dofs", "gripper_dofs", "cameras"},
-        errors=errors,
-    ) if manifest else {}
-    if manifest:
-        if manifest.get("schema_version") != BUNDLE_SCHEMA_VERSION:
-            errors.append(f"schema_version must be {BUNDLE_SCHEMA_VERSION}")
-        if model.get("family") != "lingbot-vla-v2":
-            errors.append("manifest model.family must be lingbot-vla-v2")
-        revision = model.get("official_source_revision")
-        if not isinstance(revision, str) or len(revision) != 40 or any(
-            char not in "0123456789abcdef" for char in revision.lower()
-        ):
-            errors.append("manifest model.official_source_revision must be a 40-char hex commit")
-        if control.get("action_space") != "absolute_joint_position":
-            errors.append("manifest control.action_space must be absolute_joint_position")
-        if embodiment.get("name") != "yam_dual":
-            errors.append("manifest embodiment.name must be yam_dual")
-        if embodiment.get("arm_dofs") != [6, 6]:
-            errors.append("manifest embodiment.arm_dofs must be [6, 6]")
-        if embodiment.get("gripper_dofs") != [1, 1]:
-            errors.append("manifest embodiment.gripper_dofs must be [1, 1]")
-        if embodiment.get("cameras") != EXPECTED_CAMERAS:
-            errors.append(f"manifest embodiment.cameras must be {EXPECTED_CAMERAS}")
+    training_config_path = resolved_paths.get(
+        "training_config_path", POLICY_DIR / "__missing_training_config__"
+    )
+    robot_config_path = resolved_paths.get(
+        "robot_config_path", POLICY_DIR / "__missing_robot_config__"
+    )
+    norm_stats_path = resolved_paths.get(
+        "norm_stats_path", POLICY_DIR / "__missing_stats__"
+    )
+    qwen3vl_path = resolved_paths.get(
+        "qwen3vl_path", POLICY_DIR / "__missing_qwen3vl_processor__"
+    )
 
-    raw_action_horizon = control.get("action_horizon")
+    raw_action_horizon = model_cfg.get("action_horizon")
     action_horizon = (
         raw_action_horizon
         if isinstance(raw_action_horizon, int) and not isinstance(raw_action_horizon, bool)
         else 0
     )
     if action_horizon <= 0:
-        errors.append("manifest control.action_horizon must be a positive integer")
-    raw_native_hz = control.get("native_hz")
+        errors.append("action_horizon must be a positive integer")
+    raw_native_hz = model_cfg.get("native_hz")
     native_hz = (
         float(raw_native_hz)
         if isinstance(raw_native_hz, int | float) and not isinstance(raw_native_hz, bool)
         else 0.0
     )
     if not np.isfinite(native_hz) or native_hz <= 0:
-        errors.append("manifest control.native_hz must be finite and positive")
-
-    bundle_root = manifest_path.parent
-    resolved_artifacts: dict[str, Path] = {}
-    for name in ("training_config", "checkpoint", "norm_stats", "robot_config"):
-        try:
-            resolved_artifacts[name] = _bundle_artifact(
-                bundle_root, artifacts.get(name), name=name
-            )
-        except ValueError as exc:
-            errors.append(str(exc))
-
-    checkpoint_path = resolved_artifacts.get("checkpoint", bundle_root / "__missing_checkpoint__")
-    training_config_path = resolved_artifacts.get(
-        "training_config", bundle_root / "__missing_training_config__"
-    )
-    norm_stats_path = resolved_artifacts.get("norm_stats", bundle_root / "__missing_stats__")
-    robot_config_path = resolved_artifacts.get(
-        "robot_config", bundle_root / "__missing_robot_config__"
-    )
+        errors.append("native_hz must be finite and positive")
 
     if training_config_path != expected_training_config(checkpoint_path):
         errors.append(
-            "manifest checkpoint layout is incompatible with the official loader: "
+            "checkpoint layout is incompatible with the official loader: "
             "training_config must equal checkpoint.parent.parent.parent/lingbotvla_cli.yaml"
         )
 
     required = {
-        "bundle_manifest": manifest_path,
         "official_deploy": source_root / "deploy/lingbot_vla_v2_policy.py",
         "official_feature_transform": source_root / "lingbotvla/data/vla_data/utils.py",
         "checkpoint_index": checkpoint_path / "model.safetensors.index.json",
         "training_config": training_config_path,
         "robot_config": robot_config_path,
         "norm_stats": norm_stats_path,
+        "qwen3vl_config": qwen3vl_path / "config.json",
         "rtc_integration": POLICY_DIR / "rtc.py",
     }
     missing = [name for name, path in required.items() if not path.is_file()]
@@ -303,9 +240,15 @@ def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
         if missing_message not in errors:
             errors.append(missing_message)
 
-    expected_revision = model.get("official_source_revision")
+    expected_revision = model_cfg.get("official_source_revision")
     actual_revision = _source_revision(source_root)
-    if isinstance(expected_revision, str) and len(expected_revision) == 40:
+    if expected_revision is not None and (
+        not isinstance(expected_revision, str)
+        or len(expected_revision) != 40
+        or any(char not in "0123456789abcdef" for char in expected_revision.lower())
+    ):
+        errors.append("official_source_revision must be a 40-char hex commit")
+    elif isinstance(expected_revision, str):
         if actual_revision is None:
             errors.append("official source revision cannot be verified from Git metadata")
         elif actual_revision != expected_revision.lower():
@@ -329,6 +272,7 @@ def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
                 errors.append("checkpoint is missing shards: " + ", ".join(missing_shards))
 
     robot_config: dict[str, Any] = {}
+    action_semantics: str | None = None
     if robot_config_path.is_file():
         try:
             loaded_robot_config = yaml.safe_load(robot_config_path.read_text(encoding="utf-8"))
@@ -337,7 +281,7 @@ def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
             loaded_robot_config = {}
         robot_config = loaded_robot_config if isinstance(loaded_robot_config, dict) else {}
         action_entries = robot_config.get("actions", [])
-        expected_actions = {
+        expected_absolute_actions = {
             "action.arm.position": {
                 "origin_keys": "action.arm.position",
                 "subtract_state": False,
@@ -345,6 +289,24 @@ def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
             "action.effector.position": {
                 "origin_keys": "action.effector.position",
                 "subtract_state": False,
+            },
+        }
+        expected_relative_actions = {
+            "action.arm.position": {
+                "origin_keys": [
+                    {"action": {"start": 0, "end": 6}},
+                    {"action": {"start": 7, "end": 13}},
+                ],
+                "subtract_state": True,
+                "relative_type": "vector",
+            },
+            "action.effector.position": {
+                "origin_keys": [
+                    {"action": {"start": 6, "end": 7}},
+                    {"action": {"start": 13, "end": 14}},
+                ],
+                "subtract_state": False,
+                "relative_type": None,
             },
         }
         seen_actions: dict[str, dict[str, Any]] = {}
@@ -355,13 +317,27 @@ def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
                     seen_actions[key] = {
                         "origin_keys": options.get("origin_keys"),
                         "subtract_state": options.get("subtract_state"),
+                        "relative_type": options.get("relative_type"),
                     }
-        if seen_actions != expected_actions:
+        comparable_absolute_actions = {
+            key: {
+                "origin_keys": value["origin_keys"],
+                "subtract_state": value["subtract_state"],
+                "relative_type": None,
+            }
+            for key, value in expected_absolute_actions.items()
+        }
+        if seen_actions == comparable_absolute_actions:
+            action_semantics = ABSOLUTE_ACTION_SEMANTICS
+        elif seen_actions == expected_relative_actions:
+            action_semantics = RELATIVE_ACTION_SEMANTICS
+        else:
             errors.append(
-                "robot config must expose absolute action.arm.position and action.effector.position"
+                "robot config must expose the supported absolute or "
+                "anchor-relative YAM action contract"
             )
         state_entries = robot_config.get("states")
-        seen_states: dict[str, str] = {}
+        seen_states: dict[str, Any] = {}
         if isinstance(state_entries, list):
             for entry in state_entries:
                 if isinstance(entry, dict) and len(entry) == 1:
@@ -372,11 +348,47 @@ def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
             "observation.state.arm.position": "observation.state.arm.position",
             "observation.state.effector.position": "observation.state.effector.position",
         }
+        expected_relative_states = {
+            "observation.state.arm.position": [
+                {"observation.state": {"start": 0, "end": 6}},
+                {"observation.state": {"start": 7, "end": 13}},
+            ],
+            "observation.state.effector.position": [
+                {"observation.state": {"start": 6, "end": 7}},
+                {"observation.state": {"start": 13, "end": 14}},
+            ],
+        }
         images = robot_config.get("images")
-        if seen_states != expected_states:
+        if action_semantics == ABSOLUTE_ACTION_SEMANTICS and seen_states != expected_states:
             errors.append("robot config must expose arm and effector position states")
-        if images != [f"observation.images.{name}" for name in EXPECTED_CAMERAS]:
-            errors.append("robot config camera order does not match the bundle manifest")
+        if (
+            action_semantics == RELATIVE_ACTION_SEMANTICS
+            and seen_states != expected_relative_states
+        ):
+            errors.append("relative robot config must expose the packed 14D YAM state")
+        expected_absolute_images = [
+            f"observation.images.{name}" for name in EXPECTED_CAMERAS
+        ]
+        expected_relative_images = [
+            {"observation.images.camera_top": {"origin_keys": "observation.images.top_rgb"}},
+            {
+                "observation.images.camera_wrist_left": {
+                    "origin_keys": "observation.images.left_rgb"
+                }
+            },
+            {
+                "observation.images.camera_wrist_right": {
+                    "origin_keys": "observation.images.right_rgb"
+                }
+            },
+        ]
+        expected_images = (
+            expected_relative_images
+            if action_semantics == RELATIVE_ACTION_SEMANTICS
+            else expected_absolute_images
+        )
+        if images != expected_images:
+            errors.append("robot config camera mapping does not match its action contract")
 
     training_config: dict[str, Any] = {}
     if training_config_path.is_file():
@@ -403,7 +415,7 @@ def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
         cameras = list(data.get("cameras", []))
         if cameras != EXPECTED_CAMERAS:
             errors.append(f"training config cameras must be {EXPECTED_CAMERAS}")
-        if list(data.get("joints", [])) != EXPECTED_JOINTS:
+        if _parse_feature_literals(data.get("joints", [])) != EXPECTED_JOINTS:
             errors.append(f"training config joints must be {EXPECTED_JOINTS}")
         chunk_size = train.get("chunk_size")
         if not isinstance(chunk_size, int) or isinstance(chunk_size, bool) or chunk_size <= 0:
@@ -411,7 +423,7 @@ def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
             chunk_size = 0
         if action_horizon != chunk_size:
             errors.append(
-                f"manifest action_horizon {action_horizon} must equal "
+                f"action_horizon {action_horizon} must equal "
                 f"trained chunk_size {chunk_size}"
             )
 
@@ -448,9 +460,6 @@ def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
 
     return {
         "status": "ready" if not errors else "blocked",
-        "schema_version": manifest.get("schema_version"),
-        "manifest_path": str(manifest_path),
-        "bundle_root": str(bundle_root),
         "source_root": str(source_root),
         "source_revision": actual_revision,
         "expected_source_revision": expected_revision,
@@ -458,10 +467,16 @@ def validate_bundle(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
         "training_config_path": str(training_config_path),
         "robot_config_path": str(robot_config_path),
         "norm_stats_path": str(norm_stats_path),
-        "action_space": "absolute_joint_position",
+        "qwen3vl_path": str(qwen3vl_path),
+        "action_space": ABSOLUTE_ACTION_SEMANTICS,
+        "action_semantics": action_semantics,
         "action_horizon": action_horizon,
         "native_hz": native_hz,
-        "rtc_capability": "pi_guided_v1_sampler",
+        "rtc_capability": (
+            "pi_guided_v1_sampler"
+            if action_semantics == ABSOLUTE_ACTION_SEMANTICS
+            else "blocked_relative_action_contract"
+        ),
         "errors": errors,
     }
 
@@ -493,6 +508,7 @@ def encode_observation(
     observation: Mapping[str, Any],
     default_prompt: str,
     robot_info: Mapping[str, Sequence[int]],
+    action_semantics: str = ABSOLUTE_ACTION_SEMANTICS,
 ) -> dict[str, Any]:
     """Translate one XPolicyLab YAM observation to official LingBot features."""
 
@@ -501,21 +517,29 @@ def encode_observation(
     if len(arm_dims) != 2 or len(effector_dims) != 2:
         raise ValueError("LingBot_VLA2 YAM adapter requires exactly two arms")
     prompt = observation.get("instruction") or observation.get("prompt") or default_prompt
+    left_arm = _state_value(observation, "left_arm_joint_state", arm_dims[0])
+    left_gripper = _state_value(observation, "left_ee_joint_state", effector_dims[0])
+    right_arm = _state_value(observation, "right_arm_joint_state", arm_dims[1])
+    right_gripper = _state_value(observation, "right_ee_joint_state", effector_dims[1])
+    if action_semantics == RELATIVE_ACTION_SEMANTICS:
+        return {
+            "observation.images.top_rgb": _extract_image(observation, "cam_head"),
+            "observation.images.left_rgb": _extract_image(observation, "cam_left_wrist"),
+            "observation.images.right_rgb": _extract_image(observation, "cam_right_wrist"),
+            "observation.state": np.concatenate(
+                [left_arm, left_gripper, right_arm, right_gripper]
+            ),
+            "task": str(prompt),
+        }
+    if action_semantics != ABSOLUTE_ACTION_SEMANTICS:
+        raise ValueError(f"unsupported LingBot-VLA2 action semantics: {action_semantics}")
     return {
         "observation.images.camera_top": _extract_image(observation, "cam_head"),
         "observation.images.camera_wrist_left": _extract_image(observation, "cam_left_wrist"),
         "observation.images.camera_wrist_right": _extract_image(observation, "cam_right_wrist"),
-        "observation.state.arm.position": np.concatenate(
-            [
-                _state_value(observation, "left_arm_joint_state", arm_dims[0]),
-                _state_value(observation, "right_arm_joint_state", arm_dims[1]),
-            ]
-        ),
+        "observation.state.arm.position": np.concatenate([left_arm, right_arm]),
         "observation.state.effector.position": np.concatenate(
-            [
-                _state_value(observation, "left_ee_joint_state", effector_dims[0]),
-                _state_value(observation, "right_ee_joint_state", effector_dims[1]),
-            ]
+            [left_gripper, right_gripper]
         ),
         "task": str(prompt),
     }
@@ -525,7 +549,7 @@ def decode_actions(
     result: Mapping[str, Any],
     robot_info: Mapping[str, Sequence[int]],
 ) -> list[dict[str, np.ndarray]]:
-    """Translate official absolute joint chunks to XPolicyLab action steps."""
+    """Translate official arm/gripper features to XPolicyLab action steps."""
 
     arm_dims = list(robot_info["arm_dim"])
     effector_dims = list(robot_info["ee_dim"])
@@ -569,12 +593,14 @@ class Model(ModelTemplate):
             )
         self.action_dim = sum(self.robot_info["arm_dim"]) + sum(self.robot_info["ee_dim"])
 
-        report = validate_bundle(self.model_cfg)
+        report = validate_deployment(self.model_cfg)
         if report["status"] != "ready":
             raise RuntimeError(
-                "LingBot-VLA2 deployment bundle is incomplete: " + "; ".join(report["errors"])
+                "LingBot-VLA2 deployment config is incomplete: "
+                + "; ".join(report["errors"])
             )
-        self.bundle = report
+        self.deployment = report
+        self.action_semantics = str(report["action_semantics"])
 
         self.default_prompt = str(
             self.model_cfg.get("default_prompt")
@@ -585,9 +611,11 @@ class Model(ModelTemplate):
         self._observations: list[dict[str, Any]] | None = None
         self._latest_env_idx_list = [0]
         self.model = self._load_official_server()
-        from .rtc import LingBotRtcBridge
+        self._rtc_bridge = None
+        if self.action_semantics == ABSOLUTE_ACTION_SEMANTICS:
+            from .rtc import LingBotRtcBridge
 
-        self._rtc_bridge = LingBotRtcBridge(self.model, self.robot_info)
+            self._rtc_bridge = LingBotRtcBridge(self.model, self.robot_info)
 
     def _load_official_server(self):
         source_root = _resolve_path(self.model_cfg["lingbot_vla2_root"], name="lingbot_vla2_root")
@@ -597,23 +625,24 @@ class Model(ModelTemplate):
         deploy_module = importlib.import_module(OFFICIAL_DEPLOY_MODULE)
         feature_module = importlib.import_module(OFFICIAL_FEATURE_MODULE)
 
-        server = deploy_module.LingbotVLAv2Server(
-            path_to_pi_model=self.bundle["checkpoint_path"],
-            robot_norm_path=self.bundle["norm_stats_path"],
-            use_length=self.action_horizon,
-            chunk_ret=True,
-            use_bf16=bool(self.model_cfg.get("use_bf16", True)),
-            use_fp32=bool(self.model_cfg.get("use_fp32", False)),
-            use_compile=bool(self.model_cfg.get("use_compile", False)),
-        )
+        with _temporary_environment("QWEN3VL_PATH", self.deployment["qwen3vl_path"]):
+            server = deploy_module.LingbotVLAv2Server(
+                path_to_pi_model=self.deployment["checkpoint_path"],
+                robot_norm_path=self.deployment["norm_stats_path"],
+                use_length=self.action_horizon,
+                chunk_ret=True,
+                use_bf16=bool(self.model_cfg.get("use_bf16", True)),
+                use_fp32=bool(self.model_cfg.get("use_fp32", False)),
+                use_compile=bool(self.model_cfg.get("use_compile", False)),
+            )
         data_config = _normalize_official_feature_literals(server.data_config)
         feature_transform = feature_module.FeatureTransform(
-            self.bundle["robot_config_path"],
+            self.deployment["robot_config_path"],
             data_config,
             server.config,
             server.processor,
             chunk_size=server.config.chunk_size,
-            norm_stats_path=self.bundle["norm_stats_path"],
+            norm_stats_path=self.deployment["norm_stats_path"],
         )
         server.data_config = data_config
         server.vla.feature_transform = feature_transform
@@ -628,13 +657,24 @@ class Model(ModelTemplate):
             int(obs.get("env_idx", index)) for index, obs in enumerate(obs_list)
         ]
         self._observations = [
-            encode_observation(obs, self.default_prompt, self.robot_info) for obs in obs_list
+            encode_observation(
+                obs,
+                self.default_prompt,
+                self.robot_info,
+                self.action_semantics,
+            )
+            for obs in obs_list
         ]
 
-    def get_action(self, **_: Any) -> list[dict[str, np.ndarray]]:
+    def get_action(self, **_: Any) -> object:
         return self.get_action_batch([self._latest_env_idx_list[0]])[0]
 
     def get_action_rtc(self, sampling: Mapping[str, Any]) -> list[dict[str, np.ndarray]]:
+        if self.action_semantics != ABSOLUTE_ACTION_SEMANTICS or self._rtc_bridge is None:
+            raise ValueError(
+                "LingBot-VLA2 RTC is unavailable for anchor-relative checkpoints; "
+                "their condition must first receive a model-native relative-action RTC contract"
+            )
         if self._observations is None or len(self._observations) != 1:
             raise RuntimeError("RTC requires exactly one update_obs observation")
         required = {"action_condition", "condition_weights", "beta"}
@@ -665,16 +705,55 @@ class Model(ModelTemplate):
         )
         return decode_actions(result, self.robot_info)
 
+    def _infer_one(self, observation: Mapping[str, Any]) -> object:
+        if self.action_semantics == ABSOLUTE_ACTION_SEMANTICS:
+            return decode_actions(self.model.infer(observation), self.robot_info)
+
+        result = self.model.infer(observation, return_normalized=True)
+        normalized_actions = result.get("_normalized_actions")
+        if normalized_actions is None:
+            raise RuntimeError("official LingBot-VLA2 inference did not return normalized actions")
+
+        transformed = self.model._prepare_model_input(observation)
+        transformed["actions"] = normalized_actions
+        if self.model.use_bf16 and "state" in transformed:
+            transformed["state"] = transformed["state"].float()
+        feature_transform = self.model.vla.feature_transform
+        native = feature_transform.reverse_pad_and_concat(transformed)
+        native = feature_transform.normalizer.unnormalize(native)
+        return {
+            "actions": decode_actions(native, self.robot_info),
+            "action_semantics": RELATIVE_ACTION_SEMANTICS,
+        }
+
     def get_action_batch(self, env_idx_list=None, **_: Any):
         if self._observations is None:
             raise RuntimeError("update_obs or update_obs_batch must be called first")
         indices = list(env_idx_list or self._latest_env_idx_list)
         if len(indices) != len(self._observations):
             raise ValueError("env_idx_list size does not match the observation batch")
-        return [
-            decode_actions(self.model.infer(observation), self.robot_info)
-            for observation in self._observations
-        ]
+        return [self._infer_one(observation) for observation in self._observations]
+
+    def runtime_metadata(self) -> dict[str, Any]:
+        return {
+            "policy_family": "lingbot_vla2",
+            "task_name": self.model_cfg.get("task_name"),
+            "checkpoint_variant": self.model_cfg.get("checkpoint_variant"),
+            "model_root": self.deployment["checkpoint_path"],
+            "training_config_path": self.deployment["training_config_path"],
+            "robot_config_path": self.deployment["robot_config_path"],
+            "norm_stats_path": self.deployment["norm_stats_path"],
+            "qwen3vl_path": self.deployment["qwen3vl_path"],
+            "action_horizon": self.action_horizon,
+            "native_hz": self.deployment["native_hz"],
+            "action_semantics": self.action_semantics,
+        }
+
+    def sampling_modes(self) -> list[str]:
+        modes = ["default"]
+        if self.action_semantics == ABSOLUTE_ACTION_SEMANTICS:
+            modes.append("rtc")
+        return modes
 
     def reset(self) -> None:
         self._observations = None
