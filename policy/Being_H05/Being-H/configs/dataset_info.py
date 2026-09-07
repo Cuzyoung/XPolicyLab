@@ -292,7 +292,7 @@ DATASET_INFO = {
     # RoboTwin (aloha-agilex, qpos control)
     # Each key is "{task_name}-{setting}" and maps to a LeRobot
     # dataset directory produced by:
-    #   python scripts/data/convert_robotwin_to_lerobot.py
+    #   python scripts/datasets/convert_robotwin_to_lerobot.py
     # ─────────────────────────────────────────────────────────────
     # 'robotwin_posttrain': {
     #     # Add converted tasks here, e.g.:

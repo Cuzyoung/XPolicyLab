@@ -4,7 +4,7 @@
 # Prerequisites:
 #   1. Convert RoboTwin demo data:
 #        cd /share/being-transfer/users/yiqing/Being-H
-#        python scripts/data/convert_robotwin_to_lerobot.py \
+#        python scripts/datasets/convert_robotwin_to_lerobot.py \
 #            --task_name beat_block_hammer \
 #            --setting demo_clean \
 #            --episode_num 50 \
