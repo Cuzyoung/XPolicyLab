@@ -332,6 +332,50 @@ class LeRobotYamDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class LeRobotYamJointEeDataConfig(DataConfigFactory):
+    """YAM joint control with a 12D dual-arm EE-pose auxiliary target."""
+
+    use_delta_joint_actions: bool = True
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation/image": "observation.images.top_rgb",
+                        "observation/left_wrist": "observation.images.left_rgb",
+                        "observation/right_wrist": "observation.images.right_rgb",
+                        "observation/state": "observation.state",
+                        "observation/ee_pose": "observation.ee_pose",
+                        "actions": "action",
+                        "action_ee_pose": "action.ee_pose",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+        data_transforms = _transforms.Group(
+            inputs=[yam_policy.YamJointEeInputs(model_type=model_config.model_type)],
+            outputs=[yam_policy.YamOutputs()],
+        )
+        if self.use_delta_joint_actions:
+            delta_action_mask = _transforms.make_bool_mask(6, -1, 6, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=ModelTransformFactory()(model_config),
+            action_sequence_keys=("action", "action.ee_pose"),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class LeRobotLiberoDataConfig(DataConfigFactory):
     """
     This config is used to configure transforms that are applied at various parts of the data pipeline.
@@ -683,6 +727,26 @@ _CONFIGS = [
         model=pi0_config.Pi0Config(pi05=True, action_horizon=50),
         data=LeRobotYamDataConfig(
             repo_id=os.environ.get("OPENPI_LEROBOT_REPO_ID", "yam_pick_red_ball_box_v1"),
+            base_config=DataConfig(prompt_from_task=True, video_backend="pyav"),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            os.environ.get("OPENPI_BASE_PARAMS", "gs://openpi-assets/checkpoints/pi05_base/params")
+        ),
+        batch_size=8,
+        num_workers=int(os.environ.get("OPENPI_NUM_WORKERS", "2")),
+        assets_base_dir=os.environ.get("OPENPI_ASSETS_BASE_DIR", "./assets"),
+        num_train_steps=10_000,
+        save_interval=500,
+        keep_period=2_500,
+        max_to_keep=10,
+    ),
+    TrainConfig(
+        name="pi05_yam_joint_ee",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=50),
+        data=LeRobotYamJointEeDataConfig(
+            repo_id=os.environ.get(
+                "OPENPI_LEROBOT_REPO_ID", "yam_assemble_screwdriver_20260825_v1_joint_ee"
+            ),
             base_config=DataConfig(prompt_from_task=True, video_backend="pyav"),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader(
