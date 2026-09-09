@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import bisect
 import hashlib
-import io
 import json
 import os
 import time
@@ -361,8 +360,9 @@ def _decode_jpeg(value: Any, *, source: str) -> Image.Image:
     if not encoded:
         raise ValueError(f"{source}: JPEG entry is empty")
     try:
-        with Image.open(io.BytesIO(encoded)) as image:
-            return image.convert("RGB").copy()
+        from XPolicyLab.utils.process_data import decode_image_bit
+
+        return Image.fromarray(decode_image_bit(np.frombuffer(encoded, dtype=np.uint8)))
     except Exception as error:
         raise ValueError(f"{source}: could not decode JPEG") from error
 

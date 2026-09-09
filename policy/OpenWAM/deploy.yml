@@ -15,6 +15,7 @@ task_name: null
 ckpt_name: null
 env_cfg_type: null
 action_type: ee
+observation_profile: arx_x5_sim
 action_dim: null
 seed: 42
 gpu_id: null

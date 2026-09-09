@@ -11,6 +11,11 @@ policy_gpu_id=$7
 policy_conda_env=$8
 policy_server_port=$9
 policy_server_host=${10:-localhost}
+case "${env_cfg_type}" in
+    yam_dual) observation_profile=yam_base ;;
+    arx_x5) observation_profile=arx_x5_sim ;;
+    *) echo "Unsupported OpenWAM robot: ${env_cfg_type}" >&2; exit 1 ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 XPL_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -62,7 +67,9 @@ echo -e "\033[33m[SERVER] policy_server_host=${policy_server_host} policy_server
 
 # Resolve the policy python: accept either a conda env prefix path (preferred —
 # robust to broken conda base configs) or an env name for `conda activate`.
-if [[ -x "${policy_conda_env}/bin/python" ]]; then
+if [[ "${policy_conda_env}" == active ]]; then
+    PYTHON_BIN="${OPENWAM_PYTHON:-python}"
+elif [[ -x "${policy_conda_env}/bin/python" ]]; then
     PYTHON_BIN="${policy_conda_env}/bin/python"
 else
     source "$(conda info --base)/etc/profile.d/conda.sh"
@@ -93,6 +100,7 @@ exec env \
             seed="${seed}" \
             policy_name="${policy_name}" \
             action_type="${action_type}" \
+            observation_profile="${observation_profile}" \
             action_dim="${action_dim}" \
             openwam_root="${OPENWAM_ROOT}" \
             ckpt_dir="${ckpt_dir}" \
