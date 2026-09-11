@@ -144,7 +144,8 @@ class Model(ModelTemplate):
         self._train_config = _resolve_train_config(model_cfg)
         expected_profile = (
             "yam_native"
-            if type(self._train_config.data).__name__ == "LeRobotYamDataConfig"
+            if type(self._train_config.data).__name__
+            in {"LeRobotYamDataConfig", "LeRobotYamJointEeDataConfig"}
             else "aloha"
         )
         self.observation_profile = model_cfg.get("observation_profile", expected_profile)

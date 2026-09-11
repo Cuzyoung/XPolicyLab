@@ -14,6 +14,9 @@ seed=$5
 gpu_id=$6
 
 POLICY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The environment may have an editable install from a different checkout.
+# Always use this adapter's OpenPI source and matching client.
+export PYTHONPATH="${POLICY_DIR}/openpi/src:${POLICY_DIR}/openpi/packages/openpi-client/src:${POLICY_DIR}/../../..:${PYTHONPATH:-}"
 VENV_DIR="${UV_PROJECT_ENVIRONMENT:-${POLICY_DIR}/openpi/.venv}"
 PYTHON="${OPENPI_PYTHON:-${VENV_DIR}/bin/python}"
 # ckpt_setting is the run directory name; pass it verbatim as ckpt_name to eval.sh.

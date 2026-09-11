@@ -269,9 +269,36 @@ def normalize_condition(
 class LingBotRtcBridge:
     """Run sampler-level RTC through an initialized official server instance."""
 
-    def __init__(self, server: Any, robot_info: Mapping[str, Any]) -> None:
+    def __init__(
+        self, server: Any, robot_info: Mapping[str, Any], *, return_relative: bool = False,
+    ) -> None:
         self.server = server
         self.robot_info = robot_info
+        self.return_relative = return_relative
+
+    def _current_state(self, observation: Mapping[str, Any]) -> dict[str, np.ndarray]:
+        arm_key = "observation.state.arm.position"
+        effector_key = "observation.state.effector.position"
+        if arm_key in observation and effector_key in observation:
+            return {
+                arm_key: np.asarray(observation[arm_key], dtype=np.float32),
+                effector_key: np.asarray(observation[effector_key], dtype=np.float32),
+            }
+        packed = np.asarray(observation["observation.state"], dtype=np.float32)
+        if packed.ndim != 1:
+            raise ValueError("RTC observation.state must be a single packed state vector")
+        features = encode_raw_condition(packed[None, :], self.robot_info)
+        return {key.replace("action.", "observation.state."): value[0]
+                for key, value in features.items()}
+
+    def _decode_sample(self, transformed: dict[str, Any]) -> dict[str, Any]:
+        transform = self.server.vla.feature_transform
+        if self.return_relative:
+            # ManiMux adds the observation anchor. unapply() would already add
+            # it here (and reverse the packed keys), causing double anchoring.
+            native = transform.reverse_pad_and_concat(transformed)
+            return transform.normalizer.unnormalize(native)
+        return transform.unapply(transformed)
 
     def infer(
         self,
@@ -281,13 +308,7 @@ class LingBotRtcBridge:
         beta: float,
     ) -> dict[str, np.ndarray]:
         raw_actions = encode_raw_condition(action_condition, self.robot_info)
-        current_state = {
-            key: np.asarray(observation[key], dtype=np.float32)
-            for key in (
-                "observation.state.arm.position",
-                "observation.state.effector.position",
-            )
-        }
+        current_state = self._current_state(observation)
         target, weights = normalize_condition(
             self.server.vla.feature_transform,
             raw_actions,
@@ -335,9 +356,13 @@ class LingBotRtcBridge:
         transformed["actions"] = actions[0].to(dtype=torch.float32, device="cpu")
         if self.server.use_bf16:
             transformed["state"] = transformed["state"].to(torch.float32)
-        result = self.server.vla.feature_transform.unapply(transformed)
+        result = self._decode_sample(transformed)
         output: dict[str, np.ndarray] = {}
-        for key in self.server.action_key:
+        action_keys = (
+            ("action.arm.position", "action.effector.position")
+            if self.return_relative else self.server.action_key
+        )
+        for key in action_keys:
             output[key] = np.asarray(result[key], dtype=np.float32)
             if self.server.use_length > 0:
                 output[key] = output[key][: self.server.use_length]

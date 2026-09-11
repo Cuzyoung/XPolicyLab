@@ -9,6 +9,7 @@ expert_data_num_or_raw_task_dirs=${5:-}
 raw_task_dirs=${6:-}
 
 POLICY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PYTHONPATH="${POLICY_DIR}/openpi/src:${POLICY_DIR}/openpi/packages/openpi-client/src:${POLICY_DIR}/../../..:${PYTHONPATH:-}"
 mode="${OPENPI_DATA_MODE:-image}"
 
 py_args=(

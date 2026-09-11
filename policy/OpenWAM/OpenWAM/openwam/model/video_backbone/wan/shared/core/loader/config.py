@@ -4,8 +4,6 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Union
 
 import torch
-from huggingface_hub import snapshot_download as hf_snapshot_download
-from modelscope import snapshot_download
 
 
 @dataclass
@@ -67,6 +65,11 @@ class ModelConfig:
         downloaded_files = glob.glob(origin_file_pattern, root_dir=os.path.join(self.local_model_path, self.model_id))
         download_source = self.parse_download_source()
         if download_source.lower() == "modelscope":
+            # Keep download clients optional for self-contained checkpoints.
+            # Importing ModelScope eagerly also imports its full hub stack even
+            # when ``path`` is already set and no download will occur.
+            from modelscope import snapshot_download
+
             snapshot_download(
                 self.model_id,
                 local_dir=os.path.join(self.local_model_path, self.model_id),
@@ -75,6 +78,8 @@ class ModelConfig:
                 local_files_only=False,
             )
         elif download_source.lower() == "huggingface":
+            from huggingface_hub import snapshot_download as hf_snapshot_download
+
             hf_snapshot_download(
                 self.model_id,
                 local_dir=os.path.join(self.local_model_path, self.model_id),

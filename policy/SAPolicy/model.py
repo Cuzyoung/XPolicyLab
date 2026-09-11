@@ -231,7 +231,7 @@ class Model(ModelTemplate):
                 raise ValueError(f"intrinsics for {name!r} must be 3x3, got {matrix.shape}")
             Ks[name] = matrix
         first = camera_names[0]
-        return {
+        spatial = {
             "left_endpose": _xyzw_to_wxyz_endpose(payload["left_endpose"]),
             "right_endpose": _xyzw_to_wxyz_endpose(payload["right_endpose"]),
             "left_gripper": float(payload["left_gripper"]),
@@ -242,3 +242,7 @@ class Model(ModelTemplate):
             "image": images[first],
             "intrinsic_cv": Ks[first],
         }
+        native_hw = payload.get("image_native_hw")
+        if native_hw is not None:
+            spatial["image_native_hw"] = native_hw
+        return spatial

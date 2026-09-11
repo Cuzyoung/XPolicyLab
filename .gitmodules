@@ -5,3 +5,6 @@
 [submodule "policy/Cosmos3/cosmos-framework"]
 	path = policy/Cosmos3/cosmos-framework
 	url = https://github.com/NVIDIA/cosmos-framework.git
+[submodule "policy/Isaac_05/lerobot"]
+	path = policy/Isaac_05/lerobot
+	url = https://github.com/perceptron-ai-inc/lerobot.git

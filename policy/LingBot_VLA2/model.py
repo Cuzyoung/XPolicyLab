@@ -472,11 +472,7 @@ def validate_deployment(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
         "action_semantics": action_semantics,
         "action_horizon": action_horizon,
         "native_hz": native_hz,
-        "rtc_capability": (
-            "pi_guided_v1_sampler"
-            if action_semantics == ABSOLUTE_ACTION_SEMANTICS
-            else "blocked_relative_action_contract"
-        ),
+        "rtc_capability": "pi_guided_v1_sampler",
         "errors": errors,
     }
 
@@ -611,11 +607,12 @@ class Model(ModelTemplate):
         self._observations: list[dict[str, Any]] | None = None
         self._latest_env_idx_list = [0]
         self.model = self._load_official_server()
-        self._rtc_bridge = None
-        if self.action_semantics == ABSOLUTE_ACTION_SEMANTICS:
-            from .rtc import LingBotRtcBridge
+        from .rtc import LingBotRtcBridge
 
-            self._rtc_bridge = LingBotRtcBridge(self.model, self.robot_info)
+        self._rtc_bridge = LingBotRtcBridge(
+            self.model, self.robot_info,
+            return_relative=self.action_semantics == RELATIVE_ACTION_SEMANTICS,
+        )
 
     def _load_official_server(self):
         source_root = _resolve_path(self.model_cfg["lingbot_vla2_root"], name="lingbot_vla2_root")
@@ -669,12 +666,7 @@ class Model(ModelTemplate):
     def get_action(self, **_: Any) -> object:
         return self.get_action_batch([self._latest_env_idx_list[0]])[0]
 
-    def get_action_rtc(self, sampling: Mapping[str, Any]) -> list[dict[str, np.ndarray]]:
-        if self.action_semantics != ABSOLUTE_ACTION_SEMANTICS or self._rtc_bridge is None:
-            raise ValueError(
-                "LingBot-VLA2 RTC is unavailable for anchor-relative checkpoints; "
-                "their condition must first receive a model-native relative-action RTC contract"
-            )
+    def get_action_rtc(self, sampling: Mapping[str, Any]) -> object:
         if self._observations is None or len(self._observations) != 1:
             raise RuntimeError("RTC requires exactly one update_obs observation")
         required = {"action_condition", "condition_weights", "beta"}
@@ -703,7 +695,10 @@ class Model(ModelTemplate):
         result = self._rtc_bridge.infer(
             self._observations[0], condition, weights, beta
         )
-        return decode_actions(result, self.robot_info)
+        decoded = decode_actions(result, self.robot_info)
+        if self.action_semantics == ABSOLUTE_ACTION_SEMANTICS:
+            return decoded
+        return {"actions": decoded, "action_semantics": RELATIVE_ACTION_SEMANTICS}
 
     def _infer_one(self, observation: Mapping[str, Any]) -> object:
         if self.action_semantics == ABSOLUTE_ACTION_SEMANTICS:
@@ -750,10 +745,7 @@ class Model(ModelTemplate):
         }
 
     def sampling_modes(self) -> list[str]:
-        modes = ["default"]
-        if self.action_semantics == ABSOLUTE_ACTION_SEMANTICS:
-            modes.append("rtc")
-        return modes
+        return ["default", "rtc"]
 
     def reset(self) -> None:
         self._observations = None
