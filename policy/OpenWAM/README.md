@@ -121,4 +121,4 @@ bash eval.sh RoboDojo stack_bowls New_OpenWAM_RoboDojo_SFT_60k arx_x5 ee 0 0 0 \
 | `OPENWAM_RESUME_CKPT_PATH` | Resume directory for official `training.resume_ckpt_path`. |
 | `OPENWAM_ALLOW_DUMMY_POLICY` | Debug-only: skip checkpoint load and return hold-position chunks. |
 
-`eval_batch: true` stacks every running env into one `engine.generate_batch` forward. `model.py` re-forces `dit_cache` / `compile` / `decode_video` off and `inference_mode=sync`. `device: cuda` loads Wan, UMT5-XXL, and ActionDiT on GPU, matching official OpenWAM deploy.
+`eval_batch: true` stacks every running env into one `engine.generate_batch` forward and forces `dit_cache` / `compile` off. Single-stream deployment uses `engine.generate` and may enable both optimizations. `model.py` always forces `decode_video` off and `inference_mode=sync`. `device: cuda` loads Wan, UMT5-XXL, and ActionDiT on GPU, matching official OpenWAM deploy.

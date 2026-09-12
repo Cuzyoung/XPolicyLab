@@ -3,9 +3,10 @@
 Loads the OpenWAM checkpoint in-process through the standard deploy path
 (``openwam.deploy.server.build_server_from_config`` — the same construction
 the JSON WebSocket server and ``scripts/verify_batch_equivalence.py`` use),
-then serves XPolicyLab's batched eval protocol. Every ``get_action_batch``
-call stacks all running envs into ONE ``engine.generate_batch`` forward pass
-(true batch inference; local YAM GPU validation is still required).
+then serves XPolicyLab's single-robot and batched eval protocols. Single-stream
+inference uses ``engine.generate`` so OpenWAM's compile and DiT-cache fast paths
+remain available; ``eval_batch: true`` stacks running envs into one
+``engine.generate_batch`` forward pass.
 
 Coordinate contract (must mirror training — ``openwam/dataloader/robodojo.py``):
 
@@ -22,7 +23,8 @@ Coordinate contract (must mirror training — ``openwam/dataloader/robodojo.py``
                                    right_ee_pose, right_ee_joint_state}
 
 Correctness-first settings are re-forced at load time regardless of the yaml:
-dit_cache off, compile off, decode_video off, sync executor.
+decode_video off and sync executor. True batch inference additionally forces
+dit_cache and compile off because those paths carry single-stream state.
 """
 
 from __future__ import annotations
@@ -69,6 +71,34 @@ def _is_none_like(value: Any) -> bool:
     if value is None:
         return True
     return isinstance(value, str) and value.strip().lower() in {"", "none", "null"}
+
+
+def _configure_deploy_runtime(deploy_cfg, model_cfg: Mapping[str, Any]) -> bool:
+    """Apply XPolicy mode constraints and return whether true batching is enabled."""
+    from omegaconf import OmegaConf
+
+    eval_batch = _is_true(model_cfg.get("eval_batch", False))
+    if eval_batch:
+        OmegaConf.update(deploy_cfg, "optimization.dit_cache.enabled", False, merge=False)
+        OmegaConf.update(deploy_cfg, "optimization.compile.enabled", False, merge=False)
+    else:
+        if "dit_cache_enabled" in model_cfg:
+            OmegaConf.update(
+                deploy_cfg,
+                "optimization.dit_cache.enabled",
+                _is_true(model_cfg["dit_cache_enabled"]),
+                merge=False,
+            )
+        if "compile_enabled" in model_cfg:
+            OmegaConf.update(
+                deploy_cfg,
+                "optimization.compile.enabled",
+                _is_true(model_cfg["compile_enabled"]),
+                merge=False,
+            )
+    OmegaConf.update(deploy_cfg, "optimization.decode_video", False, merge=False)
+    OmegaConf.update(deploy_cfg, "inference.inference_mode", "sync", merge=False)
+    return eval_batch
 
 
 def _resolve_ckpt_dir(model_cfg: dict) -> Path:
@@ -250,6 +280,7 @@ class Model(ModelTemplate):
     def __init__(self, model_cfg):
         self.model_cfg = dict(model_cfg)
         self._metadata = validate_deployment(self.model_cfg)
+        self.eval_batch = _is_true(self.model_cfg.get("eval_batch", False))
 
         action_type = self.model_cfg.get("action_type") or "ee"
         if action_type != "ee":
@@ -335,13 +366,7 @@ class Model(ModelTemplate):
         from openwam.deploy.server import _load_deploy_yaml, build_server_from_config
 
         deploy_cfg = _load_deploy_yaml(deploy_config)
-        # Correctness-first: batch inference forbids the single-stream /
-        # shape-sensitive acceleration paths. Force them off even if the yaml
-        # drifts; engine.generate_batch fails fast if these were re-enabled.
-        OmegaConf.update(deploy_cfg, "optimization.dit_cache.enabled", False, merge=False)
-        OmegaConf.update(deploy_cfg, "optimization.compile.enabled", False, merge=False)
-        OmegaConf.update(deploy_cfg, "optimization.decode_video", False, merge=False)
-        OmegaConf.update(deploy_cfg, "inference.inference_mode", "sync", merge=False)
+        self.eval_batch = _configure_deploy_runtime(deploy_cfg, self.model_cfg)
 
         print(f"[OpenWAM] loading checkpoint from {ckpt_dir} on {device} ...")
         server = build_server_from_config(deploy_cfg, ckpt_dir, device=device)
@@ -363,6 +388,7 @@ class Model(ModelTemplate):
             self.replan_steps = None if horizon is None else int(horizon)
 
         resolved = {
+            "execution_path": "generate_batch" if self.eval_batch else "generate",
             "denoise_steps": OmegaConf.select(server.cfg, "inference.denoise_steps"),
             "denoise_mode": OmegaConf.select(server.cfg, "inference.denoise_mode"),
             "num_frames": OmegaConf.select(server.cfg, "inference.num_frames"),
@@ -462,11 +488,14 @@ class Model(ModelTemplate):
         chunk = np.asarray(chunk)
         if chunk.ndim != 2 or chunk.shape[1] != 20 or not np.isfinite(chunk).all():
             raise ValueError("OpenWAM actions must be finite EEF20 chunks")
-        if np.any(chunk[:, [9, 19]] < 0) or np.any(chunk[:, [9, 19]] > 1):
-            raise ValueError("OpenWAM actions contain nonphysical grippers")
         left_pose, left_grip, right_pose, right_grip = self._poses.eef20_to_arms(
             np.asarray(chunk, dtype=np.float64)
         )
+        # Flow matching is unconstrained and can overshoot the continuous
+        # training range slightly after unnormalization. Enforce the physical
+        # YAM gripper contract at the embodiment boundary.
+        left_grip = np.clip(left_grip, 0.0, 1.0)
+        right_grip = np.clip(right_grip, 0.0, 1.0)
         if self._calibration is None:
             return [
                 {
@@ -485,8 +514,6 @@ class Model(ModelTemplate):
         right_world = self._poses.robot_base_to_env_relative_world(
             right_pose, right["base_pos_relative_to_env_origin"], right["base_quat_wxyz"]
         )
-        left_grip = np.clip(left_grip, 0.0, 1.0)
-        right_grip = np.clip(right_grip, 0.0, 1.0)
         return [
             {
                 "left_ee_pose": left_world[t].astype(np.float32),
@@ -531,6 +558,22 @@ class Model(ModelTemplate):
             return {"actions": actions, "action_semantics": "absolute_per_arm_base_xyz_wxyz"}
         return actions
 
+    def _generate_single(self, payload: dict) -> list[dict]:
+        result = self._engine.generate(self._conditions(payload))
+        actions = result["actions"]
+        if hasattr(actions, "cpu"):
+            actions = actions.detach().cpu().numpy()
+        actions = np.asarray(actions)
+        if actions.ndim != 2 or actions.shape[1] != _EEF20_DIM:
+            raise RuntimeError(
+                f"generate returned actions of shape {actions.shape}; expected (T, {_EEF20_DIM})."
+            )
+        actions = self._wam_policy._project_binary_dims(actions)
+        n_exec = actions.shape[0]
+        if self.replan_steps is not None:
+            n_exec = min(self.replan_steps, n_exec)
+        return self._eef20_chunk_to_native(actions[:n_exec])
+
     def get_action_batch(self, env_idx_list=None):
         if env_idx_list is None:
             env_idx_list = list(self._order)
@@ -553,6 +596,9 @@ class Model(ModelTemplate):
 
         if self.allow_dummy_policy:
             return [self._hold_position_chunk(p) for p in payloads]
+
+        if not self.eval_batch:
+            return [self._generate_single(payload) for payload in payloads]
 
         conditions = [self._conditions(p) for p in payloads]
         result = self._engine.generate_batch(conditions)

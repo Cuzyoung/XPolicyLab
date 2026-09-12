@@ -191,7 +191,17 @@ def load_from_checkpoint_dir(
             vlm_cfg["checkpoint_path"] = vlm_dir
             logger.info("Using self-contained VLM checkpoint from %s", vlm_dir)
 
-    architecture = build_architecture(resolved_arch.registry_name, params)
+    # Dual-system checkpoints are fully self-contained in the unified
+    # safetensors file. Constructing their 5B backbone normally creates an
+    # FP32 CPU copy before loading the BF16 checkpoint, which can exceed host
+    # RAM. Build an allocation-free meta skeleton and map checkpoint tensors
+    # directly onto the requested deployment device instead.
+    direct_device_load = resolved_arch.canonical.framework == "dual_system"
+    if direct_device_load:
+        with torch.device("meta"):
+            architecture = build_architecture(resolved_arch.registry_name, params)
+    else:
+        architecture = build_architecture(resolved_arch.registry_name, params)
     logger.info(
         "Architecture: %s (framework=%s variant=%s)",
         resolved_arch.registry_name,
@@ -200,7 +210,10 @@ def load_from_checkpoint_dir(
     )
 
     # 4. Load all weights from checkpoint
-    architecture.load_checkpoint(ckpt_path)
+    architecture.load_checkpoint(
+        ckpt_path,
+        device=device if direct_device_load else None,
+    )
 
     # 5. Move to device and set eval mode — top-down: architecture → video_backbone → submodules.
     _mp = OmegaConf.select(cfg, "training.mixed_precision", default="bf16")
