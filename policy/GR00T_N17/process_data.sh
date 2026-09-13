@@ -170,6 +170,14 @@ PY
 }
 
 install_conversion_deps() {
+  if [[ "${GR00T_ALLOW_INSTALL:-1}" == 0 ]]; then
+    if [[ ! -x "${CONVERT_PYTHON}" ]]; then
+      echo "Provide an existing GR00T_CONVERT_ENV_DIR; automatic installation is disabled." >&2
+      exit 1
+    fi
+    "${CONVERT_PYTHON}" -c 'import lerobot, imageio_ffmpeg'
+    return
+  fi
   if [[ ! -x "${CONVERT_PYTHON}" ]]; then
     echo "[GR00T_N17] Creating isolated LeRobot conversion environment..."
     uv venv --python 3.10 "${CONVERT_ENV_DIR}"
