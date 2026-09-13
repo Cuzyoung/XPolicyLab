@@ -1,0 +1,31 @@
+_target_: sapolicy.callbacks.robomimic_eval.RobomimicEvalCallback
+eval_every_n_steps: 0  # 0 = disabled; use eval_every_n_epochs instead
+eval_every_n_epochs: 50
+
+eval_policy_cfg:
+  env_type: robomimic
+  dataset_path: ${env:workspace}/datasets/cpgen/datasets/generated/NutAssemlySquare/nutassembly-7view-matched.hdf5
+  output_dir: ${output_dir}/eval/during_train
+  n_test: 100
+  n_test_vis: 4
+  n_envs: 20
+  n_obs_steps: ${obs_hist_length}
+  n_action_steps: 16
+  max_steps: 450  # CP-Gen Square/NutAssembly default; override per-task (Kitchen=1000, 3PA=600)
+  action_sequence_length: ${action_sequence_length}
+  action_orn_mode: ${action_orn_mode}
+  abs_action: false
+  relative_action: true
+  normalize_actions: true
+  body_frame_actions: true
+  camera_names: [agentview, robot0_eye_in_hand]
+  camera_height: 256
+  camera_width: 256
+  camera_depths: false
+  min_depth: ${min_depth}
+  max_depth: ${max_depth}
+  video_render_camera: agentview
+  test_init_from_dataset: false
+  render_obs_key: agentview_image
+  fps: 10
+  transforms: configs/components/transforms/transforms_eval_84.yaml

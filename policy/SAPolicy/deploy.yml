@@ -1,0 +1,25 @@
+bench_name: null
+task_name: null
+ckpt_name: null
+env_cfg_type: null
+seed: null
+action_type: null
+gpu_id: null
+policy_name: SAPolicy
+protocol: ws
+host: 127.0.0.1
+port: 8510
+eval_batch: false
+output_format: action_dict
+camera_names:
+- top
+- left
+- right
+action_horizon: 50
+use_ema: false
+tcp_forward_offset_m: 0.0
+dry_run: false
+camera_map:
+  top: cam_head
+  left: cam_left_wrist
+  right: cam_right_wrist

@@ -1,13 +1,14 @@
-"""XPolicyLab shim around ``~/sa/SpatialAlignPolicy``.
+"""SAPolicy YAM adapter: standard RGB/EE observations, actions and isolated batches.
 
-Inference is ``SAPolicyRoboTwinModel`` from that tree. This file only:
-- satisfies the XPolicyLab ``Model`` / dry-run unit tests without importing torch
-- remaps ManiMux xyzw grasp-site / ABC TCP observations onto that server
+The vendored checkpoint sampler owns preprocessing, normalization and diffusion.
+The explicit packed_ee_wire mode retains the previous ManiMux action contract.
 """
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Mapping, Sequence
+from threading import RLock
 from typing import Any
 
 import numpy as np
@@ -15,6 +16,7 @@ from scipy.spatial.transform import Rotation
 
 from XPolicyLab.model_template import ModelTemplate
 from XPolicyLab.policy.SAPolicy import DEFAULT_SAPOLICY_ROOT, ensure_sapolicy_on_path, get_model
+from XPolicyLab.utils.process_data import get_robot_action_dim_info, unpack_robot_state
 
 WIRE_ACTION_DIM = 16
 NATIVE_ACTION_DIM = 20
@@ -59,7 +61,9 @@ def relative_actions_to_wire(
     """
     actions = np.asarray(relative, dtype=np.float64)
     if actions.ndim != 2 or actions.shape[1] != NATIVE_ACTION_DIM:
-        raise ValueError(f"relative actions must have shape (H, {NATIVE_ACTION_DIM}), got {actions.shape}")
+        raise ValueError(
+            f"relative actions must have shape (H, {NATIVE_ACTION_DIM}), got {actions.shape}"
+        )
     if not np.isfinite(actions).all():
         raise ValueError("relative actions contain non-finite values")
 
@@ -90,7 +94,9 @@ def _xyzw_to_wxyz_endpose(endpose: np.ndarray) -> np.ndarray:
 def _wxyz_wire_to_xyzw(wire: np.ndarray) -> np.ndarray:
     actions = np.asarray(wire, dtype=np.float64)
     if actions.ndim != 2 or actions.shape[1] != WIRE_ACTION_DIM:
-        raise ValueError(f"wire actions must have shape (H, {WIRE_ACTION_DIM}), got {actions.shape}")
+        raise ValueError(
+            f"wire actions must have shape (H, {WIRE_ACTION_DIM}), got {actions.shape}"
+        )
     converted = actions.copy()
     for offset in (0, 8):
         wxyz = actions[:, offset + 3 : offset + 7]
@@ -119,10 +125,14 @@ def _camera_image(obs: Mapping[str, Any], name: str) -> np.ndarray:
 
 
 def _load_spatial_align(model_cfg: Mapping[str, Any]) -> Any:
+    from .assets import resolve_assets
+
+    model_cfg = resolve_assets(model_cfg)
     root = ensure_sapolicy_on_path(model_cfg.get("sapolicy_root") or DEFAULT_SAPOLICY_ROOT)
     return get_model(
         {
             "sapolicy_cfg": model_cfg["cfg_file"],
+            "resolved_cfg": model_cfg["resolved_cfg"],
             "ckpt_path": model_cfg["model_path"],
             "workspace": model_cfg.get("workspace", str(root.parent)),
             "n_action_steps": int(model_cfg.get("action_horizon", 16)),
@@ -142,6 +152,23 @@ class Model(ModelTemplate):
         super().__init__()
         cfg = dict(model_cfg or {})
         self._cfg = cfg
+        self._action_type = cfg.get("action_type") or "ee"
+        self._env_cfg_type = cfg.get("env_cfg_type") or "yam_dual"
+        if self._action_type != "ee" or self._env_cfg_type != "yam_dual":
+            raise ValueError("SAPolicy supports env_cfg_type=yam_dual, action_type=ee")
+        self._dimensions = get_robot_action_dim_info(self._env_cfg_type)
+        if self._dimensions != {"arm_dim": [6, 6], "ee_dim": [1, 1]}:
+            raise ValueError("SAPolicy checkpoint requires two YAM arms and scalar grippers")
+        # Shared pack/unpack helpers take representation widths. EE poses have
+        # pos3 + quat4 regardless of the robot's number of arm joints.
+        self._ee_dimensions = {
+            "arm_dim": [7 for _ in self._dimensions["arm_dim"]],
+            "ee_dim": self._dimensions["ee_dim"],
+        }
+        self._output_format = cfg.get("output_format", "action_dict")
+        if self._output_format not in {"action_dict", "packed_ee_wire"}:
+            raise ValueError(f"Unsupported SAPolicy output_format: {self._output_format}")
+        self._camera_map = dict(cfg.get("camera_map") or {})
         self._dry_run = bool(cfg.get("dry_run", False))
         self._horizon = int(cfg.get("action_horizon", 16))
         if self._horizon <= 0:
@@ -154,6 +181,10 @@ class Model(ModelTemplate):
         self._obs: dict[str, Any] | None = None
         self._backend = None if self._dry_run else _load_spatial_align(cfg)
         self.model = self._backend
+        self._history_length = int(getattr(self._backend, "obs_hist", 1))
+        self._histories: dict[int, deque] = {}
+        self._batch_indices: list[int] = []
+        self._lock = RLock()
 
     def _pack_state(
         self,
@@ -168,9 +199,10 @@ class Model(ModelTemplate):
             [
                 left[:3],
                 _quat_xyzw_to_rot6d(left[3:7]),
+                np.array([left_gripper], dtype=np.float64),
                 right[:3],
                 _quat_xyzw_to_rot6d(right[3:7]),
-                np.array([left_gripper, right_gripper], dtype=np.float64),
+                np.array([right_gripper], dtype=np.float64),
             ]
         )
 
@@ -181,45 +213,154 @@ class Model(ModelTemplate):
             "horizon_steps": self._horizon,
             "dry_run": self._dry_run,
             "camera_names": list(self._camera_names),
+            "output_format": self._output_format,
+            "batch_mode": "sequential_isolated_histories",
+            "rtc_condition_format": "absolute_model_frame_ee_wxyz_16",
         }
 
+    def sampling_modes(self) -> list[str]:
+        if self._dry_run:
+            return ["default"]
+        pipeline = getattr(getattr(self._backend, "policy", None), "pipeline", None)
+        head = getattr(pipeline, "action_head", None)
+        if (
+            self._body_frame
+            and callable(getattr(head, "rtc_condition", None))
+            and getattr(head, "sequence_length", None) == self._horizon
+            and getattr(head, "action_dim", None) == NATIVE_ACTION_DIM
+        ):
+            return ["default", "rtc"]
+        return ["default"]
+
     def reset(self) -> None:
-        self._obs = None
-        if self._backend is not None:
-            self._backend.reset_model()
+        with self._lock:
+            self._obs = None
+            self._histories.clear()
+            self._batch_indices.clear()
+            if self._backend is not None:
+                self._backend.reset_model()
 
     def update_obs(self, obs: Mapping[str, Any]) -> bool:
         if not isinstance(obs, Mapping):
             raise TypeError("SAPolicy update_obs requires an observation mapping")
-        self._obs = dict(obs)
-        if self._backend is not None:
-            self._backend.update_obs(self._to_spatial_obs(self._obs))
+        with self._lock:
+            self._store_observation(-1, obs)
+            self._obs = dict(obs)
         return True
 
-    def get_action(self) -> np.ndarray:
-        if self._obs is None:
-            raise RuntimeError("get_action called before any update_obs")
-        payload = _sapolicy_payload(self._obs)
-        left = _as_endpose(payload["left_endpose"])
-        right = _as_endpose(payload["right_endpose"])
-        left_grip = float(payload["left_gripper"])
-        right_grip = float(payload["right_gripper"])
+    def _store_observation(self, index: int, obs: Mapping[str, Any]) -> None:
+        spatial = self._to_spatial_obs(obs)
+        history = self._histories.setdefault(index, deque(maxlen=self._history_length))
+        if not history:
+            history.extend([spatial] * self._history_length)
+        else:
+            history.append(spatial)
+
+    def update_obs_batch(self, obs_list: Sequence[Mapping[str, Any]]) -> bool:
+        indices = [int(obs.get("env_idx", i)) for i, obs in enumerate(obs_list)]
+        if len(indices) != len(set(indices)) or any(i < 0 for i in indices):
+            raise ValueError("Batch observations require distinct nonnegative env_idx values")
+        with self._lock:
+            for index, obs in zip(indices, obs_list, strict=True):
+                self._store_observation(index, obs)
+            self._batch_indices = indices
+        return True
+
+    def get_action(self):
+        with self._lock:
+            if self._obs is None:
+                raise RuntimeError("get_action called before any update_obs")
+            return self._action_for(-1)
+
+    def get_action_rtc(self, sampling: Mapping[str, Any]):
+        """Condition the actual DiT sampler on absolute EE16 (WXYZ) actions."""
+        with self._lock:
+            if "rtc" not in self.sampling_modes():
+                raise NotImplementedError(
+                    "RTC requires a real DiT checkpoint with its full horizon"
+                )
+            if self._obs is None:
+                raise RuntimeError("get_action_rtc called before any update_obs")
+            condition = np.asarray(sampling["action_condition"], dtype=np.float64)
+            weights = np.asarray(sampling["condition_weights"], dtype=np.float64)
+            beta = float(sampling.get("beta", 5.0))
+            if condition.shape != (self._horizon, WIRE_ACTION_DIM):
+                raise ValueError(
+                    f"RTC action_condition must be ({self._horizon}, {WIRE_ACTION_DIM})"
+                )
+            if weights.shape != (self._horizon,):
+                raise ValueError(f"RTC condition_weights must be ({self._horizon},)")
+            if not np.isfinite(condition).all() or not np.isfinite(weights).all():
+                raise ValueError("RTC condition and weights must be finite")
+            if np.any((weights < 0) | (weights > 1)) or not np.isfinite(beta) or beta <= 0:
+                raise ValueError(
+                    "RTC weights must be in [0,1] and beta must be positive and finite"
+                )
+            for offset in (3, 11):
+                if np.any(np.linalg.norm(condition[:, offset : offset + 4], axis=-1) < 1e-8):
+                    raise ValueError("RTC conditions require nonzero WXYZ quaternions")
+            return self._action_for(
+                -1,
+                {
+                    "action_condition": condition,
+                    "condition_weights": weights,
+                    "beta": beta,
+                },
+            )
+
+    def get_action_batch(self, env_idx_list=None):
+        with self._lock:
+            indices = self._batch_indices if env_idx_list is None else list(env_idx_list)
+            if env_idx_list is None and not indices:
+                raise RuntimeError("Batch action requested before observation")
+            if len(indices) != len(set(indices)):
+                raise ValueError("Duplicate batch environment indices")
+            if any(i not in self._histories for i in indices):
+                raise RuntimeError("Batch action requested before observation")
+            return [self._action_for(i) for i in indices]
+
+    def _action_for(self, index: int, rtc_sampling=None):
+        history = self._histories[index]
+        spatial = history[-1]
         if self._dry_run:
             row = np.concatenate(
-                [left, np.array([left_grip]), right, np.array([right_grip])]
+                [
+                    spatial["left_endpose"],
+                    [spatial["left_gripper"]],
+                    spatial["right_endpose"],
+                    [spatial["right_gripper"]],
+                ]
             )
-            return np.broadcast_to(row, (self._horizon, WIRE_ACTION_DIM)).copy()
-        assert self._backend is not None
-        wire = np.asarray(self._backend.get_action(), dtype=np.float64)
+            wire = np.broadcast_to(row, (self._horizon, WIRE_ACTION_DIM)).copy()
+        else:
+            assert self._backend is not None
+            # RPC calls may run on different worker threads. Install the selected
+            # environment's complete history immediately before its forward pass.
+            self._backend.reset_model()
+            for frame in history:
+                self._backend.update_obs(frame)
+            output = (
+                self._backend.get_action()
+                if rtc_sampling is None
+                else self._backend.get_action(rtc_sampling=rtc_sampling)
+            )
+            wire = np.asarray(output, dtype=np.float64)
         converted = _wxyz_wire_to_xyzw(wire)
         if converted.shape != (self._horizon, WIRE_ACTION_DIM):
             raise ValueError(
                 f"SAPolicy wire actions must have shape ({self._horizon}, {WIRE_ACTION_DIM}), "
                 f"got {converted.shape}"
             )
-        return converted
+        if not np.isfinite(converted).all():
+            raise ValueError("SAPolicy returned non-finite actions")
+        if self._output_format == "packed_ee_wire":
+            return converted
+        return unpack_robot_state(wire, "ee", self._ee_dimensions)
 
     def _to_spatial_obs(self, obs: Mapping[str, Any]) -> dict[str, Any]:
+        extra = obs.get("additional_info") or {}
+        if "left_ee_pose" in obs.get("state", {}) or not isinstance(extra.get("sapolicy"), Mapping):
+            return self._standard_observation(obs)
         payload = _sapolicy_payload(obs)
         camera_names = [str(name) for name in payload.get("camera_names", self._camera_names)]
         intrinsics = payload.get("intrinsics") or {}
@@ -246,3 +387,34 @@ class Model(ModelTemplate):
         if native_hw is not None:
             spatial["image_native_hw"] = native_hw
         return spatial
+
+    def _standard_observation(self, obs: Mapping[str, Any]) -> dict[str, Any]:
+        state = obs["state"]
+        metadata = (obs.get("additional_info") or {}).get("sapolicy") or {}
+        result: dict[str, Any] = {"camera_names": list(self._camera_names)}
+        for side in ("left", "right"):
+            # Standard XPolicyLab poses already use wxyz, as does the sampler.
+            result[f"{side}_endpose"] = _as_endpose(state[f"{side}_ee_pose"])
+            grip = np.asarray(state[f"{side}_ee_joint_state"], dtype=np.float64)
+            if grip.shape != (1,) or not np.isfinite(grip).all():
+                raise ValueError(f"{side}_ee_joint_state must contain one finite aperture")
+            result[f"{side}_gripper"] = float(grip[0])
+        images, intrinsics, native_hw = {}, {}, {}
+        for name in self._camera_names:
+            source = self._camera_map.get(name, name)
+            view = obs["vision"][source]
+            images[name] = _camera_image(obs, source)
+            matrix = np.asarray(
+                view.get("intrinsic_matrix", (metadata.get("intrinsics") or {}).get(name)),
+                dtype=np.float64,
+            )
+            if matrix.shape != (3, 3) or not np.isfinite(matrix).all():
+                raise ValueError(f"Invalid intrinsic_matrix for {source}")
+            intrinsics[name] = matrix
+            native_hw[name] = list(
+                (metadata.get("image_native_hw") or {}).get(
+                    name, view.get("shape", images[name].shape[:2])
+                )[:2]
+            )
+        result.update(images=images, intrinsics=intrinsics, image_native_hw=native_hw)
+        return result

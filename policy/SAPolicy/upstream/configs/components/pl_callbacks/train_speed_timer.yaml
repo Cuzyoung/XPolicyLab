@@ -1,0 +1,2 @@
+_target_: sapolicy.callbacks.train_speed_timer.TrainSpeedTimer
+N_avg: 1

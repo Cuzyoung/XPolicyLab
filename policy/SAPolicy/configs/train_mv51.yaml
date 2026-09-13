@@ -1,0 +1,430 @@
+action_orn_mode: 6d
+action_sequence_length: 50
+callbacks:
+  model_checkpoint:
+    _target_: pytorch_lightning.callbacks.ModelCheckpoint
+    dirpath: ${output_dir}/checkpoints
+    filename: step-{step:08d}
+    every_n_train_steps: 1000
+    save_last: true
+    save_top_k: -1
+confirm_delete_previous_dir: false
+data:
+  _target_: sapolicy.datamodule.general_datamodule.GeneralDataModule
+  train_dataset:
+    balanced_sampling: true
+    dataset_opts:
+    - _target_: sapolicy.dataset.abc_episode.AbcEpisodeDataset
+      action_orn_mode: 6d
+      action_sequence_length: '50'
+      arm_obs_prefixes:
+      - left
+      - right
+      body_frame_actions: true
+      camera_pair_choices:
+        canonical_names:
+        - top
+        - left
+        - right
+        choices:
+        - - top
+          - left
+          - right
+        - - gemini305
+          - left
+          - right
+        - - gemini335
+          - left
+          - right
+        enumerate_all: true
+      cpgen_absolute_actions: true
+      data_root: ${oc.env:SAPOLICY_TELEOP_DATA}
+      dataset_name: TeleopBottlesMV51
+      dataset_type: cpgen
+      max_depth: '5.0'
+      min_depth: '0.1'
+      mjcf_path: ${oc.env:SAPOLICY_STATION_MJCF}
+      norm_type: minmax
+      normalize_actions: true
+      normalizer_load_path: ${oc.env:SAPOLICY_NORMALIZER}
+      num_arms: 2
+      obs_hist_length: '1'
+      observation_keys:
+      - image
+      - robot0_eef_pos
+      - robot0_eef_quat
+      - robot0_eef_quat_site
+      - robot0_joint_pos
+      - robot0_gripper_qpos
+      - tcp_pixel_coords
+      - tcp_pos
+      - tcp_orn
+      split: train
+      split_seed: 42
+      task_description: put the plastic bottles in the bin
+      tcp_label_camera: top
+      tcp_labels_root: null
+      tcp_orn_already_aligned: true
+      transforms:
+      - _target_: sapolicy.dataset.transform.Resize
+        ensure_multiple_of: 14
+        height: 168
+        resize_lowres: true
+        resize_target: true
+        width: 224
+      - _target_: sapolicy.dataset.transform.PrepareForNet
+      use_agentview: true
+      use_depth: false
+      use_eye_in_hand: true
+      use_relative_actions: 'True'
+      use_state: 'True'
+      use_task_description: true
+      use_train_val_split: false
+      video_backend: auto
+    - _target_: sapolicy.dataset.abc_episode.AbcEpisodeDataset
+      action_orn_mode: 6d
+      action_sequence_length: '50'
+      arm_obs_prefixes:
+      - left
+      - right
+      body_frame_actions: true
+      camera_names:
+      - top
+      - left
+      - right
+      cpgen_absolute_actions: true
+      data_root: ${oc.env:SAPOLICY_ABC_REAL_DATA}
+      dataset_name: AbcBottlesReal168Top
+      dataset_type: cpgen
+      max_depth: '5.0'
+      min_depth: '0.1'
+      mjcf_path: ${oc.env:SAPOLICY_STATION_MJCF}
+      norm_type: minmax
+      normalize_actions: true
+      normalizer_load_path: ${oc.env:SAPOLICY_NORMALIZER}
+      num_arms: 2
+      obs_hist_length: '1'
+      observation_keys:
+      - image
+      - robot0_eef_pos
+      - robot0_eef_quat
+      - robot0_eef_quat_site
+      - robot0_joint_pos
+      - robot0_gripper_qpos
+      - tcp_pixel_coords
+      - tcp_pos
+      - tcp_orn
+      split: train
+      split_seed: 42
+      task_description: put the plastic bottles in the bin
+      tcp_labels_root: null
+      tcp_orn_already_aligned: true
+      transforms:
+      - _target_: sapolicy.dataset.transform.Resize
+        ensure_multiple_of: 14
+        height: 168
+        resize_lowres: true
+        resize_target: true
+        width: 224
+      - _target_: sapolicy.dataset.transform.PrepareForNet
+      use_agentview: true
+      use_depth: false
+      use_eye_in_hand: true
+      use_relative_actions: 'True'
+      use_state: 'True'
+      use_task_description: true
+      use_train_val_split: false
+      video_backend: auto
+    - _target_: sapolicy.dataset.abc_episode.AbcEpisodeDataset
+      action_orn_mode: 6d
+      action_sequence_length: '50'
+      arm_obs_prefixes:
+      - left
+      - right
+      body_frame_actions: true
+      camera_names:
+      - top
+      - left
+      - right
+      cpgen_absolute_actions: true
+      data_root: ${oc.env:SAPOLICY_ABC_SIM_DATA}
+      dataset_name: AbcBottlesSim168Top
+      dataset_type: cpgen
+      max_depth: '5.0'
+      min_depth: '0.1'
+      mjcf_path: ${oc.env:SAPOLICY_STATION_MJCF}
+      norm_type: minmax
+      normalize_actions: true
+      normalizer_load_path: ${oc.env:SAPOLICY_NORMALIZER}
+      num_arms: 2
+      obs_hist_length: '1'
+      observation_keys:
+      - image
+      - robot0_eef_pos
+      - robot0_eef_quat
+      - robot0_eef_quat_site
+      - robot0_joint_pos
+      - robot0_gripper_qpos
+      - tcp_pixel_coords
+      - tcp_pos
+      - tcp_orn
+      split: train
+      split_seed: 42
+      task_description: put the plastic bottles in the bin
+      tcp_labels_root: null
+      tcp_orn_already_aligned: true
+      transforms:
+      - _target_: sapolicy.dataset.transform.Resize
+        ensure_multiple_of: 14
+        height: 168
+        resize_lowres: true
+        resize_target: true
+        width: 224
+      - _target_: sapolicy.dataset.transform.PrepareForNet
+      use_agentview: true
+      use_depth: false
+      use_eye_in_hand: true
+      use_relative_actions: 'True'
+      use_state: 'True'
+      use_task_description: true
+      use_train_val_split: false
+      video_backend: auto
+  train_loader_opts:
+    batch_size: 128
+    drop_last: true
+    num_workers: 20
+    persistent_workers: true
+    pin_memory: true
+    prefetch_factor: 4
+    shuffle: true
+  val_dataset:
+    dataset_opts:
+    - _target_: sapolicy.dataset.abc_episode.AbcEpisodeDataset
+      action_orn_mode: 6d
+      action_sequence_length: '50'
+      arm_obs_prefixes:
+      - left
+      - right
+      body_frame_actions: true
+      camera_names:
+      - top
+      - left
+      - right
+      cpgen_absolute_actions: true
+      data_root: ${oc.env:SAPOLICY_ABC_REAL_DATA}
+      dataset_name: AbcBottlesReal168Top
+      dataset_type: cpgen
+      max_depth: '5.0'
+      min_depth: '0.1'
+      mjcf_path: ${oc.env:SAPOLICY_STATION_MJCF}
+      norm_type: minmax
+      normalize_actions: true
+      normalizer_load_path: ${oc.env:SAPOLICY_NORMALIZER}
+      num_arms: 2
+      obs_hist_length: '1'
+      observation_keys:
+      - image
+      - robot0_eef_pos
+      - robot0_eef_quat
+      - robot0_eef_quat_site
+      - robot0_joint_pos
+      - robot0_gripper_qpos
+      - tcp_pixel_coords
+      - tcp_pos
+      - tcp_orn
+      split: train
+      split_seed: 42
+      task_description: put the plastic bottles in the bin
+      tcp_labels_root: null
+      tcp_orn_already_aligned: true
+      transforms:
+      - _target_: sapolicy.dataset.transform.Resize
+        ensure_multiple_of: 14
+        height: 168
+        resize_lowres: true
+        resize_target: true
+        width: 224
+      - _target_: sapolicy.dataset.transform.PrepareForNet
+      use_agentview: true
+      use_depth: false
+      use_eye_in_hand: true
+      use_relative_actions: 'True'
+      use_state: 'True'
+      use_task_description: true
+      use_train_val_split: false
+      video_backend: auto
+  val_loader_opts:
+    batch_size: 128
+    drop_last: false
+    num_workers: 0
+    persistent_workers: false
+    pin_memory: false
+    shuffle: false
+entry: train_net
+exp_name: dinov2lfrz_yam_bottles_ft_teleopMV51_from_abc_notcpkv_rot5_dit_8gpu_bs1024
+experiment_description: 'Multiview teleop fine-tune from the ABC production EMA: 51
+  five-camera teleop episodes with camera_pair_choices (top / gemini305 / gemini335
+  equally weighted into the canonical top slot), wrists fixed; the two Gemini side
+  views have no extrinsics so tcp_label_camera=top zeroes their tcp_valid and they
+  train the action head only. Otherwise identical to the ft_teleop50 recipe: lr 1e-4,
+  warmup 500, 6k steps, balanced 1/3 teleop + 1/3 ABC real + 1/3 ABC sim.'
+local_rank: 0
+max_depth: 5.0
+min_depth: 0.1
+model:
+  _target_: sapolicy.trainers.sa_policy.SAPolicyModel
+  clear_output_dir: false
+  depth_error_threshold: 0.05
+  direction_error_threshold: 0.1
+  ema:
+    _target_: sapolicy.trainers.ema.EMAModel
+    inv_gamma: 1.0
+    max_value: 0.9999
+    min_value: 0.0
+    power: 0.75
+  lr_table:
+    _target_: sapolicy.trainers.lr_table.LRTable
+    decay_table:
+      _dummy_variable: 0.0
+      bias: 0.0
+      camera_embed: 0.0
+      cond_pos_enc: 0.0
+      pos_enc: 0.0
+      spatial_pos_enc: 0.0
+      time_pos_enc: 0.0
+    default_lr: 0.0001
+    default_weight_decay: 0.01
+    else_table:
+      pretrained: 0.000285
+  max_depth: '5.0'
+  min_depth: '0.1'
+  optimizer:
+    _partial_: true
+    _target_: torch.optim.AdamW
+    betas:
+    - 0.95
+    - 0.999
+    eps: 1.0e-08
+    lr: 0.0001
+    weight_decay: 0.01
+  output_dir: ${output_dir}
+  output_tag: dinov2lfrz_yam_bottles_realsim_3cam_tcp_obs1_h50_s10_state_dit_8gpu_bs512
+  pipeline:
+    _target_: sapolicy.models.sa_policy.SAPolicy
+    action_cfg:
+      action_dim: 20
+      action_head_class: DiTActionHead
+      action_part_dims:
+      - 18
+      - 2
+      disable_tcp_additive_bias: true
+      disable_tcp_kv: true
+      dropout: 0.1
+      embed_dim: 1024
+      geo_mode: ray_depth
+      num_cameras: '3'
+      num_diffusion_draws: 1
+      num_heads: 16
+      num_inference_steps: 10
+      num_layers: 12
+      num_tcp: 2
+      obs_hist_length: '1'
+      patch_size: 14
+      sequence_length: '50'
+      skip_patch_kv_proj: false
+      state_dim: '20'
+      use_last_frame_visual: true
+      use_rgb_kv_norm: false
+      use_state: 'True'
+    action_consistency_weight: 0.0
+    aux_bypass_cameras:
+    - left
+    - right
+    backbone_feat_layers:
+    - 4
+    - 11
+    - 17
+    - 23
+    backbone_feat_mode: concat
+    backbone_type: dinov2
+    compile_action_head: false
+    compile_backbone: false
+    compile_mode: default
+    crop_height: 154
+    crop_width: 210
+    cross_view_fuse: false
+    encode_only_consumed_frames: true
+    encoder: vitl
+    freeze_action_head: false
+    freeze_rgb: true
+    input_image_size:
+    - 168
+    - 224
+    load_pretrain_backbone: ${oc.env:SAPOLICY_BACKBONE}
+    state_dim: '20'
+    tcp_cfg:
+      embed_dim: 768
+      final_norm: true
+      geo_mode: ray_depth
+      num_heads: 4
+      num_layers: 4
+      num_tcp: 2
+      pool_num_heads: 4
+      pos3d_weight: 1.0
+      rot6d_weight: 1.0
+      uv_weight: 1.0
+    tcp_loss_weight: 0.01
+    temporal_fuse: true
+    top_rotation_deg: 5.0
+    use_action_head: true
+    use_camera_intrinsics: true
+    use_depth: false
+    use_latent_aux_model: true
+    use_random_crop: true
+    use_state: 'True'
+  pixel_error_threshold: 5.0
+  save_tcp_pointclouds: false
+  save_tcp_predictions: false
+  save_tcp_visualizations: false
+  save_training_progress: false
+  scheduler_cfg:
+    kwargs:
+      num_warmup_steps: 500
+    name: cosine
+  use_ema: true
+norm_stats_path: ${oc.env:SAPOLICY_NORMALIZER}
+norm_type: minmax
+num_cameras: 3
+obs_hist_length: 1
+output_dir: ${oc.env:SAPOLICY_TRAIN_OUTPUT}
+pl_trainer:
+  accelerator: gpu
+  accumulate_grad_batches: 1
+  devices: 8
+  enable_model_summary: true
+  enable_progress_bar: true
+  gradient_clip_algorithm: norm
+  gradient_clip_val: 1.0
+  limit_val_batches: 0.0
+  log_every_n_steps: 10
+  max_epochs: 1000
+  max_steps: 6000
+  num_nodes: 1
+  num_sanity_val_steps: 0
+  precision: bf16-mixed
+  strategy: ddp
+print_cfg: false
+resume_reset_scheduler: false
+resume_training: false
+seed: 42
+state_dim: 20
+task: dinov2lfrz_yam_bottles_ft_teleopMV51_from_abc_notcpkv_rot5_dit_8gpu_bs1024
+use_depth: false
+use_relative_actions: true
+use_state: true
+ckpt_type: raw
+eval:
+  normalizer_source: path
+  normalizer_path: null
+logger: null
+warm_start_ckpt: null
