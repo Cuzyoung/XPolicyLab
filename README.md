@@ -18,7 +18,7 @@
 
 </div>
 
-XPolicyLab is the shared layer between policy code and evaluation environments. Keep each model's dependencies, checkpoints, and training recipes under `policy/<POLICY>/`; XPolicyLab handles the parts that are boring but easy to get wrong — serving, observation/action contracts, and eval wiring. As of August 2026, the ecosystem integrates **42 robot policies** spanning VLA, world-action, imitation-learning, and memory-augmented families, and the same adapters serve RoboTwin, RoboDojo simulation, and standardized real-robot evaluation.
+XPolicyLab is the shared layer between policy code and evaluation environments. Keep each model's dependencies, checkpoints, and training recipes under `policy/<POLICY>/`; XPolicyLab handles the parts that are boring but easy to get wrong — serving, observation/action contracts, and eval wiring. As of September 2026, the ecosystem contains **45 robot policy adapters** spanning VLA, world-action, imitation-learning, and memory-augmented families, and the same adapter boundary serves RoboTwin, RoboDojo simulation, standardized real-robot evaluation, and staged model-only integrations.
 
 Start here for repo-level concepts and integration steps. For install commands, checkpoint layout, and training details, jump to that policy's README — it is the source of truth for its model.
 
@@ -66,7 +66,7 @@ XPolicyLab is benchmark-agnostic: any benchmark, simulator, or real-robot setup 
 
 ## 🧭 Integrated Policies
 
-42 policies are currently integrated, spanning VLA, world-action, imitation-learning, and memory-augmented families. Top-level adapters live in `policy/`; each policy README documents that model's paper/repo link, environment, data format, training entrypoint, and checkpoint layout.
+45 policy adapters are currently present, spanning VLA, world-action, imitation-learning, and memory-augmented families. Top-level adapters live in `policy/`; each policy README documents that model's paper/repo link, environment, data format, training entrypoint, and checkpoint layout. Isaac 0.5 is currently staged as a model-service-only LIBERO integration, not a leaderboard or real-robot result.
 
 | [A1](policy/A1/README.md) | [AHA-WAM](policy/AHA_WAM/README.md) | [ABot-M0](policy/Abot_M0/README.md) | [Being-H05](policy/Being_H05/README.md) | [DM0](policy/Dexbotic_DM0/README.md) | [Dexora-1B](policy/Dexora_1B/README.md) |
 |:---:|:---:|:---:|:---:|:---:|:---:|
@@ -76,6 +76,7 @@ XPolicyLab is benchmark-agnostic: any benchmark, simulator, or real-robot setup 
 | [π0](policy/Pi_0/README.md) | [π0.5](policy/Pi_05/README.md) | [π0-Fast](policy/Pi_0_Fast/README.md) | [RDT-1B](policy/RDT_1B/README.md) | [RISE](policy/RISE/README.md) | [SmolVLA](policy/SmolVLA/README.md) |
 | [Spatial Forcing](policy/Spatial_Forcing/README.md) | [Spirit v1.5](policy/Spirit_v15/README.md) | [TinyVLA](policy/TinyVLA/README.md) | [X-VLA](policy/X_VLA/README.md) | [X-WAM](policy/X_WAM/README.md) | [Xiaomi-Robotics-0](policy/Xiaomi_Robotics_0/README.md) |
 | [Xiaomi-Robotics-1 (XR-1)](policy/Xiaomi_Robotics_1/README.md) | [StarVLA](policy/starVLA/README.md) | [ACT](policy/ACT/README.md) | [DP](policy/DP/README.md) | [demo_policy](policy/demo_policy/README.md) | [Cosmos3](policy/Cosmos3/README.md) |
+| [LingBot-VLA2](policy/LingBot_VLA2/README.md) | [SAPolicy](policy/SAPolicy/README.md) | [Isaac 0.5 (model-only)](policy/Isaac_05/README.md) |  |  |  |
 
 Adding a policy of your own, or entering a leaderboard, both go through a PR — see [Add Your Own Policy](#-add-your-own-policy).
 

@@ -15,10 +15,10 @@ The script does NOT modify parquet files or videos -- it only creates metadata.
 
 Usage:
   # Auto-detect state/action structure, default embodiment tag 'xdof':
-  python scripts/data/convert_lerobot_to_gear.py --dataset-path ./Dataset/my_robot_data
+  python scripts/datasets/convert_lerobot_to_gear.py --dataset-path ./Dataset/my_robot_data
 
   # Explicit modality mapping via JSON:
-  python scripts/data/convert_lerobot_to_gear.py \\
+  python scripts/datasets/convert_lerobot_to_gear.py \\
       --dataset-path ./Dataset/my_robot_data \\
       --embodiment-tag xdof \\
       --state-keys '{"joint_pos": [0, 6], "gripper_pos": [6, 7]}' \\
@@ -27,7 +27,7 @@ Usage:
       --task-key annotation.task
 
   # Copy to a new output directory instead of modifying in-place:
-  python scripts/data/convert_lerobot_to_gear.py \\
+  python scripts/datasets/convert_lerobot_to_gear.py \\
       --dataset-path ./Dataset/my_robot_data \\
       --output-path ./Dataset/my_robot_data_gear
 """

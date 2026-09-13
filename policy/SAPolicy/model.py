@@ -387,7 +387,6 @@ class Model(ModelTemplate):
         if native_hw is not None:
             spatial["image_native_hw"] = native_hw
         return spatial
-
     def _standard_observation(self, obs: Mapping[str, Any]) -> dict[str, Any]:
         state = obs["state"]
         metadata = (obs.get("additional_info") or {}).get("sapolicy") or {}

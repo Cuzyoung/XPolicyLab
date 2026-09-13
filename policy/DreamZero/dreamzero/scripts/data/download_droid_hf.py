@@ -6,10 +6,10 @@ Use this script when `huggingface-cli download` hits 429 (Too Many Requests).
 It uses a single worker and retries with backoff to stay within the 3000 req/5min limit.
 
 Usage:
-  python scripts/data/download_droid_hf.py [--local-dir ./data/droid_lerobot] [--max-workers 1]
+  python scripts/datasets/download_droid_hf.py [--local-dir ./data/droid_lerobot] [--max-workers 1]
 
   # Or with env (same as CLI default):
-  DROID_DATA_ROOT=./data/droid_lerobot python scripts/data/download_droid_hf.py
+  DROID_DATA_ROOT=./data/droid_lerobot python scripts/datasets/download_droid_hf.py
 """
 
 from __future__ import annotations
