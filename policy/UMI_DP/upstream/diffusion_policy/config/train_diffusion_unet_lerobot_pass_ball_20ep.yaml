@@ -1,0 +1,48 @@
+defaults:
+  - train_diffusion_unet_lerobot
+  - override task: lerobot_pass_ball
+  - _self_
+
+# 20-epoch single-task pass-ball fine-tuning configuration.
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+
+exp_name: pass_ball_clip_norm_30hz_20ep
+
+policy:
+  obs_encoder:
+    pretrained: true
+    imagenet_norm: true
+
+# Keep 32 on the 32-GB GPU. Effective batch can be increased with accumulation.
+dataloader:
+  batch_size: 32
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: true
+val_dataloader:
+  batch_size: 32
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: true
+
+training:
+  resume: false
+  num_epochs: 20
+  gradient_accumulate_every: 1
+  lr_warmup_steps: 2000
+  rollout_every: 10
+  checkpoint_every: 5
+  val_every: 999999
+  sample_every: 5
+  max_train_steps: null
+  max_val_steps: null
+
+logging:
+  mode: online
+
+hydra:
+  job:
+    override_dirname: pass_ball_20ep
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_pass_ball_clip_norm_30hz_20ep_${task_name}

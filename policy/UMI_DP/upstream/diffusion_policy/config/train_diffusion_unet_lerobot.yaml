@@ -1,0 +1,10 @@
+defaults:
+  - train_diffusion_unet_lerobot_default
+  - task: ???
+  - _self_
+
+# The LeRobot default intentionally contains no task or dataset.  A concrete
+# task config must provide task.name, task.shape_meta, task.dataset, and
+# task.env_runner.
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
