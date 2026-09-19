@@ -1,0 +1,30 @@
+policy_name: OpenLoopVLA
+protocol: ws
+host: localhost
+port: null
+bench_name: null
+task_name: null
+ckpt_name: null
+env_cfg_type: null
+seed: null
+action_type: null
+gpu_id: null
+eval_batch: false
+
+# Model assets. checkpoint_path may be a .pt file or an exported checkpoint
+# directory containing checkpoints/steps_*_model.pt, config.yaml and
+# dataset_statistics.json. Per-run values may be supplied by environment
+# variables in setup_eval_policy_server.sh.
+checkpoint_path: null
+v2_package_root: null
+unnorm_key: null
+
+device: cuda
+use_bf16: true
+mmap_checkpoint: true
+prediction_horizon: 50
+execute_steps: 12
+sampling_seed: 42
+default_instruction: follow the instruction
+request_timeout_s: 300
+
