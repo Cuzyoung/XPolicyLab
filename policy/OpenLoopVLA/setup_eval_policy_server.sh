@@ -18,8 +18,14 @@ BENCH_ROOT="$(cd "${XPL_ROOT}/.." && pwd)"
 policy_name="$(basename "${SCRIPT_DIR}")"
 yaml_file="${SCRIPT_DIR}/deploy.yml"
 
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate "${policy_conda_env}"
+if [[ -x "${policy_conda_env}/bin/python" ]]; then
+    policy_python="${policy_conda_env}/bin/python"
+    echo -e "\033[33m[SERVER] Using Python environment path: ${policy_conda_env}\033[0m"
+else
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+    conda activate "${policy_conda_env}"
+    policy_python="python"
+fi
 
 overrides=(
     "port=${policy_server_port}"
@@ -47,7 +53,6 @@ exec env \
     CUDA_VISIBLE_DEVICES="${policy_gpu_id}" \
     PYTHONPATH="${BENCH_ROOT}:${SCRIPT_DIR}/OpenLoopVLA:${PYTHONPATH:-}" \
     STARVLA_DISABLE_DEEPSPEED="${STARVLA_DISABLE_DEEPSPEED:-1}" \
-    python -u "${XPL_ROOT}/setup_policy_server.py" \
+    "${policy_python}" -u "${XPL_ROOT}/setup_policy_server.py" \
         --config_path "${yaml_file}" \
         --overrides "${overrides[@]}"
-
