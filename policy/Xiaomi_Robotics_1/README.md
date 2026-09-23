@@ -140,7 +140,7 @@ bash eval.sh RoboDojo stack_bowls RoboDojo-all-arx_x5-ee-0 arx_x5 ee 0 0 0 <poli
 | `action_length` | Leading steps of each chunk to execute; `0` executes the whole chunk, whose length comes from the checkpoint. |
 | `image_factor`, `image_max_pixels` | Image preprocessing, matching `mibot.utils.io.resize_image`. Defaults `32` / `160000`. |
 | `vlm_processor_path` | HuggingFace repo id or local path; default `Qwen/Qwen3-VL-4B-Instruct`. |
-| `output_format` | `xpolicylab` for standard absolute EE dictionaries, or `packed_ee_delta` for an embodiment adapter that performs FK/IK. |
+| `output_format` | `xpolicylab` for standard absolute EE dictionaries, or `packed_ee_delta` for an embodiment adapter that performs the anchor-frame math itself. RTC conditions use the same layout as the output: absolute `(30, 16)` rows of `[left xyz, left quat wxyz, left gripper, right xyz, right quat wxyz, right gripper]` with `xpolicylab` (encoded against the observed `*_ee_pose`; zero-weight rows are ignored), native `(30, 60)` deltas with `packed_ee_delta`. |
 | `ego_view_mode` | `camera` requires a head camera; `black` synthesizes an exactly-zero RGB image and requires only the two wrist cameras. |
 | `black_ego_shape` | Optional `[height, width]`; `null` makes the black image match the left-wrist input before shared resizing. |
 | `default_prompt` | Instruction used when the observation carries none. |

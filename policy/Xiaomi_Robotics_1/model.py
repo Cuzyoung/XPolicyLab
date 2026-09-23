@@ -155,6 +155,16 @@ def _axis_angle_to_rotm(axis_angle: np.ndarray) -> np.ndarray:
     return np.eye(3) + np.sin(angle) * cross + (1.0 - np.cos(angle)) * (cross @ cross)
 
 
+def _rotm_to_axis_angle(rotation: np.ndarray) -> np.ndarray:
+    # The canonical quaternion has w >= 0, so the angle lies in [0, pi].
+    quaternion = _rotm_to_quat_wxyz(rotation)
+    vector = quaternion[1:]
+    norm = float(np.linalg.norm(vector))
+    if norm < 1e-12:
+        return np.zeros(3)
+    return vector * (2.0 * np.arctan2(norm, quaternion[0]) / norm)
+
+
 def _get_eef_reframe_p(bench_name: str, env_cfg_type: str) -> np.ndarray:
     if bench_name == "RoboDojo":
         return _EEF_REFRAME_P_ROBODOJO
@@ -617,9 +627,9 @@ class Model(ModelTemplate):
 
         current_state = None
         if self.output_format == "xpolicylab":
-            # Standard XPolicyLab output restores absolute EE targets. ManiMux's
-            # packed_ee_delta mode deliberately keeps the native 60-D deltas and
-            # performs embodiment-specific FK/IK in its adapter instead.
+            # Standard XPolicyLab output restores absolute EE targets and encodes
+            # absolute RTC conditions against this pose. packed_ee_delta keeps the
+            # native 60-D deltas for adapters that own the anchor-frame math.
             left_pose = np.asarray(state["left_ee_pose"], dtype=np.float64).reshape(7)
             right_pose = np.asarray(state["right_ee_pose"], dtype=np.float64).reshape(7)
             l_pos_m, l_rotm_m = _ee_pose_sim_to_mibot(
@@ -837,6 +847,53 @@ class Model(ModelTemplate):
         abs_rotm_m = current_rotm_m @ delta_rotm
         return _ee_pose_mibot_to_sim(abs_pos_m, abs_rotm_m, self._eef_reframe_p_inv)
 
+    def _relative_condition(
+        self, sampling: dict[str, Any], current_state: dict[str, Any]
+    ) -> np.ndarray:
+        """Encode absolute RTC waypoints as the checkpoint's packed deltas.
+
+        Inverse of :meth:`_actions_to_xpl_format`. Each condition row is
+        ``[left_xyz, left_quat_wxyz, left_gripper, right_xyz, right_quat_wxyz,
+        right_gripper]`` in the environment frame; it becomes the delta against
+        the observed pose in the MiBot frame:
+            delta_pos  = current_rotm_m.T @ (abs_pos_m - current_pos_m)
+            delta_aa   = AxisAngle(current_rotm_m.T @ abs_rotm_m)
+            delta_grip = abs_grip - current_grip
+        Rows with zero weight carry no guidance and stay zero.
+        """
+        horizon = self.action_shape[0]
+        condition = np.asarray(sampling.get("action_condition"), dtype=np.float64)
+        weights = np.asarray(sampling.get("condition_weights"), dtype=np.float64)
+        if condition.shape != (horizon, 16) or weights.shape != (horizon,):
+            raise ValueError(
+                "xpolicylab RTC expects absolute dual [xyz, wxyz, gripper] rows "
+                f"of shape {(horizon, 16)} and weights of shape {(horizon,)}, "
+                f"got {condition.shape} and {weights.shape}"
+            )
+        if not np.isfinite(condition).all() or not np.isfinite(weights).all():
+            raise ValueError("RTC sampling arrays must be finite")
+
+        native = np.zeros(self.action_shape, dtype=np.float32)
+        for row, weight in enumerate(weights):
+            if weight == 0:
+                continue
+            # Both the absolute row and the packed action place the right arm at 8.
+            for side, base in (("left", 0), ("right", 8)):
+                pose = condition[row, base : base + 7]
+                pos_m, rotm_m = _ee_pose_sim_to_mibot(
+                    pose[:3], pose[3:7], self._eef_reframe_p
+                )
+                current_pos = current_state[f"{side}_ee_pos_mibot"]
+                current_rotm = current_state[f"{side}_ee_rotm_mibot"]
+                native[row, base : base + 3] = current_rotm.T @ (pos_m - current_pos)
+                native[row, base + 3 : base + 6] = _rotm_to_axis_angle(
+                    current_rotm.T @ rotm_m
+                )
+                native[row, base + 6] = (
+                    condition[row, base + 7] - current_state[f"{side}_gripper"]
+                )
+        return native
+
     # ------------------------------------------------------------------
     # ModelTemplate interface
     # ------------------------------------------------------------------
@@ -859,7 +916,16 @@ class Model(ModelTemplate):
             raise AssertionError(
                 "[Xiaomi_Robotics_1] Call update_obs before get_action_rtc."
             )
-        return self._predict_action_chunks(self._encoded_obs_list[:1], sampling=sampling)[0]
+        encoded_obs_list = self._encoded_obs_list[:1]
+        if self.output_format == "xpolicylab":
+            # The condition shares the absolute layout of this mode's output.
+            sampling = {
+                **sampling,
+                "action_condition": self._relative_condition(
+                    sampling, encoded_obs_list[0]["current_state"]
+                ),
+            }
+        return self._predict_action_chunks(encoded_obs_list, sampling=sampling)[0]
 
     def get_action_batch(self, env_idx_list=None, **kwargs):
         if not self._encoded_obs_list:

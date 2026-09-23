@@ -337,7 +337,7 @@ class xr1(nn.Module):
 
     @contextlib.contextmanager
     def rtc_condition(self, condition, weights, beta: float = 5.0):
-        """Attach one normalized PiGDM inpainting condition to ``generate``."""
+        """Attach one normalized RTC condition to the flow-matching sampler."""
         if getattr(self, "_rtc_condition", None) is not None:
             raise RuntimeError("an RTC condition is already active")
         weights = weights if weights.dim() == 3 else weights.unsqueeze(-1)
