@@ -10,6 +10,9 @@ def test_deployment_metadata_keeps_identity_and_excludes_transport_fields() -> N
             "checkpoint_variant": "pi05-step-1000",
             "checkpoint_source": "local-finetune",
             "norm_stats_source": "checkpoint-matched",
+            "output_format": "packed_ee_delta",
+            "ego_view_mode": "black",
+            "action_semantics": "anchor_relative_ee_delta",
             "host": "127.0.0.1",
             "port": 8500,
             "ws_ping_interval_s": 20.0,
@@ -21,4 +24,7 @@ def test_deployment_metadata_keeps_identity_and_excludes_transport_fields() -> N
         "checkpoint_variant": "pi05-step-1000",
         "checkpoint_source": "local-finetune",
         "norm_stats_source": "checkpoint-matched",
+        "output_format": "packed_ee_delta",
+        "ego_view_mode": "black",
+        "action_semantics": "anchor_relative_ee_delta",
     }

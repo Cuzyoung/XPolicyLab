@@ -24,6 +24,9 @@ _MODEL_IDENTITY_KEYS = (
     "action_horizon",
     "num_steps",
     "action_type",
+    "output_format",
+    "ego_view_mode",
+    "action_semantics",
 )
 
 
