@@ -134,10 +134,15 @@ bash eval.sh RoboDojo stack_bowls RoboDojo-all-arx_x5-ee-0 arx_x5 ee 0 0 0 <poli
 | --- | --- |
 | `action_type` | Must be `ee`. `joint` is rejected at startup — see Notes. |
 | `model_dir` | Checkpoint dir holding `config.py` and `last.ckpt/`. Overrides `ckpt_name`. |
+| `checkpoint_path` | Consolidated DeepSpeed `mp_rank_00_model_states.pt`. When set, `norm_stats_path` is also required. |
+| `norm_stats_path` | Training-matched JSON containing `mean/std` `(30,60)` and `q01/q99` `(1,60)`. |
 | `ckpt_name` | Used when `model_dir` is unset: resolves to `checkpoints/<ckpt_name>/`. Nested layouts are searched for `config.py`. |
 | `action_length` | Leading steps of each chunk to execute; `0` executes the whole chunk, whose length comes from the checkpoint. |
 | `image_factor`, `image_max_pixels` | Image preprocessing, matching `mibot.utils.io.resize_image`. Defaults `32` / `160000`. |
 | `vlm_processor_path` | HuggingFace repo id or local path; default `Qwen/Qwen3-VL-4B-Instruct`. |
+| `output_format` | `xpolicylab` for standard absolute EE dictionaries, or `packed_ee_delta` for an embodiment adapter that performs FK/IK. |
+| `ego_view_mode` | `camera` requires a head camera; `black` synthesizes an exactly-zero RGB image and requires only the two wrist cameras. |
+| `black_ego_shape` | Optional `[height, width]`; `null` makes the black image match the left-wrist input before shared resizing. |
 | `default_prompt` | Instruction used when the observation carries none. |
 
 Script environment variables, all optional:
@@ -164,4 +169,5 @@ Script environment variables, all optional:
   - state (`compose_state`): `[0:7]` left_arm_joint, `[7:8]` left_gripper, `[8:15]` right_arm_joint, `[15:16]` right_gripper.
   - action (`ACTION_PARTS`): `[0:3]` left_ee_pos, `[3:6]` left_ee_aa, `[6:7]` left_gripper, `[8:11]` right_ee_pos, `[11:14]` right_ee_aa, `[14:15]` right_gripper, `[16:17]` waist, `[17:20]` base_vel.
 - Every action slot is a **relative delta** with respect to the observed pose, with translation and rotation expressed in the current end-effector frame. The adapter restores absolute targets and maps end-effector rotations between the MiBot and simulator frames.
+- `ego_view_mode: black` is intended only for checkpoints whose third training view was pure black. It creates the image inside this model adapter; the robot runtime must not register a fake physical camera.
 - The inference prompt carries only the vision and instruction turns, exactly as `mibot/server/runtime/client.py` builds them. The training-time `Robot state: <state>` / `<a_i>…<score>` turns are deliberately omitted: at inference the VLM is called without `state_embeds`, so a `<state>` token would fail inside `Qwen3VLModel.forward`. Proprioception reaches the model through the `state` tensor and the DiT state projector instead.

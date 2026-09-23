@@ -228,6 +228,23 @@ def _extract_image(obs: dict, cam_keys: list[str]) -> np.ndarray:
     raise KeyError(f"No image found for camera keys: {cam_keys}")
 
 
+def _pure_black_ego_image(
+    reference: np.ndarray, configured_shape: tuple[int, int] | None = None
+) -> np.ndarray:
+    """Return the synthetic RGB ego view used by checkpoints trained with black input.
+
+    The generated pixels are exactly zero before the shared XR-1 resize step. By
+    default the image inherits the left-wrist resolution, which keeps the visual
+    token geometry aligned without pretending that a third physical camera exists.
+    """
+
+    reference = _ensure_hwc_uint8(reference)
+    height, width = reference.shape[:2] if configured_shape is None else configured_shape
+    if height <= 0 or width <= 0:
+        raise ValueError("black_ego_shape must contain positive height and width")
+    return np.zeros((height, width, 3), dtype=np.uint8)
+
+
 def _ee_pose_sim_to_mibot(
     xyz_sim: np.ndarray, quat_wxyz_sim: np.ndarray, eef_reframe_p: np.ndarray
 ):
@@ -298,6 +315,25 @@ class Model(ModelTemplate):
         # Image preprocessing, matching mibot Client / JsonDataset._augment.
         self.image_factor = int(model_cfg.get("image_factor", 32))
         self.image_max_pixels = int(model_cfg.get("image_max_pixels", 160000))
+        self.ego_view_mode = str(model_cfg.get("ego_view_mode", "camera"))
+        if self.ego_view_mode not in {"camera", "black"}:
+            raise ValueError("ego_view_mode must be 'camera' or 'black'")
+        black_ego_shape = model_cfg.get("black_ego_shape")
+        if black_ego_shape is None:
+            self.black_ego_shape = None
+        else:
+            if (
+                not isinstance(black_ego_shape, (list, tuple))
+                or len(black_ego_shape) != 2
+                or any(
+                    isinstance(value, bool) or not isinstance(value, int)
+                    for value in black_ego_shape
+                )
+            ):
+                raise ValueError("black_ego_shape must be null or [height, width]")
+            self.black_ego_shape = (int(black_ego_shape[0]), int(black_ego_shape[1]))
+            if min(self.black_ego_shape) <= 0:
+                raise ValueError("black_ego_shape must contain positive height and width")
         # Number of leading action steps actually executed per inference call;
         # 0 or None means the whole predicted chunk.
         self.action_length = model_cfg.get("action_length") or 0
@@ -535,11 +571,14 @@ class Model(ModelTemplate):
         """
         from mibot.utils.io import resize_image
 
-        head_img = _extract_image(obs, ["cam_head", "cam_high", "head_camera"])
         left_img = _extract_image(obs, ["cam_left_wrist", "left_camera", "wrist_left"])
         right_img = _extract_image(
             obs, ["cam_right_wrist", "right_camera", "wrist_right"]
         )
+        if self.ego_view_mode == "black":
+            head_img = _pure_black_ego_image(left_img, self.black_ego_shape)
+        else:
+            head_img = _extract_image(obs, ["cam_head", "cam_high", "head_camera"])
 
         # Same preprocessing as mibot Client.__call__ and JsonDataset._augment:
         # resize to a factor-of-32 grid under max_pixels, then hand the images
