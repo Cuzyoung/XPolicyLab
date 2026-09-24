@@ -347,6 +347,10 @@ class Model(ModelTemplate):
         # Number of leading action steps actually executed per inference call;
         # 0 or None means the whole predicted chunk.
         self.action_length = model_cfg.get("action_length") or 0
+        # Restrict RTC guidance to the trained action slots (ACTION_PARTS).
+        self.rtc_mask_padding = model_cfg.get("rtc_mask_padding", False)
+        if not isinstance(self.rtc_mask_padding, bool):
+            raise ValueError("rtc_mask_padding must be true or false")
 
         xr1_root = _add_xr1_to_path()
         print(f"[Xiaomi_Robotics_1] xr1 package root: {xr1_root}", flush=True)
@@ -774,7 +778,10 @@ class Model(ModelTemplate):
                 device=self.device, dtype=torch.bfloat16
             )
             rtc_context = self.model.rtc_condition(
-                condition_tensor, weights_tensor, beta=beta
+                condition_tensor,
+                weights_tensor,
+                beta=beta,
+                guidance_mask=mask if self.rtc_mask_padding else None,
             )
         with rtc_context:
             action = self.model.generate(batch)

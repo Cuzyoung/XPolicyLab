@@ -336,19 +336,25 @@ class xr1(nn.Module):
         return sample
 
     @contextlib.contextmanager
-    def rtc_condition(self, condition, weights, beta: float = 5.0):
-        """Attach one normalized RTC condition to the flow-matching sampler."""
+    def rtc_condition(self, condition, weights, beta: float = 5.0, guidance_mask=None):
+        """Attach one normalized RTC condition to the flow-matching sampler.
+
+        ``guidance_mask`` optionally restricts the guidance error to the given
+        action channels. Without it every channel is guided, padding included.
+        """
         if getattr(self, "_rtc_condition", None) is not None:
             raise RuntimeError("an RTC condition is already active")
         weights = weights if weights.dim() == 3 else weights.unsqueeze(-1)
         self._rtc_condition = condition
         self._rtc_weights = weights
         self._rtc_beta = float(beta)
+        self._rtc_guidance_mask = guidance_mask
         try:
             yield
         finally:
             self._rtc_condition = None
             self._rtc_weights = None
+            self._rtc_guidance_mask = None
 
     def _rtc_guidance_scale(self, flow_time: float) -> float:
         if flow_time <= 0.0:
@@ -364,6 +370,9 @@ class xr1(nn.Module):
     def _generate_pi_rtc(self, noise, kwargs):
         target = self._rtc_condition.to(device=noise.device, dtype=noise.dtype)
         weights = self._rtc_weights.to(device=noise.device, dtype=noise.dtype)
+        guidance_mask = getattr(self, "_rtc_guidance_mask", None)
+        if guidance_mask is not None:
+            guidance_mask = guidance_mask.to(device=noise.device, dtype=noise.dtype)
         sample = noise.clone()
         dt = 1.0 / self.num_steps
         with torch.enable_grad():
@@ -378,7 +387,12 @@ class xr1(nn.Module):
                 )
                 velocity = self.dit_forward(noisy_action, timestep, **kwargs)
                 clean_estimate = noisy_action + (1.0 - flow_time) * velocity
-                error = ((target - clean_estimate) * weights).detach()
+                error = (target - clean_estimate) * weights
+                if guidance_mask is not None:
+                    # Untrained padding outputs would otherwise feed back into
+                    # the real channels through the VJP.
+                    error = error * guidance_mask
+                error = error.detach()
                 correction = torch.autograd.grad(
                     clean_estimate,
                     noisy_action,

@@ -27,6 +27,7 @@ _MODEL_IDENTITY_KEYS = (
     "output_format",
     "ego_view_mode",
     "action_semantics",
+    "rtc_mask_padding",
 )
 
 

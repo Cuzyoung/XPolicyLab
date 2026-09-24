@@ -35,6 +35,10 @@ image_max_pixels: 160000
 ego_view_mode: camera
 black_ego_shape: null
 
+# true restricts RTC guidance to the trained ACTION_PARTS slots; false guides
+# every channel of the packed action, padding included.
+rtc_mask_padding: false
+
 # VLM processor (HuggingFace repo id or local path)
 vlm_processor_path: Qwen/Qwen3-VL-4B-Instruct
 

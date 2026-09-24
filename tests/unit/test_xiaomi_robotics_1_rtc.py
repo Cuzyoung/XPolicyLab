@@ -138,3 +138,49 @@ def test_rtc_condition_is_encoded_only_for_absolute_output(output_format: str) -
             received["action_condition"],
             model._relative_condition(sampling, current),
         )
+
+
+@pytest.mark.parametrize("enabled", (False, True))
+def test_rtc_mask_padding_selects_the_guidance_mask(enabled: bool) -> None:
+    import contextlib
+
+    import torch
+
+    model = _model("packed_ee_delta")
+    model.rtc_mask_padding = enabled
+    model.device = torch.device("cpu")
+    model._action_eps = 1e-6
+    action_mask = torch.zeros(model.action_shape)
+    action_mask[:, :7] = 1.0
+    model.action_mask = action_mask
+    model.mean = torch.zeros(model.action_shape)
+    model.std = torch.ones(model.action_shape)
+    model.q01 = torch.zeros((1, 60))
+    model.q99 = torch.ones((1, 60))
+    model._state_valid = model.q99 > model.q01
+    model._denormalize_action = lambda action, mean, std: action
+    received = {}
+
+    class Sampler:
+        @contextlib.contextmanager
+        def rtc_condition(self, condition, weights, beta, guidance_mask=None):
+            received["guidance_mask"] = guidance_mask
+            yield
+
+        def generate(self, batch):
+            return torch.zeros_like(batch["action"])
+
+    model.model = Sampler()
+    batch = {"input_ids": torch.zeros((1, 4), dtype=torch.long), "state": torch.zeros((1, 1, 60))}
+    sampling = {
+        "action_condition": np.zeros(model.action_shape, dtype=np.float32),
+        "condition_weights": np.ones(HORIZON, dtype=np.float32),
+        "beta": 5.0,
+    }
+
+    model._run_inference_batch(batch, sampling=sampling)
+
+    if enabled:
+        torch.testing.assert_close(received["guidance_mask"][0], action_mask)
+    else:
+        assert received["guidance_mask"] is None
