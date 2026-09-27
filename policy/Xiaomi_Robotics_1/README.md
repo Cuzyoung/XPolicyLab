@@ -133,6 +133,23 @@ python -u xiaomi_robotics_1/xr1/tools/weight_convert.py \
 
 `train.sh` fine-tunes the released Xiaomi-Robotics-1-5B weights on a dataset produced by `process_data.sh`. It wraps the vendored launcher (`xiaomi_robotics_1/xr1/scripts/train.sh`, DeepSpeed via Lightning) and takes care of the XPolicyLab naming so evaluation finds the result without extra arguments.
 
+The native JSON dataset exposes every frame of every nonempty episode. The
+distributed sampler shuffles and shards that full corpus; `trainer.max_steps`
+controls optimizer updates, independently of dataset length, GPU count and
+gradient accumulation. Short runs may finish before visiting all frames, but do
+not restrict sampling to a sorted prefix. The trainer repeats epochs as needed.
+
+For a standalone XPolicyLab checkout with a private task JSON configuration, the
+shared launcher can be invoked directly from the repository root:
+
+```bash
+python -m XPolicyLab.training.launch --config /path/to/training/task.json --phase train
+# Review the plan, then add --execute to start training.
+```
+
+Use the policy environment selected by the configuration. ManiMux and its wrapper
+scripts are not required for this XR1 entry point.
+
 ```bash
 cd XPolicyLab/policy/Xiaomi_Robotics_1
 bash train.sh <bench_name> <ckpt_name> <env_cfg_type> <action_type> <seed> <gpu_id> [hydra_overrides...]

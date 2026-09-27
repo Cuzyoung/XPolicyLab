@@ -39,8 +39,6 @@ class JsonDataset(Dataset):
     def __init__(self, params):
         data = params["train_datasets"]
         self.action_length = int(data.get("action_length", params.get("action_length", 30)))
-        self.batch_size = int(data.get("batch_size", 16))
-        self.max_samples = int(params.get("max_steps", 1000)) * self.batch_size * int(os.environ.get("WORLD_SIZE", 1))
         self.mean, self.std = validate_stats(data["mean"], data["std"], self.action_length)
         self.q01, self.q99 = validate_quantiles(data["q01"], data["q99"])
         self.files = self._json_files(data["paths"])
@@ -116,11 +114,10 @@ class JsonDataset(Dataset):
 
         if not source_samples:
             raise ValueError("training data has no frames")
-        q, r = divmod(self.max_samples, len(source_samples))
-        samples = source_samples * q + source_samples[:r]
-        logger.info(f"Raw train samples: {len(source_samples)}")
-        logger.info(f"Total train samples: {len(samples)}")
-        return samples
+        # Keep the full corpus available to DistributedSampler. Trainer.max_steps
+        # limits optimizer updates; it must not truncate the sorted episode list.
+        logger.info(f"Total train samples: {len(source_samples)}")
+        return source_samples
 
     def _prompt(self, traj):
         prompts = traj.get("instruction", {}).get("general") or []
