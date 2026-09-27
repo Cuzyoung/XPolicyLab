@@ -1,9 +1,8 @@
-"""Compose existing ManiMux recording conversion and the XR1 Hydra data binding."""
+"""Compatibility CLI delegating YAM preparation to process_data.sh."""
 
 import argparse
-import json
+import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 
@@ -19,20 +18,11 @@ def main():
     if Path(args.name).name != args.name or args.name in {".", ".."}:
         parser.error("name must be a file basename")
     policy = Path(__file__).resolve().parent
-    workspace = policy.parents[2]
-    target = policy / "xiaomi_robotics_1/xr1/configs/data" / (args.name + ".yaml")
-    if target.exists():
-        raise FileExistsError(f"Use a new data config name; refusing to replace {target}")
-    subprocess.run([sys.executable, str(workspace / "scripts/datasets/prepare_xr1_yam_dataset.py"),
-                    "--episodes", str(args.source), "--output", str(args.dataset),
-                    "--config-name", args.name, "--instruction", args.instruction,
-                    "--batch-size", str(args.batch)], check=True, cwd=workspace)
-    manifest = json.loads((args.dataset / "manifest.json").read_text())
-    source = (args.dataset / manifest["config"]["path"]).resolve()
-    source.relative_to(args.dataset.resolve())
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with source.open("rb") as reader, target.open("xb") as writer:
-        shutil.copyfileobj(reader, writer)
+    env = dict(os.environ, XR1_SOURCE_FORMAT="yam", RAW_DATA_ROOT=str(args.source.resolve()),
+               OUTPUT_DIR=str(args.dataset.resolve()), DATA_CONFIG_NAME=args.name,
+               XR1_INSTRUCTION=args.instruction, BATCH_SIZE=str(args.batch), XR1_PYTHON=sys.executable)
+    subprocess.run(["bash", str(policy / "process_data.sh"),
+                    "RoboDojo_real", args.name, "yam_dual", "ee"], check=True, env=env)
 
 
 if __name__ == "__main__":

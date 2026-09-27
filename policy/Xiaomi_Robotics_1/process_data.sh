@@ -1,5 +1,5 @@
 #!/bin/bash
-# Convert RoboDojo official HDF5 episodes into the xr1 JSON training format.
+# Convert RoboDojo HDF5 or recorded YAM episodes into XR1 JSON.
 #
 # Usage:
 #   bash process_data.sh <bench_name> <ckpt_name> <env_cfg_type> <action_type> [expert_data_num]
@@ -55,6 +55,7 @@ esac
 
 POLICY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 XR1_DIR="${POLICY_DIR}/xiaomi_robotics_1/xr1"
+PYTHON=${XR1_PYTHON:-python}
 PROCESS_PY="${XR1_DIR}/scripts/process_data.py"
 
 if [[ ! -f "${PROCESS_PY}" ]]; then
@@ -70,6 +71,56 @@ output_dir=${OUTPUT_DIR:-"${XR1_DIR}/data/${data_setting}"}
 # Lowercased bench prefix keeps a sim and a real run on the same task/robot from
 # overwriting each other's config.
 config_name="$(echo "${bench_name}" | tr 'A-Z' 'a-z')_${ckpt_name//,/_}_${env_cfg_type}"
+config_name=${DATA_CONFIG_NAME:-${config_name}}
+
+# YAM recordings already contain the measured and commanded EE transforms.
+# Keep their coordinate convention and statistics separate from RoboDojo HDF5.
+source_format=${XR1_SOURCE_FORMAT:-hdf5}
+if [[ "${source_format}" == yam ]]; then
+    if [[ "${bench_name}" != RoboDojo_real || "${env_cfg_type}" != yam_dual || "${action_type}" != ee ]]; then
+        echo "YAM recordings require: RoboDojo_real <name> yam_dual ee" >&2
+        exit 2
+    fi
+    : "${RAW_DATA_ROOT:?Set RAW_DATA_ROOT to one YAM task episode directory}"
+    : "${XR1_INSTRUCTION:?Set XR1_INSTRUCTION to the task instruction}"
+    if [[ "${ACTION_LENGTH:-30}" != 30 ]]; then
+        echo "The existing YAM action/statistics contract requires ACTION_LENGTH=30." >&2
+        exit 2
+    fi
+    if [[ -n "${EXTRA_ARGS:-}" ]]; then
+        echo "EXTRA_ARGS applies to HDF5 conversion only." >&2
+        exit 2
+    fi
+    if [[ ! "${config_name}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+        echo "DATA_CONFIG_NAME must be a simple basename." >&2
+        exit 2
+    fi
+    config_path="${XR1_DIR}/configs/data/${config_name}.yaml"
+    if [[ -e "${config_path}" ]] || [[ -d "${output_dir}" && -n "$(ls -A "${output_dir}")" ]]; then
+        echo "Refusing to replace existing YAM data/config; select a new output and config name." >&2
+        exit 2
+    fi
+    "${PYTHON}" "${POLICY_DIR}/prepare_yam_dataset.py" \
+        --episodes "${RAW_DATA_ROOT}" --output "${output_dir}" \
+        --instruction "${XR1_INSTRUCTION}" --config-name "${config_name}" \
+        --batch-size "${BATCH_SIZE:-1}" --episodes-limit "${expert_data_num:-0}"
+    "${PYTHON}" - "${output_dir}/${config_name}.yaml" "${config_path}" <<'PY'
+import shutil
+import sys
+from pathlib import Path
+
+source, target = map(Path, sys.argv[1:])
+target.parent.mkdir(parents=True, exist_ok=True)
+with source.open("rb") as reader, target.open("xb") as writer:
+    shutil.copyfileobj(reader, writer)
+PY
+    echo "[Xiaomi_Robotics_1] YAM data ready: ${output_dir}"
+    echo "[Xiaomi_Robotics_1] data config: ${config_path}"
+    exit 0
+elif [[ "${source_format}" != hdf5 ]]; then
+    echo "XR1_SOURCE_FORMAT must be hdf5 or yam." >&2
+    exit 2
+fi
 
 args=(
     --bench-name "${bench_name}"
@@ -107,7 +158,7 @@ echo "[Xiaomi_Robotics_1] data config  : configs/data/${config_name}.yaml"
 # matching how scripts/train.sh launches tools/train.py.
 cd "${XR1_DIR}"
 export PYTHONPATH="${XR1_DIR}:${PYTHONPATH:-}"
-python -u "scripts/process_data.py" "${args[@]}"
+"${PYTHON}" -u "scripts/process_data.py" "${args[@]}"
 
 echo "[Xiaomi_Robotics_1] done. Train with:"
 echo "  cd ${XR1_DIR} && bash scripts/train.sh data=${config_name}"

@@ -16,6 +16,15 @@ conda activate <policy_env>  # e.g. mibot (override the name via MIBOT_CONDA_ENV
 
 The installer creates the `mibot` conda environment with PyTorch 2.8, Flash Attention, and the other core dependencies. Read `INSTALLATION.md` for the manual install equivalent, checkpoint preparation, and smoke checks.
 
+For shared-storage uv environments, set `XR1_ENV_DIR` before running `install.sh`,
+then activate that environment. The same pinned model dependencies are installed;
+the default conda installation remains supported.
+
+```bash
+XR1_ENV_DIR=/path/to/envs/xr1/.venv bash install.sh
+source /path/to/envs/xr1/.venv/bin/activate
+```
+
 ## Data Processing
 
 `process_data.sh` converts RoboDojo HDF5 episodes into the xr1 JSON/MP4 training format and emits a ready-to-use Hydra data config with recomputed normalization statistics:
@@ -44,6 +53,53 @@ Outputs, all anchored on the script's own location:
 The generated config carries the `paths`, `mean`/`std` of the packed relative actions `(action_length, 60)`, and `q01`/`q99` of the packed state `(1, 60)`. Video paths inside the JSON are absolute, so training does not depend on the launch directory; moving the dataset means reconverting or rewriting those JSONs. Reruns skip episodes already converted — pass `EXTRA_ARGS=--overwrite` to force, or `EXTRA_ARGS=--stats-only` to recompute the statistics and the config alone. Optional overrides: `RAW_DATA_ROOT`, `OUTPUT_DIR`, `DATA_WORKERS`, `ACTION_LENGTH` (30), `BATCH_SIZE` (16).
 
 Skip this step if you are evaluating a checkpoint you already have. `docs/data_format.md` in the vendored `xr1/` documents the JSON schema if you want to plug in your own converter.
+
+### Recorded YAM episodes
+
+Set `XR1_SOURCE_FORMAT=yam` to use the same entry point with one task directory
+containing completed NPY/MP4 episodes. This route requires `RoboDojo_real`,
+`yam_dual`, and `ee`. It reads the recorded measured/commanded `ee_pos`, `ee_rotm`
+and `ee_transform` arrays; it does not recompute FK or apply RoboDojo axis reframing.
+
+```bash
+export XR1_SOURCE_FORMAT=yam
+export RAW_DATA_ROOT=/path/to/raw/put_the_coin_into_the_bin
+export OUTPUT_DIR=/path/to/datasets/xr1/coin-v1
+export DATA_CONFIG_NAME=yam_coin_v1
+export XR1_INSTRUCTION="Put the coin into the bin."
+export BATCH_SIZE=1
+bash process_data.sh RoboDojo_real coin-v1 yam_dual ee
+```
+
+`prepare_yam_dataset.py` owns the conversion inside this policy. It preserves
+absolute base-frame poses in JSON, references the original RGB MP4s using absolute
+paths, and computes the existing 30-step current-EE-frame delta statistics:
+`R_t.T @ (p_target - p_t)`, relative axis-angle rotation, and gripper deltas.
+Action statistics use every valid frame/step with a standard-deviation floor of
+`1e-6`; state statistics use q01/q99. These YAM rules intentionally differ from
+the HDF5 converter's robot-specific reframing and statistics rules.
+
+Outputs are `data/<episode>.json`, `norm_stats.json`, `manifest.json`, and
+`<DATA_CONFIG_NAME>.yaml`; the YAML is also installed under the native
+`configs/data/` directory. Source recordings must remain available. An optional
+fifth positional argument selects the first N complete episodes in sorted order;
+omitting it uses all complete episodes. `ACTION_LENGTH` must remain 30. Existing
+nonempty output directories or existing data configs are rejected; choose new
+names instead of silently reusing stale statistics. `XR1_PYTHON` can explicitly
+select the converter interpreter; otherwise the active environment's `python`
+is used. HDF5 remains the default source format.
+
+After preparation, use the existing training entry with the same dataset/config
+environment and set `PRETRAINED_PATH`, `XR1_QWEN_VL_CONFIG_SOURCE`, and `RUN_ROOT`:
+
+```bash
+bash train.sh RoboDojo_real coin-v1 yam_dual ee 0 0,1,2,3
+```
+
+`prepare_yam.py` remains a compatibility CLI forwarding to `process_data.sh`.
+The unified `xr1-yam` recipe also calls `process_data.sh`; no ManiMux converter
+implementation is required by this policy. Dataset preparation and a CPU batch
+check do not establish GPU training or checkpoint compatibility.
 
 ## Model Assets
 

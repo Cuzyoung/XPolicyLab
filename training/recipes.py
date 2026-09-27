@@ -55,10 +55,11 @@ def recipe(name):
         job["prepared"] = ["${dataset}/meta/info.json", "${assets}/" + config_name + "/${run}/norm_stats.json"]
     elif name == "xr1-yam":
         job["params"].update(action="ee")
-        prepare.append(step("prepare_yam.py", ["--source", "${source}", "--dataset", "${dataset}",
-                                               "--name", "${run}", "--instruction", "${instruction}",
-                                               "--batch", "${batch}"], requires=["${source}"]))
-        env.update(OUTPUT_DIR="${dataset}", DATA_CONFIG_NAME="${run}",
+        prepare.append(step("process_data.sh", ["${bench}", "${run}", "${robot}", "${action}"],
+                            requires=["${source}"]))
+        env.update(XR1_SOURCE_FORMAT="yam", RAW_DATA_ROOT="${source}",
+                   XR1_INSTRUCTION="${instruction}", XR1_PYTHON="${python}", BATCH_SIZE="${batch}",
+                   OUTPUT_DIR="${dataset}", DATA_CONFIG_NAME="${run}",
                    PRETRAINED_PATH="${pretrained}", RUN_ROOT="${output}",
                    MAX_STEPS="${steps}", SAVE_INTERVAL="${save_steps}",
                    XR1_QWEN_VL_CONFIG_SOURCE="${processor}", XR1_LOGGER="csv")
