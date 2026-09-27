@@ -34,7 +34,7 @@ def recipe(name):
                 "--streaming-encoding", "--encoder-threads", "1"]
         if name == "pi05-yam-joint-ee":
             args.append("--include-ee-pose")
-        prepare.append(step("${workspace}/scripts/datasets/convert_yam_to_lerobot.py", args,
+        prepare.append(step("${xpolicy}/utils/yam_to_lerobot.py", args,
                             requires=["${source}"],
                             produces=["${dataset}/meta/info.json"]))
     if name.startswith("pi05"):
@@ -54,7 +54,10 @@ def recipe(name):
                             cwd="openpi"))
         job["prepared"] = ["${dataset}/meta/info.json", "${assets}/" + config_name + "/${run}/norm_stats.json"]
     elif name == "xr1-yam":
-        job["params"].update(action="ee")
+        # Reproduce the saved put-bottles XR1 cluster run, not generic defaults.
+        job["params"].update(action="ee", gpus="0,1,2,3,4,5,6,7", batch="1",
+                             accumulation="8", steps="30000", save_steps="5000",
+                             sampling_mode="legacy_steps")
         prepare.append(step("process_data.sh", ["${bench}", "${run}", "${robot}", "${action}"],
                             requires=["${source}"]))
         env.update(XR1_SOURCE_FORMAT="yam", RAW_DATA_ROOT="${source}",
@@ -62,7 +65,13 @@ def recipe(name):
                    OUTPUT_DIR="${dataset}", DATA_CONFIG_NAME="${run}",
                    PRETRAINED_PATH="${pretrained}", RUN_ROOT="${output}",
                    MAX_STEPS="${steps}", SAVE_INTERVAL="${save_steps}",
-                   XR1_QWEN_VL_CONFIG_SOURCE="${processor}", XR1_LOGGER="csv")
+                   XR1_QWEN_VL_CONFIG_SOURCE="${processor}", XR1_LOGGER="tensorboard",
+                   PROJECT="yam-xiaomi-xr1", MAX_LENGTH="20000", ASYNC_TRAIN="true",
+                   RESOURCE_GPU="${gpu_count}")
+        job["train"] = {"args": ["${bench}", "${run}", "${robot}", "${action}", "${seed}", "${gpus}",
+                                  "data.params.train_datasets.batch_size=${batch}",
+                                  "trainer.accumulate_grad_batches=${accumulation}",
+                                  "+data.params.train_datasets.sampling_mode=${sampling_mode}"]}
         job["requires"].append("${processor}/tokenizer.json")
         job["prepared"] = ["${dataset}/manifest.json", "${dataset}/norm_stats.json",
                            "${policy}/xiaomi_robotics_1/xr1/configs/data/${run}.yaml"]
