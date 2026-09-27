@@ -407,6 +407,25 @@ class PolicyNormProcessor:
     # ------------------------------------------------------------------
     # Inverse path (model output -> env action)
     # ------------------------------------------------------------------
+    def apply_actions(self, actions: np.ndarray) -> np.ndarray:
+        """Normalize an environment-unit sampler condition with training transforms."""
+        actions = np.array(actions, dtype=np.float32, copy=True)
+        if actions.ndim != 2 or actions.shape[-1] != self.action_dim or not np.isfinite(actions).all():
+            raise ValueError(f"Expected finite action condition (H, {self.action_dim})")
+        data, cursor = {}, 0
+        for key in self._action_keys:
+            width = self._action_key_dims.get(key, 1)
+            data[key] = actions[:, cursor:cursor + width]
+            cursor += width
+        normalized = self._transform.apply(data)
+        values = []
+        for key in self._action_keys:
+            value = normalized[key]
+            if isinstance(value, torch.Tensor):
+                value = value.detach().cpu().numpy()
+            values.append(np.asarray(value, dtype=np.float32))
+        return np.concatenate(values, axis=-1)
+
     def unapply_actions(self, normalized_actions: np.ndarray) -> np.ndarray:
         """Invert action normalization using the training-time pipeline.
 

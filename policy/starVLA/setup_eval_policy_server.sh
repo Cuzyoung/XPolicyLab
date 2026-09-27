@@ -24,7 +24,7 @@ UTILS_DIR="${XPL_ROOT}/utils"
 STARVLA_ROOT="${SCRIPT_DIR}/source_starvla"
 
 policy_name="$(basename "${SCRIPT_DIR}")"
-yaml_file="${XPL_ROOT}/policy/${policy_name}/deploy.yml"
+yaml_file="${STARVLA_DEPLOY_CONFIG:-${XPL_ROOT}/policy/${policy_name}/deploy.yml}"
 
 action_dim=$(bash "${UTILS_DIR}/get_action_dim.sh" "${BENCH_ROOT}" "${env_cfg_type}")
 # Run-dir resolution: the default run dir is the 5-tuple
@@ -171,6 +171,23 @@ fi
 # shellcheck source=scripts/activate_policy_env.sh
 source "${SCRIPT_DIR}/scripts/activate_policy_env.sh"
 starvla_activate_policy_env "${policy_conda_env}"
+
+# External runtimes use the shared server directly; preserve the original
+# two-process benchmark launcher unless this backend is explicitly selected.
+case "${STARVLA_MODEL_BACKEND:-websocket}" in
+    inprocess)
+        export CUDA_VISIBLE_DEVICES="${policy_gpu_id}"
+        export PYTHONPATH="${BENCH_ROOT}:${XPL_ROOT}:${STARVLA_ROOT}:${PYTHONPATH:-}"
+        exec "${STARVLA_POLICY_PYTHON}" "${XPL_ROOT}/setup_policy_server.py" \
+            --config_path "${yaml_file}" --overrides \
+            model_backend=inprocess checkpoint_path="${checkpoint_path}" \
+            host="${policy_server_host}" port="${policy_server_port}" \
+            bench_name="${bench_name}" task_name="${task_name}" ckpt_name="${ckpt_name}" \
+            env_cfg_type="${env_cfg_type}" action_type="${action_type}" seed="${seed}"
+        ;;
+    websocket) ;;
+    *) echo "[SERVER][ERROR] STARVLA_MODEL_BACKEND must be websocket or inprocess" >&2; exit 2 ;;
+esac
 
 (
     cd "${STARVLA_ROOT}"

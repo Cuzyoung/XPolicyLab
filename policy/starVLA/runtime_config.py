@@ -5,7 +5,6 @@ from typing import Any
 
 import yaml
 
-
 _AUTO_VALUES = {None, "", "auto", "none", "null"}
 
 
@@ -51,14 +50,17 @@ def resolve_include_state(value: Any, checkpoint_path: str | Path | None) -> boo
     if normalized not in _AUTO_VALUES:
         return parse_bool(value)
     if checkpoint_path in (None, "", "null", "None"):
-        return False
+        raise ValueError("include_state=auto requires a checkpoint path or an explicit boolean")
 
     run_dir = _checkpoint_run_dir(checkpoint_path)
     for name in ("config.yaml", "config.full.yaml"):
         include_state = _read_include_state(run_dir / name)
         if include_state is not None:
             return include_state
-    return False
+    raise ValueError(
+        f"No datasets.vla_data.include_state in {run_dir}/config.yaml or config.full.yaml; "
+        "set include_state explicitly for a checkpoint without this metadata"
+    )
 
 
 def resolve_checkpoint_framework(checkpoint_path: str | Path | None) -> str | None:
@@ -97,7 +99,9 @@ def validate_server_runtime_contract(
     """
 
     if not isinstance(metadata, dict):
-        raise ValueError(f"StarVLA server metadata must be a mapping, got {type(metadata).__name__}.")
+        raise ValueError(
+            f"StarVLA server metadata must be a mapping, got {type(metadata).__name__}."
+        )
     contract = metadata.get("runtime_contract")
     if not isinstance(contract, dict):
         raise ValueError(
@@ -142,9 +146,6 @@ def validate_server_runtime_contract(
                 "Incompatible PI-v3 forward contract: "
                 f"server={actual_forward!r}, expected={expected_pi_v3_forward!r}."
             )
-
-    if include_state and contract.get("state_normalization") != "training_transform":
-        raise ValueError("include_state=true requires server-side training-stat state normalization.")
 
     available_keys = metadata.get("available_unnorm_keys", [])
     if unnorm_key is not None and unnorm_key not in available_keys:

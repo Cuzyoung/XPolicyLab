@@ -206,10 +206,14 @@ class Qwenvl_Fast(baseframework):
         # Step 1: QWenVL input format
         qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(images=batch_images, instructions=instructions)
 
+        do_sample = kwargs.get("do_sample", False)
+        if not isinstance(do_sample, bool):
+            raise TypeError("QwenFast do_sample must be a boolean")
         with torch.autocast("cuda", dtype=torch.bfloat16):
             generated_ids = self.qwen_vl_interface.model.generate(
                 **qwen_inputs,
                 max_length=2048,
+                do_sample=do_sample,
             )
         # --- Extract and decoder vlm_action to continue actions ---
         # --- extrace token (index based on VLM) ---
@@ -217,7 +221,7 @@ class Qwenvl_Fast(baseframework):
         # --- map index to fast tokenizer index space ---
         batch_fast_action_token_idx = self._decode_action_tokens(batch_vlm_action_token_ids)
         # --- decode fast tokenizer index to action semantic ---
-        normalized_actions = self.action_model.fast_tokenizer.decode(batch_fast_action_token_idx)
+        normalized_actions = self.action_model.decode_action_tokens(batch_fast_action_token_idx)
 
         return {"normalized_actions": normalized_actions}
 

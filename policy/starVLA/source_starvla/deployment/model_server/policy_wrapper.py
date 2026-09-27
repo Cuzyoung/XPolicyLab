@@ -133,6 +133,18 @@ class PolicyServerWrapper:
             "available_unnorm_keys": self._available_unnorm_keys,
             "default_unnorm_key": self._default_unnorm_key,
         }
+        base["sampling_modes"] = ["default"]
+        if self._framework_name in {"QwenGR00T", "QwenPI_v3"}:
+            head = self._framework.action_model
+            base["num_inference_timesteps"] = int(head.num_inference_timesteps)
+            base["sampling_modes"] += ["rtc", "aac", "paint"]
+            if head.num_inference_timesteps >= 2:
+                base["sampling_modes"].append("dvac")
+            if head.num_inference_timesteps >= 3 and any(
+                name.endswith("attn1") and not module.is_cross_attention
+                for name, module in head.model.named_modules()
+            ):
+                base["sampling_modes"].append("autohorizon")
         # Enrich with per-embodiment keys when a default processor already exists.
         if self._default_unnorm_key is not None:
             proc = self._get_processor(self._default_unnorm_key)
@@ -209,6 +221,14 @@ class PolicyServerWrapper:
         proc = self._get_processor(effective_key)
 
         model_examples = self._normalize_example_states(examples, proc)
+        sampling = kwargs.get("sampling")
+        if sampling is not None:
+            sampling = dict(sampling)
+            if self._framework_name not in {"QwenGR00T", "QwenPI_v3"}:
+                raise ValueError("Specialized flow sampling is implemented only for QwenGR00T and QwenPI_v3")
+            if "action_condition" in sampling:
+                sampling["action_condition"] = proc.apply_actions(sampling["action_condition"])
+            kwargs["sampling"] = sampling
         out = self._framework.predict_action(examples=model_examples, **kwargs)
         normalized = np.asarray(out["normalized_actions"])  # (B, T, D)
 
@@ -216,4 +236,4 @@ class PolicyServerWrapper:
             [proc.unapply_actions(normalized[b]) for b in range(normalized.shape[0])],
             axis=0,
         )
-        return {"actions": unnorm}
+        return {"actions": unnorm, **{key: value for key, value in out.items() if key != "normalized_actions"}}

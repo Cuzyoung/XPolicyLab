@@ -368,7 +368,14 @@ class FlowmatchingActionHead(nn.Module):
         vl_embs: torch.Tensor,
         state: torch.Tensor = None,
         encoder_attention_mask=None,
+        sampling=None,
     ) -> torch.Tensor:
+        if sampling is not None:
+            from .runtime_sampling import sample_head
+
+            return sample_head(self, vl_embs, state, encoder_attention_mask,
+                               sampling, layerwise=False)
+
         # Set initial actions as the sampled noise.
         batch_size = vl_embs.shape[0]
         device = vl_embs.device

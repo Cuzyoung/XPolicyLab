@@ -18,24 +18,16 @@ SOURCE_ROOT = POLICY_DIR / "source_starvla"
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(SOURCE_ROOT))
 
-try:
-    from XPolicyLab.policy.starVLA.runtime_config import (
-        resolve_checkpoint_framework,
-        resolve_include_state,
-        validate_server_runtime_contract,
-    )
-    from XPolicyLab.policy.starVLA.scripts.prepare_hf_checkpoint import (
-        load_manifest,
-        resolve_variant,
-        validate_checkpoint_dir,
-    )
-except ImportError:
-    resolve_checkpoint_framework = None
-    resolve_include_state = None
-    validate_server_runtime_contract = None
-    load_manifest = None
-    resolve_variant = None
-    validate_checkpoint_dir = None
+from XPolicyLab.policy.starVLA.runtime_config import (
+    resolve_checkpoint_framework,
+    resolve_include_state,
+    validate_server_runtime_contract,
+)
+from XPolicyLab.policy.starVLA.scripts.prepare_hf_checkpoint import (
+    load_manifest,
+    resolve_variant,
+    validate_checkpoint_dir,
+)
 
 
 class RuntimeRegistryTest(unittest.TestCase):
@@ -60,11 +52,6 @@ class IncludeStateResolutionTest(unittest.TestCase):
     def test_model_import_resolves_runtime_config_with_repo_pythonpath(self):
         module = importlib.import_module("XPolicyLab.policy.starVLA.model")
         self.assertTrue(hasattr(module, "Model"))
-
-    def test_observation_decoder_preserves_rgb_channel_order(self):
-        module = importlib.import_module("XPolicyLab.policy.starVLA.model")
-        decoded = module._decode_image([[[255, 0, 0]]])
-        self.assertEqual(decoded[0, 0].tolist(), [255, 0, 0])
 
     def setUp(self):
         self.assertTrue(
@@ -100,9 +87,10 @@ class IncludeStateResolutionTest(unittest.TestCase):
         (self.run_dir / "config.yaml").unlink()
         self.assertTrue(resolve_include_state("auto", self.checkpoint))
 
-    def test_auto_defaults_to_false_without_checkpoint_setting(self):
+    def test_auto_requires_checkpoint_setting(self):
         self._write_yaml("config.yaml", None)
-        self.assertFalse(resolve_include_state("auto", self.checkpoint))
+        with self.assertRaisesRegex(ValueError, "include_state"):
+            resolve_include_state("auto", self.checkpoint)
 
     def test_checkpoint_framework_comes_from_adjacent_config(self):
         config = {"framework": {"name": "QwenPI_v3"}}

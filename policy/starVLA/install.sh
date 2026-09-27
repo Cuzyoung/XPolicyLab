@@ -10,3 +10,5 @@ python -m pip install -r "${STARVLA_ROOT}/requirements.txt"
 python -m pip install flash-attn --no-build-isolation
 python -m pip install h5py pandas numpy==1.26.4 opencv-python==4.10.0.84
 python -m pip install -e "${STARVLA_ROOT}"
+# Shared WebSocket protocol dependencies belong in the isolated model environment.
+python -m pip install -e "${SCRIPT_DIR}/../.." numpy==1.26.4 opencv-python-headless==4.10.0.84

@@ -24,7 +24,7 @@ BENCH_ROOT="$(cd "${XPL_ROOT}/.." && pwd)"
 UTILS_DIR="${XPL_ROOT}/utils"
 
 policy_name="$(basename "${SCRIPT_DIR}")"
-yaml_file="${XPL_ROOT}/policy/${policy_name}/deploy.yml"
+yaml_file="${STARVLA_DEPLOY_CONFIG:-${XPL_ROOT}/policy/${policy_name}/deploy.yml}"
 
 echo "[CLIENT] policy=${policy_name}, task=${task_name}, ckpt_name=${ckpt_name}, server=${policy_server_host}:${policy_server_port}"
 

@@ -13,31 +13,27 @@ Overview:
     leveraging their language modeling capabilities for action prediction.
 """
 
+import importlib.util
 import json
 import os
+from pathlib import Path
 
 import numpy as np
 import torch.nn as nn
 from transformers import AutoProcessor, PreTrainedTokenizerFast
 
+
 def _load_fast_processor(pretrained_path: str = "physical-intelligence/fast"):
-    """Load the FAST UniversalActionProcessor with compatibility for transformers >= 5.x.
+    """Load the published FAST class and tokenizer through one explicit path.
 
-    transformers 5.x changed AutoProcessor internals which breaks the default
-    loading path for the physical-intelligence/fast custom processor. This
-    helper manually loads the custom class and its BPE tokenizer component.
+    Constructing the processor directly works across Transformers versions and
+    preserves asset/configuration errors instead of retrying after any exception.
     """
-    try:
-        return AutoProcessor.from_pretrained(pretrained_path, trust_remote_code=True)
-    except (ValueError, OSError):
-        pass
-
-    # Fallback: manual load
     from huggingface_hub import snapshot_download
-    import importlib.util
 
-    local_dir = snapshot_download(pretrained_path)
-
+    local_dir = Path(pretrained_path).expanduser()
+    if not local_dir.is_dir():
+        local_dir = Path(snapshot_download(pretrained_path))
     spec = importlib.util.spec_from_file_location(
         "processing_action_tokenizer",
         os.path.join(local_dir, "processing_action_tokenizer.py"),
@@ -56,9 +52,9 @@ def _load_fast_processor(pretrained_path: str = "physical-intelligence/fast"):
 
     processor = UniversalActionProcessor(
         bpe_tokenizer=bpe_tokenizer,
-        scale=cfg.get("scale", 10),
-        vocab_size=cfg.get("vocab_size", 2048),
-        min_token=cfg.get("min_token", -354),
+        scale=cfg["scale"],
+        vocab_size=cfg["vocab_size"],
+        min_token=cfg["min_token"],
         action_dim=cfg.get("action_dim"),
         time_horizon=cfg.get("time_horizon"),
     )
@@ -66,14 +62,25 @@ def _load_fast_processor(pretrained_path: str = "physical-intelligence/fast"):
 
 
 class Fast_Action_Tokenizer(nn.Module):
-    """One MLP ResNet block with a residual connection."""
+    """FAST processor with strict validation of generated action coefficients."""
 
-    def __init__(self, fast_tokenizer_name="playground/Pretrained_models/fast"):
+    def __init__(self, fast_tokenizer_name):
         super().__init__()
 
-        self.fast_tokenizer = AutoProcessor.from_pretrained(
-            fast_tokenizer_name, trust_remote_code=True
-        )  # load https://huggingface.co/physical-intelligence/fast
+        self.fast_tokenizer = _load_fast_processor(fast_tokenizer_name)
+
+    def decode_action_tokens(self, tokens):
+        """Reject malformed generations before the upstream decoder's zero fallback."""
+        if not tokens:
+            raise ValueError("FAST returned an empty action batch")
+        expected = self.fast_tokenizer.time_horizon * self.fast_tokenizer.action_dim
+        for index, sequence in enumerate(tokens):
+            if not sequence:
+                raise ValueError(f"FAST sample {index} generated no action tokens")
+            decoded = self.fast_tokenizer.bpe_tokenizer.decode(sequence)
+            if len(decoded) != expected:
+                raise ValueError(f"FAST sample {index} has {len(decoded)} decoded coefficients; expected {expected}")
+        return self.fast_tokenizer.decode(tokens)
 
     def encoder_action2fastoken(self, raw_actions):
         # x: (batch_size, chunck, dim)
@@ -95,7 +102,6 @@ class Fast_Action_Tokenizer(nn.Module):
     ):
         # If datasets_path exists, load directly
         if os.path.exists(datasets_path):
-
             self.fast_tokenizer = AutoProcessor.from_pretrained(datasets_path, trust_remote_code=True)
             return
         else:
@@ -108,15 +114,12 @@ class Fast_Action_Tokenizer(nn.Module):
 
 
 def get_action_model(config=None):
-    """
-    Factory: build ActionModel from global framework config.
-
-    Args:
-        config: Global config (expects config.framework.action_model namespace).
-    Returns:
-        ActionModel: Initialized diffusion action head.
-    """
-    action_model = Fast_Action_Tokenizer()
+    """Build the FAST processor from the deployment binding or checkpoint config."""
+    action_cfg = config.framework.action_model if config is not None else {}
+    tokenizer_path = os.environ.get("STARVLA_FAST_TOKENIZER") or action_cfg.get("fast_tokenizer_path")
+    if not tokenizer_path:
+        raise ValueError("Set STARVLA_FAST_TOKENIZER or framework.action_model.fast_tokenizer_path")
+    action_model = Fast_Action_Tokenizer(fast_tokenizer_name=tokenizer_path)
 
     return action_model
 
@@ -134,7 +137,6 @@ def start_debugpy_once():
 
 
 if __name__ == "__main__":
-
     if os.getenv("DEBUGPY_ENABLE", "0") == "1":
         start_debugpy_once()
 

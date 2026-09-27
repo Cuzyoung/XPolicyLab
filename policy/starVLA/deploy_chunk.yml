@@ -1,0 +1,36 @@
+# Full predicted chunks for external scheduling through the shared XPolicyLab server.
+policy_name: starVLA
+protocol: ws
+host: 127.0.0.1
+port: 8500
+bench_name: null
+task_name: null
+ckpt_name: null
+env_cfg_type: null
+seed: null
+action_type: joint
+gpu_id: null
+eval_batch: false
+
+model_backend: inprocess
+action_output: chunk
+starvla_root: source_starvla
+checkpoint_path: null
+device: cuda
+use_bf16: true
+unnorm_key: null
+include_state: auto
+use_ddim: true
+num_ddim_steps: 10
+image_size: [224, 224]
+action_indices: null
+state_indices: null
+state_type: joint
+# Ordered RGB camera names, or lists of aliases. Null retains the three-view default.
+camera_names: null
+# Required for action_type=ee; see README for rotation, semantics and controller scales.
+eef: null
+# Opt-in joint flow samplers; supported only by QwenGR00T / QwenPI_v3.
+enabled_sampling_modes: []
+require_runtime_contract: true
+required_pi_v3_forward: null

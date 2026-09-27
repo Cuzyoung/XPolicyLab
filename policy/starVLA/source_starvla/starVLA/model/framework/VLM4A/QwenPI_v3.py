@@ -384,11 +384,16 @@ class Qwen_PI_v3(baseframework):
         # Step 2: run the flow-matching sampler to produce the denoised action chunk.
         with torch.autocast("cuda", dtype=torch.float32):
             pred_actions = self.action_model.predict_action(
-                vl_embs_list, state, encoder_attention_mask=backbone_attention_mask
+                vl_embs_list, state, encoder_attention_mask=backbone_attention_mask,
+                sampling=kwargs.get("sampling"),
             )  # (B, action_horizon, action_dim)
 
+        metadata = {}
+        if isinstance(pred_actions, dict):
+            metadata = {key: value for key, value in pred_actions.items() if key != "actions"}
+            pred_actions = pred_actions["actions"]
         normalized_actions = pred_actions.detach().cpu().numpy()
-        return {"normalized_actions": normalized_actions}
+        return {"normalized_actions": normalized_actions, **metadata}
 
     def state2str_transform(self, state: np.ndarray) -> str:
         """Quantise a state vector into 256 uniform bins and return it as a space-separated token string.

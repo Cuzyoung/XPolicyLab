@@ -2,6 +2,7 @@ policy_name: starVLA
 protocol: ws
 bench_name: null
 task_name: null
+ckpt_name: null
 env_cfg_type: null
 action_type: joint
 gpu_id: null
@@ -13,6 +14,17 @@ host: localhost
 port: 6000
 
 # Upstream StarVLA runtime
+model_backend: websocket  # inprocess loads the vendored model in the shared server
+action_output: step       # chunk returns every predicted waypoint per request
+device: cuda
+use_bf16: true
+# Optional full permutations: native actions -> standard order; standard state -> native order.
+action_indices: null
+state_indices: null
+state_type: joint        # Independent of action_type; ee supplies canonical TCP poses.
+camera_names: null       # Ordered names or alias lists; null keeps the three-view default.
+eef: null                # Required for action_type=ee; explicit rotation and semantics.
+enabled_sampling_modes: []  # Opt in only when the loaded flow head advertises support.
 starvla_root: source_starvla
 checkpoint_path: null
 starvla_server_host: 127.0.0.1

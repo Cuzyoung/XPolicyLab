@@ -271,11 +271,16 @@ class Qwen_GR00T(baseframework):
         # Step 4: Action Expert Forward
         with torch.autocast("cuda", dtype=torch.float32):
             pred_actions = self.action_model.predict_action(
-                last_hidden, state, encoder_attention_mask=backbone_attention_mask
+                last_hidden, state, encoder_attention_mask=backbone_attention_mask,
+                sampling=kwargs.get("sampling"),
             )  # (B, chunk_len, action_dim)
 
+        metadata = {}
+        if isinstance(pred_actions, dict):
+            metadata = {key: value for key, value in pred_actions.items() if key != "actions"}
+            pred_actions = pred_actions["actions"]
         normalized_actions = pred_actions.detach().cpu().numpy()
-        return {"normalized_actions": normalized_actions}
+        return {"normalized_actions": normalized_actions, **metadata}
 
 
 if __name__ == "__main__":
