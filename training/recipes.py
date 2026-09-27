@@ -56,8 +56,7 @@ def recipe(name):
     elif name == "xr1-yam":
         # Reproduce the saved put-bottles XR1 cluster run, not generic defaults.
         job["params"].update(action="ee", gpus="0,1,2,3,4,5,6,7", batch="1",
-                             accumulation="8", steps="30000", save_steps="5000",
-                             sampling_mode="legacy_steps")
+                             accumulation="8", steps="30000", save_steps="5000")
         prepare.append(step("process_data.sh", ["${bench}", "${run}", "${robot}", "${action}"],
                             requires=["${source}"]))
         env.update(XR1_SOURCE_FORMAT="yam", RAW_DATA_ROOT="${source}",
@@ -70,8 +69,7 @@ def recipe(name):
                    RESOURCE_GPU="${gpu_count}")
         job["train"] = {"args": ["${bench}", "${run}", "${robot}", "${action}", "${seed}", "${gpus}",
                                   "data.params.train_datasets.batch_size=${batch}",
-                                  "trainer.accumulate_grad_batches=${accumulation}",
-                                  "+data.params.train_datasets.sampling_mode=${sampling_mode}"]}
+                                  "trainer.accumulate_grad_batches=${accumulation}"]}
         job["requires"].append("${processor}/tokenizer.json")
         job["prepared"] = ["${dataset}/manifest.json", "${dataset}/norm_stats.json",
                            "${policy}/xiaomi_robotics_1/xr1/configs/data/${run}.yaml"]

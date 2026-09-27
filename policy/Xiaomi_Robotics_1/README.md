@@ -133,15 +133,9 @@ python -u xiaomi_robotics_1/xr1/tools/weight_convert.py \
 
 `train.sh` fine-tunes the released Xiaomi-Robotics-1-5B weights on a dataset produced by `process_data.sh`. It wraps the vendored launcher (`xiaomi_robotics_1/xr1/scripts/train.sh`, DeepSpeed via Lightning) and takes care of the XPolicyLab naming so evaluation finds the result without extra arguments.
 
-The JSON dataset defaults to `sampling_mode=legacy_steps` to reproduce historical
-training: it repeats or truncates the sorted frame list to
-`data.params.max_steps * batch_size * WORLD_SIZE` before distributed sampling.
-This can exclude later episodes when that budget is smaller than the corpus.
-To deliberately change to full-corpus sampling, append
-`+data.params.train_datasets.sampling_mode=full` to `train.sh`. In this mode the
-distributed sampler shuffles and shards all frames and the trainer repeats epochs
-as needed. This changes the sampling distribution and is not equivalent to the
-historical training recipe. Short runs may still end before visiting every frame.
+The JSON dataset retains its original sampling implementation: it repeats or
+truncates the sorted frame list to `data.params.max_steps * batch_size * WORLD_SIZE`
+before distributed sampling.
 
 For a standalone XPolicyLab checkout with a private task JSON configuration, the
 shared launcher can be invoked directly from the repository root:
@@ -157,7 +151,7 @@ scripts are not required for this XR1 entry point.
 The `xr1-yam` recipe carries the historical put-bottles cluster profile explicitly:
 8 GPUs, micro-batch 1, accumulation 8 (global batch 64), 30,000 optimizer steps,
 checkpoint interval 5,000, seed 0, token budget 20,000, asynchronous training and
-local TensorBoard logging. Its default sampling mode is `legacy_steps`. Model,
+local TensorBoard logging. Model,
 optimizer and scheduler settings still come from the same native Hydra configs.
 Paths, task instructions and normalization statistics must come from the selected
 dataset; do not reuse another task's statistics to imitate an old run.
