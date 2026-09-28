@@ -444,7 +444,7 @@ This verifies imports, server startup, observation serialization, action keys, a
 <details>
 <summary>Using a coding agent</summary>
 
-This repo ships two Agent Skills under [.agents/skills](.agents/skills), which `.cursor/skills` and `.claude/skills` symlink to, so Cursor, Claude Code and Codex all pick them up automatically: `xpolicylab-model-integration` builds an adapter (a prompt like "Integrate <POLICY_NAME> into XPolicyLab" is enough), and `xpolicylab-adapter-check` audits one against [CONTRIBUTING.md](CONTRIBUTING.md) before a PR ("Check policy/<POLICY_NAME>"). [AGENTS.md](AGENTS.md) carries the always-on rules every agent must follow. For an agent that supports none of these, paste this checklist:
+Read [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before changing an adapter. The following checklist summarizes the integration request:
 
 ```text
 Integrate <POLICY_NAME> into XPolicyLab.

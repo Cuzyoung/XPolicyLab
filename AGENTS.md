@@ -6,9 +6,6 @@ package inside a parent workspace — never as the top-level project.
 
 - Submission standard: [CONTRIBUTING.md](CONTRIBUTING.md). Reference adapter: `policy/demo_policy/`.
   Data formats: [README](README.md#-standard-data-formats).
-- Two skills carry the end-to-end workflows — `xpolicylab-model-integration` (build an adapter) and
-  `xpolicylab-adapter-check` (audit one before a PR). They live in `.agents/skills/`, which
-  `.cursor/skills` and `.claude/skills` symlink to, so Cursor, Claude Code and Codex all load them.
 
 The rules below apply to every change in this repo. Their rationale is in CONTRIBUTING.md.
 
