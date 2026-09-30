@@ -1,15 +1,90 @@
 # ruff: noqa: SLF001
 
+from types import SimpleNamespace
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 from openpi_client import action_chunk_broker
 import pytest
+import torch
 
 from openpi.policies import aloha_policy
 from openpi.policies import policy as _policy
 from openpi.policies import policy_config as _policy_config
 from openpi.training import config as _config
+
+
+def _noise_policy(monkeypatch, backend, *, rng=None):
+    class NoiseModel:
+        def __init__(self):
+            if backend == "torch":
+                self.config = SimpleNamespace(action_horizon=3, action_dim=2)
+            else:
+                self.action_horizon = 3
+                self.action_dim = 2
+
+        def to(self, _device):
+            return self
+
+        def eval(self):
+            return None
+
+        def sample_actions(self, key_or_device, observation, *, noise=None, **_kwargs):
+            if backend == "torch":
+                assert noise is not None, "seeded PyTorch inference must supply the sampler noise"
+                assert noise.shape == (observation.state.shape[0], self.config.action_horizon, self.config.action_dim)
+                assert noise.dtype == torch.float32
+                assert noise.device == observation.state.device
+                return noise
+            if noise is not None:
+                return noise
+            return jax.random.normal(key_or_device, (observation.state.shape[0], 3, 2))
+
+    monkeypatch.setattr(_policy.nnx_utils, "module_jit", lambda method, **_kwargs: method)
+    return _policy.Policy(NoiseModel(), rng=rng, is_pytorch=backend == "torch", pytorch_device="cpu")
+
+
+def _noise_observation():
+    return {
+        "image": {"base": np.zeros((2, 2, 3), dtype=np.uint8)},
+        "image_mask": {"base": np.ones((), dtype=np.bool_)},
+        "state": np.zeros(2, dtype=np.float32),
+    }
+
+
+@pytest.mark.parametrize("backend", ["jax", "torch"])
+def test_seeded_inference_advances_and_reset_repeats_the_sequence(monkeypatch, backend):
+    policy = _noise_policy(monkeypatch, backend)
+    policy.reset_rng(17)
+    first = policy.infer(_noise_observation())["actions"]
+    # An unrelated global Torch RNG consumer must not perturb this policy's stream.
+    with torch.random.fork_rng(devices=[]):
+        torch.rand(19)
+        second = policy.infer(_noise_observation())["actions"]
+    assert not np.array_equal(first, second)
+
+    policy.reset_rng(17)
+    np.testing.assert_array_equal(policy.infer(_noise_observation())["actions"], first)
+    np.testing.assert_array_equal(policy.infer(_noise_observation())["actions"], second)
+    policy.reset_rng(23)
+    assert not np.array_equal(policy.infer(_noise_observation())["actions"], first)
+
+
+def test_jax_constructor_preserves_an_explicit_array_key(monkeypatch):
+    key = jax.random.key(7)
+    policy = _noise_policy(monkeypatch, "jax", rng=key)
+    _, sample_key = jax.random.split(key)
+    expected = np.asarray(jax.random.normal(sample_key, (1, 3, 2)))[0]
+    np.testing.assert_array_equal(policy.infer(_noise_observation())["actions"], expected)
+
+
+@pytest.mark.parametrize("backend", ["jax", "torch"])
+def test_explicit_noise_overrides_seeded_noise(monkeypatch, backend):
+    policy = _noise_policy(monkeypatch, backend)
+    policy.reset_rng(17)
+    noise = np.arange(6, dtype=np.float32).reshape(3, 2)
+    np.testing.assert_array_equal(policy.infer(_noise_observation(), noise=noise)["actions"], noise)
 
 
 @pytest.mark.manual

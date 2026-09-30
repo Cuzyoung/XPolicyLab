@@ -84,6 +84,16 @@ class PolicyServerConfig:
 
 
 @dataclass
+class _InferenceConnection:
+    cancel_pending_on_disconnect: bool = False
+    disconnected: bool = False
+
+    @property
+    def cancelled(self) -> bool:
+        return self.cancel_pending_on_disconnect and self.disconnected
+
+
+@dataclass
 class PolicyServer:
     model: Any
     config: PolicyServerConfig = field(default_factory=PolicyServerConfig)
@@ -93,6 +103,8 @@ class PolicyServer:
         init=False,
         repr=False,
     )
+    # Fence preprocessing accepted before RESET from mutating the reset model.
+    _model_generation: int = field(default=0, init=False, repr=False)
     # Identifies this server process in HELLO_ACK; the client pins it and
     # refuses to continue if a reconnect lands on a different process (a
     # restarted server lost the model state and this cache).
@@ -171,10 +183,19 @@ class PolicyServer:
     async def _handle_connection(self, websocket: ServerConnection) -> None:
         send_lock = asyncio.Lock()
         pending: set[asyncio.Task[None]] = set()
+        connection = _InferenceConnection()
+        disconnect_watcher: asyncio.Task[None] | None = None
 
-        async def respond(frame: Frame) -> None:
+        async def watch_disconnect() -> None:
+            await websocket.wait_closed()
+            connection.disconnected = True
+
+        async def respond(frame: Frame, inference_generation: int) -> None:
             try:
-                response = await self.process_frame(frame)
+                response = await self.process_frame(
+                    frame, inference_generation=inference_generation,
+                    inference_connection=connection,
+                )
                 if response is None:
                     await websocket.close()
                     return
@@ -221,18 +242,32 @@ class PolicyServer:
                         websocket, send_lock, bytes(raw), exc
                     )
                     continue
+                if (
+                    frame.message_type == MessageType.HELLO
+                    and frame.payload.get("cancel_pending_on_disconnect") is True
+                ):
+                    connection.cancel_pending_on_disconnect = True
+                    if disconnect_watcher is None:
+                        disconnect_watcher = asyncio.create_task(watch_disconnect())
+                # Capture before scheduling or backpressure can yield. A RESET
+                # from another connection may run before this task starts.
+                inference_generation = self._model_generation
                 if len(pending) >= _MAX_INFLIGHT_RESPONSES:
                     # Backpressure: process inline instead of queuing yet
                     # another task for an overwhelmed connection.
-                    await respond(frame)
+                    await respond(frame, inference_generation)
                     continue
-                task = asyncio.create_task(respond(frame))
+                task = asyncio.create_task(respond(frame, inference_generation))
                 pending.add(task)
                 task.add_done_callback(pending.discard)
         except ConnectionClosed:
             # Routine for dropped/restarted clients; not a handler failure.
             logger.debug("policy client disconnected")
         finally:
+            connection.disconnected = True
+            if disconnect_watcher is not None:
+                disconnect_watcher.cancel()
+                await asyncio.gather(disconnect_watcher, return_exceptions=True)
             if pending:
                 # Let responses finish so their results land in the replay
                 # cache for the client's retry — but bounded, so a hung model
@@ -307,7 +342,12 @@ class PolicyServer:
             f"request ids must be unique per request",
         )
 
-    async def process_frame(self, frame: Frame) -> Frame | None:
+    async def process_frame(
+        self, frame: Frame, *, inference_generation: int | None = None,
+        inference_connection: _InferenceConnection | None = None,
+    ) -> Frame | None:
+        if inference_generation is None:
+            inference_generation = self._model_generation
         # Exactly-once replay: a client that lost the response to a request
         # (connection dropped mid-flight) retries with the SAME request_id;
         # answer from the cache instead of executing the call a second time.
@@ -324,9 +364,15 @@ class PolicyServer:
                 frame.message_type.value,
             )
             return response
-        return await self._execute_once(frame)
+        return await self._execute_once(
+            frame, inference_generation=inference_generation,
+            inference_connection=inference_connection,
+        )
 
-    async def _execute_once(self, frame: Frame) -> Frame | None:
+    async def _execute_once(
+        self, frame: Frame, *, inference_generation: int,
+        inference_connection: _InferenceConnection | None = None,
+    ) -> Frame | None:
         entry = self._inflight.get(frame.request_id)
         if entry is not None:
             original_type, task = entry
@@ -338,7 +384,12 @@ class PolicyServer:
                 frame.message_type.value,
             )
         else:
-            task = asyncio.create_task(self._execute_frame(frame))
+            task = asyncio.create_task(
+                self._execute_frame(
+                    frame, inference_generation=inference_generation,
+                    inference_connection=inference_connection,
+                )
+            )
             self._inflight[frame.request_id] = (frame.message_type, task)
             task.add_done_callback(
                 lambda _t, rid=frame.request_id: self._inflight.pop(rid, None)
@@ -347,9 +398,21 @@ class PolicyServer:
         # must not kill the shared execution for the other waiter.
         return await asyncio.shield(task)
 
-    async def _execute_frame(self, frame: Frame) -> Frame | None:
+    async def _execute_frame(
+        self, frame: Frame, *, inference_generation: int,
+        inference_connection: _InferenceConnection | None = None,
+    ) -> Frame | None:
         try:
-            response = await self._dispatch_frame(frame)
+            response = await self._dispatch_frame(
+                frame, inference_generation=inference_generation,
+                inference_connection=inference_connection,
+            )
+            if (
+                frame.message_type == MessageType.INFER
+                and inference_connection is not None
+                and inference_connection.cancelled
+            ):
+                raise WsError(ErrorCode.INFER_FAILED, "inference cancelled by client disconnect")
         except WsError as exc:
             # The client only receives str(exc), so a model failure wrapped in
             # CALL_FAILED/RESET_FAILED/INFER_FAILED would otherwise leave no
@@ -415,7 +478,10 @@ class PolicyServer:
         async with self._model_lock:
             return await self._invoke_method(method, *args)
 
-    async def _dispatch_frame(self, frame: Frame) -> Frame | None:
+    async def _dispatch_frame(
+        self, frame: Frame, *, inference_generation: int | None = None,
+        inference_connection: _InferenceConnection | None = None,
+    ) -> Frame | None:
         if frame.message_type == MessageType.HELLO:
             sampling_modes_method = getattr(self.model, "sampling_modes", None)
             if callable(sampling_modes_method):
@@ -470,7 +536,10 @@ class PolicyServer:
         if frame.message_type == MessageType.CALL:
             return await self._handle_call(frame)
         if frame.message_type == MessageType.INFER:
-            return await self._handle_infer(frame)
+            return await self._handle_infer(
+                frame, inference_generation=inference_generation,
+                inference_connection=inference_connection,
+            )
         if frame.message_type == MessageType.TRIAL_END:
             return await self._handle_trial_end(frame)
         if frame.message_type == MessageType.HEARTBEAT:
@@ -505,7 +574,10 @@ class PolicyServer:
         # caller ever sent one. A policy that needs a first observation should
         # reset() and then take a normal update_obs.
         try:
-            result = await self._call_model_method(method)
+            async with self._model_lock:
+                # Advance even when reset fails after partially changing state.
+                self._model_generation += 1
+                result = await self._invoke_method(method)
         except Exception as exc:
             raise WsError(ErrorCode.RESET_FAILED, str(exc)) from exc
         return self._reply(frame, MessageType.RESET_RESULT, _ok_payload(result))
@@ -560,7 +632,14 @@ class PolicyServer:
         payload["latency_ms"] = (time.perf_counter() - start) * 1000.0
         return self._reply(frame, MessageType.CALL_RESULT, payload)
 
-    async def _handle_infer(self, frame: Frame) -> Frame:
+    async def _handle_infer(
+        self, frame: Frame, *, inference_generation: int | None = None,
+        inference_connection: _InferenceConnection | None = None,
+    ) -> Frame:
+        if inference_generation is None:
+            inference_generation = self._model_generation
+        if inference_connection is not None and inference_connection.cancelled:
+            raise WsError(ErrorCode.INFER_FAILED, "inference cancelled by client disconnect")
         observation = frame.payload.get("observation")
         if observation is None:
             raise WsError(ErrorCode.INVALID_FRAME, "infer payload missing observation")
@@ -581,6 +660,10 @@ class PolicyServer:
         start = time.perf_counter()
         try:
             async with self._model_lock:
+                if inference_connection is not None and inference_connection.cancelled:
+                    raise RuntimeError("inference cancelled by client disconnect")
+                if inference_generation != self._model_generation:
+                    raise RuntimeError("inference invalidated by a newer model reset")
                 update_obs = getattr(self.model, "update_obs", None)
                 action_method = getattr(
                     self.model,

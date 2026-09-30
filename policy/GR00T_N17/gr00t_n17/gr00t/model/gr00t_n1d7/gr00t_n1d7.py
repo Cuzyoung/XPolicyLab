@@ -25,6 +25,7 @@ from transformers.feature_extraction_utils import BatchFeature
 import tree
 
 from gr00t.configs.model.gr00t_n1d7 import Gr00tN1d7Config
+from gr00t.model.gr00t_n1d7.rtc import guided_velocity
 from gr00t.model.modules.dit import AlternateVLDiT, DiT, SelfAttentionTransformer
 from gr00t.model.modules.embodiment_conditioned_mlp import (
     CategorySpecificMLP,
@@ -363,8 +364,24 @@ class Gr00tN1d7ActionHead(nn.Module):
 
         dt = 1.0 / self.num_inference_timesteps
         vel_strength = torch.ones_like(actions)
+        rtc = None if options is None else options.get("rtc")
+        condition = None
+        weights = None
 
-        if "action" in action_input:
+        if rtc is not None:
+            if num_samples != 1:
+                raise ValueError("RTC cannot be combined with multi-sample inference")
+            condition = action_input["action"].to(device=device, dtype=actions.dtype)
+            if condition.shape != actions.shape:
+                raise ValueError("RTC condition must match the padded model action shape")
+            temporal_weights = torch.as_tensor(
+                rtc["condition_weights"], device=device, dtype=torch.float32
+            )
+            weights = torch.zeros_like(actions, dtype=torch.float32)
+            weights[:, : temporal_weights.numel(), :] = temporal_weights[None, :, None]
+            # Padded dimensions and time steps must not constrain the sampler.
+            weights *= action_input["action_mask"].to(device=device)
+        elif "action" in action_input:
             # If action in input when doing get action, it means we want to use RTC.
             # action_horizon is the action horizon of the input action.
             # rtc_overlap_steps is the number of steps to overlap with the previous action chunks.
@@ -402,16 +419,14 @@ class Gr00tN1d7ActionHead(nn.Module):
                 :,
             ] = ramp[None, :, None].to(device)
 
-        # Run denoising steps.
-        for t in range(self.num_inference_timesteps):
-            t_cont = t / float(self.num_inference_timesteps)  # e.g. goes 0, 1/N, 2/N, ...
+        def predict_velocity(sample: torch.Tensor, t_cont: float) -> torch.Tensor:
             t_discretized = int(t_cont * self.num_timestep_buckets)
 
             # Embed noised action trajectory.
             timesteps_tensor = torch.full(
                 size=(batch_size,), fill_value=t_discretized, device=device
             )
-            action_features = self.action_encoder(actions, timesteps_tensor, embodiment_id)
+            action_features = self.action_encoder(sample, timesteps_tensor, embodiment_id)
             # Add position embedding.
             if self.config.add_pos_embed:
                 pos_ids = torch.arange(action_features.shape[1], dtype=torch.long, device=device)
@@ -438,8 +453,23 @@ class Gr00tN1d7ActionHead(nn.Module):
                 )
             pred = self.action_decoder(model_output, embodiment_id)
 
-            pred_velocity = pred[:, -self.action_horizon :]
+            return pred[:, -self.action_horizon :]
 
+        # Run denoising steps. The ordinary and upstream prefix-freezing paths
+        # retain their original Euler updates; guided RTC is explicit opt-in.
+        for t in range(self.num_inference_timesteps):
+            t_cont = t / float(self.num_inference_timesteps)
+            if rtc is None:
+                pred_velocity = predict_velocity(actions, t_cont)
+            else:
+                pred_velocity = guided_velocity(
+                    actions,
+                    lambda sample: predict_velocity(sample, t_cont),
+                    condition,
+                    weights,
+                    t_cont,
+                    float(rtc["beta"]),
+                )
             # Update actions using euler integration.
             actions = actions + dt * pred_velocity * vel_strength
 

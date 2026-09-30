@@ -73,6 +73,7 @@ class Policy(BasePolicy):
         self._metadata = metadata or {}
         self._is_pytorch_model = is_pytorch
         self._pytorch_device = pytorch_device
+        self._torch_generator: torch.Generator | None = None
 
         if self._is_pytorch_model:
             self._model = self._model.to(pytorch_device)
@@ -97,7 +98,20 @@ class Policy(BasePolicy):
                     "dvac_tail_steps",
                 ),
             )
-            self._rng = rng or jax.random.key(0)
+            self._rng = rng if rng is not None else jax.random.key(0)
+
+    def reset_rng(self, seed: int) -> None:
+        """Restart action noise without discarding the model or compiled samplers.
+
+        PyTorch uses a policy-owned generator for the initial diffusion noise;
+        this does not seed global RNGs or enforce deterministic device kernels.
+        """
+        if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**32:
+            raise ValueError("inference_seed must be an integer in [0, 2**32)")
+        if self._is_pytorch_model:
+            self._torch_generator = torch.Generator(device=self._pytorch_device).manual_seed(seed)
+        else:
+            self._rng = jax.random.key(seed)
 
     @override
     def infer(
@@ -236,6 +250,15 @@ class Policy(BasePolicy):
             if not is_batched and noise.ndim == 2:
                 noise = noise[None, ...]
             sample_kwargs["noise"] = noise
+        elif self._is_pytorch_model and self._torch_generator is not None and sample_kwargs.get("noise") is None:
+            sample_kwargs["noise"] = torch.normal(
+                mean=0.0,
+                std=1.0,
+                size=(inputs["state"].shape[0], self._model.config.action_horizon, self._model.config.action_dim),
+                dtype=torch.float32,
+                device=self._pytorch_device,
+                generator=self._torch_generator,
+            )
 
         if transformed_condition is not None:
             target = jnp.asarray(transformed_condition)

@@ -60,6 +60,19 @@ bash eval.sh RoboDojo stack_bowls RoboDojo-cotrain-arx_x5-joint-0 arx_x5 joint 0
 
 `deploy.yml` keys to check before evaluation: `checkpoint_num`, `result_dir`, `obs_transform_pipeline`, `policy_uv_env_path`, `train_config_name` (must match the config used by `train.sh`), `repo_id`.
 
+Set `inference_seed: 0` explicitly in deployment recipes (the adapter default is 0).
+This integer in `[0, 2**32)` controls action-sampling noise independently of the
+training/checkpoint naming field `seed`. Model initialization and every `reset()`
+restart the noise sequence; consecutive inference calls advance it. JAX resets
+its PRNG key without clearing compilation caches. PyTorch uses a separate
+generator on the policy device and passes its noise through the sampler's existing
+`noise` argument, leaving global RNGs unchanged. Explicitly supplied noise takes
+precedence. This does not guarantee identical values across backends/devices or
+deterministic device kernels. The effective seed is included in runtime metadata.
+For ManiMux, preparing a new rollout sends RESET; Start/Resume and Pause/Home do
+not reset this model RNG. If warmup inference is added, RESET after warmup before
+the first measured request.
+
 Environment variables used by the adapter scripts:
 
 | Variable | Notes |
