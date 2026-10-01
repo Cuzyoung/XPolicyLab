@@ -382,7 +382,7 @@ class Model(ModelTemplate):
                 f"Unsupported observation_profile={self.observation_profile!r}; "
                 f"expected one of {sorted(OBSERVATION_PROFILES)}"
             )
-        robot_dims = get_robot_action_dim_info(self.env_cfg_type)
+        robot_dims = get_robot_action_dim_info(model_cfg)
         if len(robot_dims["arm_dim"]) != 2 or len(robot_dims["ee_dim"]) != 2:
             raise ValueError("GR00T_N17 adapter requires a dual-arm robot")
         self.arm_dims = tuple(int(value) for value in robot_dims["arm_dim"])

@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import yaml
 
 from XPolicyLab.policy.SAPolicy.model import Model, _wxyz_wire_to_xyzw
 from XPolicyLab.utils.process_data import pack_robot_state
@@ -40,6 +41,7 @@ def observation():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--model-config", type=Path, required=True, help="Policy YAML with the checkpoint action layout")
     parser.add_argument(
         "--legacy-wrapper", type=Path, help="Optional archived wrapper for numerical comparison"
     )
@@ -54,6 +56,7 @@ def main():
     if not torch.cuda.is_available():
         raise RuntimeError("Checkpoint validation requires a CUDA GPU")
     cfg = {
+        **yaml.safe_load(args.model_config.read_text(encoding="utf-8")),
         "model_path": args.checkpoint,
         "env_cfg_type": "yam_dual",
         "action_type": "ee",

@@ -18,6 +18,7 @@ WORKSPACE_ROOT = POLICY_DIR.parents[2]
 if str(WORKSPACE_ROOT) not in sys.path:
     sys.path.insert(0, str(WORKSPACE_ROOT))
 
+from XPolicyLab.utils.load_file import load_yaml
 from XPolicyLab.utils.process_data import (  # noqa: E402
     decode_image_bit,
     get_robot_action_dim_info,
@@ -252,6 +253,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int, default=240)
     parser.add_argument("--width", type=int, default=320)
     parser.add_argument("--mode", choices=["image", "video"], default="image")
+    parser.add_argument("--model-config", type=Path, help="Policy YAML with explicit robot_action_dim_info")
     return parser.parse_args()
 
 
@@ -270,7 +272,10 @@ def main() -> int:
         args.raw_task_dirs,
         args.expert_data_num,
     )
-    robot_info = get_robot_action_dim_info(args.env_cfg_type)
+    model_config = load_yaml(str(args.model_config)) if args.model_config else None
+    if model_config is not None and model_config["env_cfg_type"] != args.env_cfg_type:
+        raise ValueError("--model-config must match env_cfg_type")
+    robot_info = get_robot_action_dim_info(model_config if model_config is not None else args.env_cfg_type)
     dataset = _create_dataset(
         repo_id=setting,
         output_dir=output_dir,

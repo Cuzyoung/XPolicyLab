@@ -218,6 +218,7 @@ Validate the real sampler without hardware:
 
 ```bash
 XPolicyLab/policy/SAPolicy/.venv/bin/python -m XPolicyLab.policy.SAPolicy.validate_checkpoint \
+  --model-config manimux/configs/policy/sapolicy/yam/teleopMV51/raw.yaml \
   --checkpoint /absolute/path/to/teleopMV51 --rtc \
   --output data/sapolicy/rtc-checkpoint-validation.json
 ```

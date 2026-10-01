@@ -36,30 +36,37 @@ function. Mechanically, `cv2.imdecode` must not appear outside `utils/process_da
 
 ## Paths and dimensions come from the shared helpers
 
-`env_cfg/` lives in the **parent workspace, outside this repo** — `XPolicyLab/env_cfg` does not
-exist, so an adapter must never build that path itself.
+Deployment adapters read action dimensions through
+`get_robot_action_dim_info(model_cfg)` in `XPolicyLab.utils.process_data`.
+Self-contained recipes declare:
 
-- **Importable root** in `policy/<POLICY>/model.py` is `Path(__file__).resolve().parents[2]`, the
-  parent of the checkout. `parents[1]` is the checkout itself and `parents[3]` is unrelated; both
-  are bugs.
-- **Checkpoints** resolve through `XPolicyLab.utils.checkpoint_resolver` — `resolve_checkpoint_root`,
-  or `build_run_dir_name` / `candidate_checkpoint_roots` when an adapter adds its own naming layer —
-  never by re-deriving `checkpoints/<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>-<seed>/`.
-- **Action dimensions** come from `get_robot_action_dim_info(env_cfg_type)` in
-  `XPolicyLab.utils.process_data`, never hard-coded and never through a private re-implementation.
+```yaml
+robot_action_dim_info: {arm_dim: [6, 6], ee_dim: [1, 1]}
+num_envs: 1
+```
 
-A new robot must be registered in **both** robot-info files, or training and evaluation disagree
-about action dimensions:
+The helper returns a copy of the explicit layout. `get_action_dim(model_cfg)` sums
+joint/tool coordinates; `get_batch_size(model_cfg)` reads `num_envs` (one by default
+for explicit layouts). EE representation widths still belong to the model adapter;
+do not equate arm joint DOFs with quaternion/pose widths. Pass the complete config,
+not just its `env_cfg_type`, so experiment overrides reach the adapter.
 
-| File | Read by | Keyed by |
-| --- | --- | --- |
-| `<parent>/env_cfg/robot/_robot_info.json` | `get_robot_action_dim_info()` and `get_action_dim()` in `XPolicyLab.utils.process_data` — runtime and offline conversion | robot name, from `config.robot` in `<parent>/env_cfg/<env_cfg_type>.yml` |
-| `utils/robot/_robot_info.json` | `utils/get_action_dim.sh`, called by `train.sh` | `env_cfg_type` |
+`env_cfg_type` may still select a checkpoint or model profile. The old string helper
+calls remain for external RoboDojo/RoboTwin workspaces with their own parent
+`env_cfg/` registry. That compatibility path is not a template for new integrations.
+Do not recreate a parent registry for a deployment using explicit model configuration.
 
-The two entry points named `get_action_dim` do **not** read the same file. Runtime and conversion
-code imports the Python one; the training path — `train.sh`, or a Python training entry it invokes —
-uses `utils/get_action_dim.sh`, which delivers the value as a shell variable, runs on stdlib `json`
-alone, and works in a standalone checkout that has no outer `env_cfg/` tree.
+Dataset conversion can use the same explicit recipe: see the README's
+[deployment layout section](README.md#explicit-deployment-layout).
+Legacy training scripts using `utils/get_action_dim.sh` still read this repository's
+`utils/robot/_robot_info.json`; they do not use the removed ManiMux parent registry.
+Preserve their behavior when editing existing training paths and document which
+layout source a particular entry point consumes.
+
+- **Importable root** in `policy/<POLICY>/model.py` follows the existing package setup;
+  keep model imports independent of ManiMux and its hardware dependencies.
+- **Checkpoints** resolve through `XPolicyLab.utils.checkpoint_resolver`, never by
+  re-deriving checkpoint directory names in individual model adapters.
 
 ## deploy.yml
 

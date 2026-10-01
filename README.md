@@ -389,7 +389,7 @@ from XPolicyLab.utils.load_file import load_hdf5
 from XPolicyLab.utils.process_data import decode_image_bit, get_robot_action_dim_info
 ```
 
-`decode_image_bit` turns encoded image streams into arrays and returns already-decoded values untouched. `get_robot_action_dim_info(env_cfg_type)` returns robot-specific `arm_dim` and `ee_dim` lists, so adapters do not need to hard-code action dimensions.
+`decode_image_bit` turns encoded image streams into arrays and returns already-decoded values untouched. `get_robot_action_dim_info(model_cfg)` reads the declared `arm_dim` and `ee_dim` layout; adapters do not hard-code dimensions or construct configuration paths.
 
 Offline code — conversion scripts and training dataloaders — must decode through `decode_image_bit` and never through hand-rolled `cv2.imdecode` / `np.frombuffer` / PIL, because RoboTwin and RoboDojo store image bits in legacy layouts that only this function reads correctly. Runtime code does not decode at all; the policy server has already done it, as noted in [Framework Overview](#-framework-overview). Breaking either rule fails silently and is hard to debug.
 
@@ -484,3 +484,53 @@ A collaborative open-source project led by **MMLab@HKU** and **THU**.
 **Core Lead Authors**: Tianxing Chen, Yue Chen, Tian Nian, Zijian Cai, Guangyu Chen, Wenwei Lin, Qiwei Liang.
 
 The full contributor list — spanning every integrated policy — lives on the [project website](https://xpolicylab.github.io/).
+
+## Explicit deployment layout
+
+Managed deployments supply the model's state/action grouping in the model YAML:
+
+```yaml
+env_cfg_type: yam_dual  # Checkpoint/profile identity; no file lookup with the layout below.
+robot_action_dim_info:
+  arm_dim: [6, 6]
+  ee_dim: [1, 1]
+num_envs: 1
+```
+
+Pi05, DP, SAPolicy, GR00T N1.7, LingBot-VLA2, OpenWAM, UMI DP, Cosmos3 and the
+reference adapter pass the complete config to the shared dimension helpers.
+Xiaomi XR-1 and Isaac 0.5 already use their own declared checkpoint representations
+without consulting the parent dimension registry. Other adapters still using a
+string-only lookup retain the external benchmark convention until migrated.
+An explicit layout takes precedence over `env_cfg_type`; malformed explicit input
+is not replaced by a registry lookup. Keep checkpoint identity, RGB, normalization,
+joint ordering, gripper semantics and EE pose representation unchanged.
+
+The WebSocket server forwards configuration to the model. It does not load a robot,
+read a URDF or derive a model layout from hardware. The layout and `num_envs` are
+also included in deployment metadata. Direct model construction uses the same API:
+`get_robot_action_dim_info(model_cfg)`, `get_action_dim(model_cfg)` and
+`get_batch_size(model_cfg)`. String inputs still support external benchmark workspaces
+that own `env_cfg/`; no global registry is injected or silently cached.
+
+### Dataset conversion without a parent registry
+
+The shared LeRobot v2.1/v3.0 converters accept the same standalone model recipe:
+
+```bash
+python XPolicyLab/scripts/transform_lerobot_v21_format.py 'MyDataset.task.yam_dual' \
+  --model-config /path/to/model.yaml --fps 30
+```
+
+Use `transform_lerobot_v30_format.py` for v3.0. `--fps` is the actual recorded dataset
+rate, not the robot command rate or model horizon. The selected dataset environment
+must match `env_cfg_type`; use separate runs for different layouts. Without
+`--model-config`, external benchmark conversion keeps its previous registry behavior.
+
+Pi05's `openpi/scripts/process_data.py`, DP's `diffusion_policy/process_data.py` and
+LingBot-VLA2's `process_data.py` also accept `--model-config`; their existing FPS
+behavior is unchanged. Their shell wrappers pass an absolute `XPOLICYLAB_MODEL_CONFIG`
+path through to that option. Use a complete policy recipe, not a ManiMux experiment
+with unresolved `config:` references. Native checkpoint/dataset converters that do
+not consult `env_cfg/` are unchanged. Legacy training shell dimension lookups remain
+in `utils/robot/_robot_info.json` and do not require a parent workspace registry.

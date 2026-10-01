@@ -26,5 +26,9 @@ if [[ -n "${raw_task_dirs}" ]]; then
   py_args+=("${raw_task_dirs}")
 fi
 
+if [[ -n "${XPOLICYLAB_MODEL_CONFIG:-}" ]]; then
+  py_args+=(--model-config "${XPOLICYLAB_MODEL_CONFIG}")
+fi
+
 cd "${POLICY_DIR}/openpi"
 python scripts/process_data.py "${py_args[@]}"

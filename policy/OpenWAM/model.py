@@ -290,7 +290,7 @@ class Model(ModelTemplate):
         env_cfg_type = self.model_cfg.get("env_cfg_type")
         if not env_cfg_type:
             raise ValueError("env_cfg_type is required for the OpenWAM adapter.")
-        dim_info = get_robot_action_dim_info(env_cfg_type)
+        dim_info = get_robot_action_dim_info(self.model_cfg)
         self.observation_profile = self.model_cfg.get("observation_profile") or "arx_x5_sim"
         expected_env = {"arx_x5_sim": "arx_x5", "yam_base": "yam_dual"}
         if expected_env.get(self.observation_profile) != env_cfg_type:

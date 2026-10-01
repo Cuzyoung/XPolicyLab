@@ -24,6 +24,8 @@ _MODEL_IDENTITY_KEYS = (
     "action_horizon",
     "num_steps",
     "action_type",
+    "robot_action_dim_info",
+    "num_envs",
 )
 
 

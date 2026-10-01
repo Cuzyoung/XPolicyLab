@@ -40,16 +40,19 @@ Define `class Model(ModelTemplate)` (`from XPolicyLab.model_template import Mode
 | `get_action_batch(env_idx_list=None)` | Batched chunks aligned with active env indices. |
 | `reset()` | Clear model state between episodes. |
 
-Action dictionaries use the standard keys (`left_arm_joint_state`, `right_ee_joint_state`, `ee_pose`, ...) with dimensions taken from `get_robot_action_dim_info(env_cfg_type)` in `XPolicyLab.utils.process_data` — never hard-coded, and never through a private re-implementation of the lookup. `env_cfg/` lives in the parent workspace, outside this checkout, so an adapter that assembles that path itself gets it wrong. Observation and trajectory formats: README, [Standard Data Formats](README.md#-standard-data-formats).
+Action dictionaries use standard keys (`left_arm_joint_state`, `right_ee_joint_state`,
+`ee_pose`, ...) and the shared `get_robot_action_dim_info(model_cfg)` helper.
+New deployments declare `robot_action_dim_info` and `num_envs` in their model YAML;
+pass the full config so per-run overrides take effect. Preserve model representation
+widths and ordering separately from physical joint dimensions. See
+[explicit deployment layout](README.md#explicit-deployment-layout) for examples,
+conversion entry points and the legacy benchmark boundary.
 
-A new robot must be registered in **both** robot-info files, or training and evaluation will disagree about action dimensions:
-
-| File | Read by | Keyed by |
-| --- | --- | --- |
-| `<parent>/env_cfg/robot/_robot_info.json` | `get_robot_action_dim_info()` and `get_action_dim()` in `XPolicyLab.utils.process_data` — runtime and offline conversion | robot name, from `config.robot` in `<parent>/env_cfg/<env_cfg_type>.yml` |
-| `utils/robot/_robot_info.json` | `utils/get_action_dim.sh`, called by `train.sh` | `env_cfg_type` |
-
-Two entry points share the name `get_action_dim`, and they do **not** read the same file. Runtime and conversion code imports `get_action_dim` (or `get_robot_action_dim_info`) from `XPolicyLab.utils.process_data`. The training path — `train.sh`, or a Python training entry it invokes — uses `utils/get_action_dim.sh` instead: it delivers the value as a shell variable, runs on stdlib `json` alone (importing the Python module pulls in numpy, cv2, h5py and yaml), and works in a standalone checkout that has no outer `env_cfg/` tree.
+String-only helper calls still read an external benchmark's parent `env_cfg/` registry.
+The legacy training helper `utils/get_action_dim.sh` separately reads
+`utils/robot/_robot_info.json`. Existing benchmark training paths may still need that
+registration; explicit model-serving configurations do not. Do not introduce another
+fixed-path registry in a new adapter.
 
 Two more shared entry points, so adapters do not re-derive them: the importable root in `policy/<POLICY>/model.py` is `Path(__file__).resolve().parents[2]` (the parent of this checkout — `parents[1]` or `parents[3]` is a bug), and checkpoint directories resolve through `XPolicyLab.utils.checkpoint_resolver` (`resolve_checkpoint_root`, or `build_run_dir_name` / `candidate_checkpoint_roots` when the adapter adds its own naming layer).
 

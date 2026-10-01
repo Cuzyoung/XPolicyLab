@@ -5,7 +5,7 @@ import zarr
 import shutil
 import argparse
 import cv2
-from XPolicyLab.utils.load_file import load_hdf5
+from XPolicyLab.utils.load_file import load_hdf5, load_yaml
 from XPolicyLab.utils.process_data import pack_robot_state, get_robot_action_dim_info, decode_image_bit
 
 def main():
@@ -16,6 +16,7 @@ def main():
     parser.add_argument("action_type", type=str, help="The type of action to process (e.g., joint)",)
     parser.add_argument("expert_data_num", type=int, nargs="?", default=None,
                         help="Optional number of episodes to process; defaults to all episodes.",)
+    parser.add_argument("--model-config", help="Policy YAML with explicit robot_action_dim_info")
     args = parser.parse_args()
 
     bench_name = args.bench_name
@@ -25,7 +26,10 @@ def main():
     action_type = args.action_type
     load_data_dir = os.path.join("../../../data", str(bench_name), str(ckpt_name), str(env_cfg_type))
 
-    robot_action_dim_info = get_robot_action_dim_info(env_cfg_type)
+    model_config = load_yaml(args.model_config) if args.model_config else None
+    if model_config is not None and model_config["env_cfg_type"] != env_cfg_type:
+        raise ValueError("--model-config must match env_cfg_type")
+    robot_action_dim_info = get_robot_action_dim_info(model_config if model_config is not None else env_cfg_type)
 
     available_episodes = len(glob.glob(os.path.join(load_data_dir, "data", "episode_*.hdf5")))
     if expert_data_num is None:

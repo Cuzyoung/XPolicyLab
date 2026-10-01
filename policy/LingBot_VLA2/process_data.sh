@@ -50,6 +50,10 @@ if [[ -n "${raw_task_dirs}" ]]; then
   convert_args+=(--raw-task-dirs "${raw_task_dirs}")
 fi
 
+if [[ -n "${XPOLICYLAB_MODEL_CONFIG:-}" ]]; then
+  convert_args+=(--model-config "${XPOLICYLAB_MODEL_CONFIG}")
+fi
+
 "${PYTHON}" "${convert_args[@]}"
 
 if [[ "${LINGBOT_VLA2_SKIP_NORM_STATS:-0}" == "1" ]]; then

@@ -14,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import yaml
 
 from .debug_client import check_actions, synthetic_observation
 from .model import Model
@@ -66,6 +67,7 @@ def seed_all(seed):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
+    parser.add_argument("--model-config", type=Path, default=Path(__file__).with_name("deploy.yml"))
     parser.add_argument("--dataset", type=Path)
     parser.add_argument("--legacy-root", type=Path)
     parser.add_argument("--source-fps", type=float, default=30)
@@ -77,8 +79,10 @@ def main():
     import torch
 
     torch.set_num_threads(4)
+    model_config = yaml.safe_load(args.model_config.read_text(encoding="utf-8"))
     model = Model(
         {
+            **model_config,
             "checkpoint_path": str(args.checkpoint),
             "source_fps": args.source_fps,
             "action_type": "ee",

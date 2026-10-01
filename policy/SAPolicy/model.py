@@ -156,7 +156,7 @@ class Model(ModelTemplate):
         self._env_cfg_type = cfg.get("env_cfg_type") or "yam_dual"
         if self._action_type != "ee" or self._env_cfg_type != "yam_dual":
             raise ValueError("SAPolicy supports env_cfg_type=yam_dual, action_type=ee")
-        self._dimensions = get_robot_action_dim_info(self._env_cfg_type)
+        self._dimensions = get_robot_action_dim_info({**cfg, "env_cfg_type": self._env_cfg_type})
         if self._dimensions != {"arm_dim": [6, 6], "ee_dim": [1, 1]}:
             raise ValueError("SAPolicy checkpoint requires two YAM arms and scalar grippers")
         # Shared pack/unpack helpers take representation widths. EE poses have

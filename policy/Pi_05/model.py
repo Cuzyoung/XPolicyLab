@@ -137,7 +137,8 @@ class Model(ModelTemplate):
         self.action_type = model_cfg.get("action_type", "joint")
         env_cfg_type = model_cfg.get("env_cfg_type")
         self.robot_action_dim_info = (
-            get_robot_action_dim_info(env_cfg_type) if env_cfg_type is not None else None
+            get_robot_action_dim_info(model_cfg)
+            if "robot_action_dim_info" in model_cfg or env_cfg_type is not None else None
         )
         self.robot_action_dim = (
             sum(self.robot_action_dim_info["arm_dim"])
