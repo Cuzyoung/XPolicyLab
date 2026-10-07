@@ -14,7 +14,9 @@ model:
   action_dit_pretrained_path: null
 
 EVALUATION:
-  robotwin_root: third_party/RoboTwin
+  # Path to a RoboTwin checkout, absolute or relative to the FastWAM root.
+  # Required — there is no in-tree copy to fall back on.
+  robotwin_root: null
   policy_name: fastwam_policy
   task_name: null
   task_config: demo_randomized

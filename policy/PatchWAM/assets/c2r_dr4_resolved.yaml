@@ -1,0 +1,413 @@
+output_dir: ./runs/robotwin_c2r_dr4
+batch_size: 16
+num_workers: 16
+prefetch_factor: 2
+persistent_workers: true
+lr_scheduler_type: cosine
+learning_rate: 0.0001
+warmup_steps: null
+num_epochs: 100
+max_steps: 150000
+log_every: 10
+save_every: 5000
+keep_latest_state_only: true
+eval_every: 100000
+eval_num_inference_steps: 10
+eval_num_samples: 1
+rank_timer_every: 10
+rank_timer_sync_cuda: true
+qwen_cache_batch_size: 32
+qwen_cache_overwrite: false
+qwen_cache_save_workers: 8
+flux2_qwen3_model_spec: null
+precache_arrow: true
+precache_num_workers: 4
+build_lerobot_meta_cache: true
+build_norm_stats: true
+precache_fuse_norm_stats: true
+force_rebuild_norm_stats: false
+norm_stats_use_arrow_cache: true
+norm_stats_bulk_read_arrow: true
+norm_stats_cache_enabled: true
+norm_stats_cache_dir: null
+precache_profile: false
+precache_profile_min_sec: 0.0
+gradient_accumulation_steps: 1
+mixed_precision: bf16
+seed: 42
+max_grad_norm: 1.0
+weight_decay: 0.01
+resume: null
+wandb:
+  enabled: true
+  workspace: null
+  project: imagewam
+  name: c2r-dr4
+  group: null
+  mode: offline
+data:
+  train:
+    _target_: imagewam.datasets.lerobot.robot_video_dataset.RobotVideoDataset
+    dataset_dirs:
+    - ./data/robotwin2.0
+    shape_meta:
+      images:
+      - key: cam_high
+        raw_shape:
+        - 3
+        - 480
+        - 640
+        shape:
+        - 3
+        - 240
+        - 320
+      - key: cam_left_wrist
+        raw_shape:
+        - 3
+        - 480
+        - 640
+        shape:
+        - 3
+        - 240
+        - 320
+      - key: cam_right_wrist
+        raw_shape:
+        - 3
+        - 480
+        - 640
+        shape:
+        - 3
+        - 240
+        - 320
+      action:
+      - key: default
+        raw_shape: 14
+        shape: 14
+      state:
+      - key: default
+        raw_shape: 14
+        shape: 14
+    num_frames: 17
+    global_sample_stride: 1
+    action_video_freq_ratio: 1
+    video_size:
+    - 288
+    - 256
+    camera_key: null
+    val_set_proportion: 0.01
+    is_training_set: true
+    pretrained_norm_stats: ../assets/dataset_stats.json
+    skip_padding_as_possible: false
+    concat_multi_camera: robotwin
+    robotwin_camera_layout: compact_288x256
+    video_augmentation:
+      _target_: imagewam.aug.DomainRandomization
+      p: 0.8
+      photometric:
+        brightness: 0.4
+        contrast: 0.4
+        saturation: 0.4
+        hue: 0.1
+        gamma:
+        - 0.7
+        - 1.4
+        exposure:
+        - -0.5
+        - 0.5
+        color_temperature: 0.15
+        gaussian_noise_std: 0.03
+        blur_sigma:
+        - 0.0
+        - 1.5
+        blur_prob: 0.3
+      style:
+        enabled: true
+        p: 0.5
+        target_mean:
+        - 0.2
+        - 0.8
+        target_std:
+        - 0.05
+        - 0.4
+        strength:
+        - 0.4
+        - 1.0
+      fourier:
+        enabled: true
+        p: 0.5
+        amp_jitter:
+        - 0.5
+        - 1.5
+        envelope_strength:
+        - 0.0
+        - 0.6
+        envelope_grid: 8
+      background:
+        enabled: false
+    require_text_cache: false
+    endpoint_frames_only: true
+    nonidle_filter_path: ../assets/nonidle_ranges.json
+    qwen_text_cache_dir: null
+    qwen_context_len: 128
+    processor:
+      _target_: imagewam.datasets.lerobot.processors.imagewam_processor.ImageWAMProcessor
+      shape_meta:
+        images:
+        - key: cam_high
+          raw_shape:
+          - 3
+          - 480
+          - 640
+          shape:
+          - 3
+          - 240
+          - 320
+        - key: cam_left_wrist
+          raw_shape:
+          - 3
+          - 480
+          - 640
+          shape:
+          - 3
+          - 240
+          - 320
+        - key: cam_right_wrist
+          raw_shape:
+          - 3
+          - 480
+          - 640
+          shape:
+          - 3
+          - 240
+          - 320
+        action:
+        - key: default
+          raw_shape: 14
+          shape: 14
+        state:
+        - key: default
+          raw_shape: 14
+          shape: 14
+      num_obs_steps: 17
+      image_obs_steps: 2
+      num_output_cameras: 3
+      action_output_dim: 14
+      proprio_output_dim: 14
+      action_state_transforms: null
+      use_stepwise_action_norm: false
+      norm_default_mode: z-score
+      norm_exception_mode: null
+      action_state_merger:
+        _target_: imagewam.datasets.lerobot.transforms.action_state_merger.ConcatLeftAlign
+      train_transforms:
+      - _target_: imagewam.datasets.lerobot.transforms.image.ToTensor
+      - _target_: torchvision.transforms.Resize
+        size:
+        - 240
+        - 320
+      val_transforms:
+      - _target_: imagewam.datasets.lerobot.transforms.image.ToTensor
+      - _target_: torchvision.transforms.Resize
+        size:
+        - 240
+        - 320
+    text_embedding_cache_dir: null
+    context_len: 128
+    episode_index_filter:
+      mode: periodic_prefix
+      period: 550
+      keep_first: 50
+  val:
+    _target_: imagewam.datasets.lerobot.robot_video_dataset.RobotVideoDataset
+    dataset_dirs:
+    - ./data/robotwin2.0
+    shape_meta:
+      images:
+      - key: cam_high
+        raw_shape:
+        - 3
+        - 480
+        - 640
+        shape:
+        - 3
+        - 240
+        - 320
+      - key: cam_left_wrist
+        raw_shape:
+        - 3
+        - 480
+        - 640
+        shape:
+        - 3
+        - 240
+        - 320
+      - key: cam_right_wrist
+        raw_shape:
+        - 3
+        - 480
+        - 640
+        shape:
+        - 3
+        - 240
+        - 320
+      action:
+      - key: default
+        raw_shape: 14
+        shape: 14
+      state:
+      - key: default
+        raw_shape: 14
+        shape: 14
+    num_frames: 17
+    global_sample_stride: 1
+    action_video_freq_ratio: 1
+    video_size:
+    - 288
+    - 256
+    camera_key: null
+    val_set_proportion: 0.01
+    is_training_set: false
+    pretrained_norm_stats: ../assets/dataset_stats.json
+    skip_padding_as_possible: false
+    concat_multi_camera: robotwin
+    robotwin_camera_layout: compact_288x256
+    video_augmentation:
+      _target_: imagewam.aug.DomainRandomization
+      p: 0.8
+      photometric:
+        brightness: 0.4
+        contrast: 0.4
+        saturation: 0.4
+        hue: 0.1
+        gamma:
+        - 0.7
+        - 1.4
+        exposure:
+        - -0.5
+        - 0.5
+        color_temperature: 0.15
+        gaussian_noise_std: 0.03
+        blur_sigma:
+        - 0.0
+        - 1.5
+        blur_prob: 0.3
+      style:
+        enabled: true
+        p: 0.5
+        target_mean:
+        - 0.2
+        - 0.8
+        target_std:
+        - 0.05
+        - 0.4
+        strength:
+        - 0.4
+        - 1.0
+      fourier:
+        enabled: true
+        p: 0.5
+        amp_jitter:
+        - 0.5
+        - 1.5
+        envelope_strength:
+        - 0.0
+        - 0.6
+        envelope_grid: 8
+      background:
+        enabled: false
+    require_text_cache: false
+    endpoint_frames_only: true
+    nonidle_filter_path: ../assets/nonidle_ranges.json
+    qwen_text_cache_dir: null
+    qwen_context_len: 128
+    processor:
+      _target_: imagewam.datasets.lerobot.processors.imagewam_processor.ImageWAMProcessor
+      shape_meta:
+        images:
+        - key: cam_high
+          raw_shape:
+          - 3
+          - 480
+          - 640
+          shape:
+          - 3
+          - 240
+          - 320
+        - key: cam_left_wrist
+          raw_shape:
+          - 3
+          - 480
+          - 640
+          shape:
+          - 3
+          - 240
+          - 320
+        - key: cam_right_wrist
+          raw_shape:
+          - 3
+          - 480
+          - 640
+          shape:
+          - 3
+          - 240
+          - 320
+        action:
+        - key: default
+          raw_shape: 14
+          shape: 14
+        state:
+        - key: default
+          raw_shape: 14
+          shape: 14
+      num_obs_steps: 17
+      image_obs_steps: 2
+      num_output_cameras: 3
+      action_output_dim: 14
+      proprio_output_dim: 14
+      action_state_transforms: null
+      use_stepwise_action_norm: false
+      norm_default_mode: z-score
+      norm_exception_mode: null
+      action_state_merger:
+        _target_: imagewam.datasets.lerobot.transforms.action_state_merger.ConcatLeftAlign
+      train_transforms:
+      - _target_: imagewam.datasets.lerobot.transforms.image.ToTensor
+      - _target_: torchvision.transforms.Resize
+        size:
+        - 240
+        - 320
+      val_transforms:
+      - _target_: imagewam.datasets.lerobot.transforms.image.ToTensor
+      - _target_: torchvision.transforms.Resize
+        size:
+        - 240
+        - 320
+    text_embedding_cache_dir: null
+    context_len: 128
+    episode_index_filter:
+      mode: periodic_prefix
+      period: 550
+      keep_first: 50
+model:
+  _target_: exploration.action_img_patch.factory.create_imagewam_flux2_klein_actionpatch
+  flux2_model_path: ./models/flux-2-klein-base-4b.safetensors
+  ae_model_path: ./models/ae.safetensors
+  flux2_src_path: ./PatchWAM/vendor/flux2
+  variant: klein-base-4b
+  qwen3_model_spec: Qwen/Qwen3-4B
+  qwen_context_len: 128
+  load_text_encoder: true
+  proprio_dim: 14
+  pack_proprio_after_text: true
+  mot_checkpoint_mixed_attn: true
+  mot_gqa_implementation: repeat
+  mot_force_flash_attention: false
+  action_patch_dim: 14
+  action_patch_scale: 1.0
+  video_scheduler:
+    train_shift: 5.0
+    infer_shift: 5.0
+    num_train_timesteps: 1000
+  loss:
+    lambda_video: 0.5
+    lambda_action: 1.0

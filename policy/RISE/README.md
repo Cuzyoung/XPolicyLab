@@ -18,12 +18,12 @@ Read `INSTALLATION.md` before first use: RISE requires Pi0.5 pretrained weights 
 
 ## Data Processing
 
-RISE consumes LeRobot v2.1 datasets directly — there is no HDF5 conversion step. `process_data.sh` links the source dataset from `RISE_RAW_DATASET` (a directory containing `meta/` and `data/`) into `data/<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>-lerobot/` so `train.sh` can find it, and computes normalization stats:
+RISE consumes LeRobot v2.1 datasets directly — there is no HDF5 conversion step. It expects the standard keys of `XPolicyLab/scripts/transform_lerobot_v21_format.py` ([Official LeRobot conversion](../../README.md#official-lerobot-conversion)), which the published `RoboDojo_lerobot_v21_video` export already follows. `process_data.sh` links the source dataset from `RISE_RAW_DATASET` (a directory containing `meta/` and `data/`) into `data/<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>-lerobot/` so `train.sh` can find it, and computes normalization stats:
 
 ```bash
 # From the XPolicyLab repo root: download the full RoboDojo LeRobot v2.1 dataset
 # (saved to <data_root>/RoboDojo_lerobot_v21_video).
-bash scripts/RoboDojo/download_robodojo_data.sh huggingface lerobot_v2.1
+bash scripts/RoboDojo/download_robodojo_data.sh lerobot_v2.1
 
 cd XPolicyLab/policy/RISE
 export RISE_RAW_DATASET=<data_root>/RoboDojo_lerobot_v21_video

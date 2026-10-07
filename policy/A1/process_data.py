@@ -3,8 +3,9 @@
 
 The converter follows the same on-disk layout used by FastWAM-style v2.1
 exports: parquet frame metadata plus per-camera mp4 videos. Images are stored
-as HWC RGB uint8. XPolicyLab compressed frames are decoded by OpenCV as BGR, so
-we explicitly convert BGR -> RGB before writing videos.
+as HWC RGB uint8: `decode_image_bit` already returns RGB for both stored byte
+formats, and imageio's writer takes RGB, so no channel conversion happens here.
+Adding one (e.g. a BGR->RGB "fix") is what would actually corrupt the videos.
 """
 
 import argparse

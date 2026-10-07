@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
-import io
+import sys
 from pathlib import Path
 
 import h5py
 import numpy as np
 import pytest
-from PIL import Image
+
+# Fixtures store image bits the way the production corpus does — through
+# encode_image_bit, so the reader's decode_image_bit gets marked standard RGB
+# buffers rather than unmarked JPEGs it would treat as legacy channel-reversed.
+_XPOLICYLAB_ROOT = Path(__file__).resolve().parents[4]
+if str(_XPOLICYLAB_ROOT) not in sys.path:
+    sys.path.insert(0, str(_XPOLICYLAB_ROOT))
+
+from XPolicyLab.utils.process_data import encode_image_bit
 
 from openwam.dataloader.registry import build_dataset
 from openwam.dataloader.robodojo import (
@@ -59,10 +67,8 @@ def write_calibration(root: Path) -> Path:
 
 
 def encode_jpeg(color: tuple[int, int, int], height: int = 18, width: int = 20) -> bytes:
-    image = Image.new("RGB", (width, height), color)
-    buffer = io.BytesIO()
-    image.save(buffer, format="JPEG", quality=100, subsampling=0)
-    return buffer.getvalue()
+    image = np.full((height, width, 3), color, dtype=np.uint8)
+    return encode_image_bit(image, quality=100)
 
 
 def source_arrays(T: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:

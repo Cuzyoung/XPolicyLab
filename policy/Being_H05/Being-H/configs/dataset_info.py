@@ -281,7 +281,7 @@ DATASET_INFO = {
         },
     },
 
-    # RoboDojo LeRobot v2.1 (from XPolicyLab/scripts/transform_lerobot_v30_format.py or v21 export)
+    # RoboDojo LeRobot v2.1 (from XPolicyLab/scripts/transform_lerobot_v21_format.py or the prepared v21 export)
     'robodojo_posttrain': {
         'RoboDojo_sim_arx-x5_v21': {
             'dataset_path': '/path/to/lerobot/RoboDojo_sim_arx-x5_v21',

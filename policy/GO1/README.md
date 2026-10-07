@@ -29,6 +29,8 @@ bash process_data.sh RoboDojo stack_bowls_50ep arx_x5 joint 50 stack_bowls
 
 `expert_data_num` is an optional episode limit (empty = all episodes). `raw_task_dirs` defaults to `ckpt_name` and accepts a comma-separated task list with the episode limit applied per task — e.g. `bash process_data.sh RoboDojo cotrain arx_x5 joint "" stack_bowls,push_T` merges two tasks into one cotrain LeRobot dataset. `fps` defaults to `30`; `output_dir` defaults to the policy `data/` directory. Converted data is written to `data/<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>/`, which `train.sh` uses as its default `LEROBOT_DATA_PATH`.
 
+The output camera keys deviate from the [official LeRobot converters](../../README.md#official-lerobot-conversion): frames are stored as `observation.images.cam_head` / `cam_hand_left` / `cam_hand_right`, the AgiBot-World naming GO1 trains on — so produce the dataset with this `process_data.sh` rather than the shared `scripts/transform_lerobot_*` converters.
+
 ## Training
 
 ```bash

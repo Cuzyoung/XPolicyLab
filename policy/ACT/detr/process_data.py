@@ -8,20 +8,6 @@ import json
 from XPolicyLab.utils.load_file import load_hdf5
 from XPolicyLab.utils.process_data import pack_robot_state, get_robot_action_dim_info, decode_image_bit
 
-def images_encoding(imgs):
-    encode_data = []
-    padded_data = []
-    max_len = 0
-    for i in range(len(imgs)):
-        success, encoded_image = cv2.imencode(".jpg", imgs[i])
-        jpeg_data = encoded_image.tobytes()
-        encode_data.append(jpeg_data)
-        max_len = max(max_len, len(jpeg_data))
-    # padding
-    for i in range(len(imgs)):
-        padded_data.append(encode_data[i].ljust(max_len, b"\0"))
-    return encode_data, max_len
-
 def data_transform(path, episode_num, load_data_dir, save_dir, robot_action_dim_info):
     begin = 0
     floders = os.listdir(path)

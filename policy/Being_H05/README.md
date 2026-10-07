@@ -18,7 +18,7 @@ conda activate <policy_env>  # e.g. beingh
 
 ## Data Processing
 
-Links (or reuses) a LeRobot v2.1 dataset under `data/<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>/` and registers it for Being-H training. The source LeRobot repo comes from `LEROBOT_DATA_PATH` (default: shared RoboDojo v21); the script accepts only the optional `[expert_data_num]` beyond the standard arguments:
+Links (or reuses) a LeRobot v2.1 dataset under `data/<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>/` and registers it for Being-H training; the expected keys are the standard ones of `XPolicyLab/scripts/transform_lerobot_v21_format.py` ([Official LeRobot conversion](../../README.md#official-lerobot-conversion)), which the published `RoboDojo_lerobot_v21_video` export already follows. The source LeRobot repo comes from `LEROBOT_DATA_PATH` (default: shared RoboDojo v21); the script accepts only the optional `[expert_data_num]` beyond the standard arguments:
 
 ```bash
 cd XPolicyLab/policy/Being_H05
@@ -76,7 +76,7 @@ Environment variables used by the adapter scripts:
 | `BEINGH_CONDA_ENV` | Conda env name; defaults to `beingh`. |
 | `BEINGH_CKPT_RUN_ID` | Eval override for the run directory under `checkpoints/`; defaults to `ckpt_name`. |
 | `LEROBOT_DATA_PATH` | Source LeRobot repo for `process_data.sh`; defaults to the shared RoboDojo v21 dataset. |
-| `RAW_DATA_ROOT` | If set, `process_data.sh` hints to run `XPolicyLab/scripts/transform_lerobot_v30_format.py` first. |
+| `RAW_DATA_ROOT` | If set, `process_data.sh` hints to run `XPolicyLab/scripts/transform_lerobot_v21_format.py` first. |
 | `ACTION_CHUNK_LENGTH` | Training action chunk length; default `16`. |
 | `ATTN_MODE` | Training attention mode; default `causal`. |
 

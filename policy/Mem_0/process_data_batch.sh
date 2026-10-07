@@ -19,6 +19,12 @@ set -euo pipefail
 #   task_config_path  = <policy>/Mem_0/xpolicylab_adapter/task_config.json
 # Output: policy/Mem_0/data/<dataset_id>-lerobot/
 #
+# Optional env vars:
+#   VCODEC=libsvtav1   LeRobot video codec (default h264)
+#   USE_PREVIEW=1      Read frames from preview_video/*.mp4 instead of decoding the
+#                      HDF5 image bits. Faster, but those mp4s come from outside
+#                      XPolicyLab, so their channel order is not guaranteed.
+#
 # Fast path (no HDF5 re-encode): set ADAPT_FROM to an existing LeRobot dataset root,
 # e.g. xspark_shared/lerobot/RoboDojo_sim_v21_video_abot. The source is read-only;
 # videos are symlinked and only parquet/meta are rewritten for Mem_0.
@@ -114,8 +120,9 @@ echo "[batch] Mn tasks (${#mn_tasks[@]}): ${mn_tasks[*]:-<none>}"
 echo "[batch] annotation_root=${ANNOTATION_DIR}"
 echo "[batch] output dataset_id=${resolved_dataset_id}"
 
-# Default to the fast "use preview mp4" path; override with USE_PREVIEW=0.
-use_preview="${USE_PREVIEW:-1}"
+# Default to decoding the HDF5 image bits, the only source whose channel order
+# XPolicyLab guarantees. USE_PREVIEW=1 takes the faster preview-mp4 path instead.
+use_preview="${USE_PREVIEW:-0}"
 
 # Pre-validate sources and Mn annotations so we fail before launching the heavy converter.
 missing=()
@@ -140,7 +147,7 @@ done
 if [[ ${#missing[@]} -gt 0 ]]; then
     echo "[batch] missing inputs (${#missing[@]}):" >&2
     for m in "${missing[@]}"; do echo "  - ${m}" >&2; done
-    echo "[batch] tip: set USE_PREVIEW=0 to fall back to per-frame jpeg decode." >&2
+    echo "[batch] tip: unset USE_PREVIEW to decode the HDF5 image bits instead." >&2
     exit 1
 fi
 
@@ -159,10 +166,11 @@ fi
 if [[ -n "${VCODEC:-}" ]]; then
     py_args+=( --vcodec "${VCODEC}" )
 fi
-# Disable preview-mp4 fast path with USE_PREVIEW=0 (falls back to slow per-frame
-# jpeg decode + PNG dump). Default (no var or =1) uses the fast path.
-if [[ "${use_preview}" != "1" ]]; then
-    py_args+=( --no-use-preview )
+# Opt into the preview-mp4 fast path with USE_PREVIEW=1. It skips the per-frame
+# jpeg decode, but the frames then come from files this repo does not produce, so
+# their channel order is not guaranteed to be the RGB that evaluation feeds.
+if [[ "${use_preview}" == "1" ]]; then
+    py_args+=( --use-preview )
 fi
 
 python "${CONVERTER}" "${py_args[@]}"

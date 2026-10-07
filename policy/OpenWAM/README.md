@@ -1,21 +1,5 @@
 # OpenWAM
 
-## ManiMux YAM integration
-
-The local extension adds `observation_profile: yam_base` with `env_cfg_type:
-yam_dual`, absolute per-arm base poses and XPolicy WebSocket inference. It
-does not use the ARX simulation calibration. `train.sh` and `process_data.sh`
-now use the active Python (`OPENWAM_PYTHON` optionally selects an existing
-interpreter); no environment is created. Training accepts the standard six
-arguments plus Hydra overrides, with `OPENWAM_DATASET_DIR`,
-`OPENWAM_CHECKPOINT_DIR`, `OPENWAM_FINETUNE_CKPT_PATH` and
-`OPENWAM_RESUME_CKPT_PATH`. Use `--dry-run` on `train.sh` to inspect the command.
-Native YAM HDF5 uses future achieved EE states as targets; it is not raw
-ManiMux recording format or XR1 JSON. The parent repository's
-`docs/openwam-yam-runbook.md` documents conversion, cluster launch, checkpoint
-checks and hardware-free probes. For YAM, task evaluation runs in ManiMux.
-The upstream RoboDojo simulation instructions below remain a separate profile.
-
 **Contributor:** OpenWAM Contributors | **Paper:** An Open, Modular Exploration Towards Systematic World–Action Model Pretraining | **arXiv:** [2609.07398](https://arxiv.org/abs/2609.07398) | **Original code:** https://github.com/OpenWAM-Official/OpenWAM
 
 `OpenWAM` adapts the OpenWAM world-action model to XPolicyLab/RoboDojo (`arx_x5`, absolute EE control, batched inference). Integration scripts live at this directory level; the vendored upstream implementation lives in `OpenWAM/`. Official OpenWAM does not expose batch inference; the vendored tree adds `generate_batch` for `eval_batch: true`.
@@ -24,9 +8,11 @@ Shared conventions — argument meanings, checkpoint naming, split-machine deplo
 
 ## Installation
 
-Use an existing compatible Python environment, then install the PyTorch CUDA wheel before the adapter packages:
+Create a Python >= 3.10 environment, then install the official PyTorch CUDA wheel before the adapter packages:
 
 ```bash
+conda create -n openwam python=3.10
+conda activate openwam
 pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
 
 cd XPolicyLab/policy/OpenWAM
@@ -48,9 +34,7 @@ export OPENWAM_DATASET_DIR=/path/to/robodojo_data
 bash process_data.sh RoboDojo cotrain arx_x5 ee
 ```
 
-Set `OPENWAM_DATASET_DIR` to prepared native data. The script validates the
-reader, builds statistics and inspects a training sample. It does not download
-or silently treat an empty directory as prepared data.
+If `OPENWAM_DATASET_DIR` (or `policy/OpenWAM/data/<bench>-<ckpt>-<env>-<action>/`) already exists, the script exits. Otherwise it launches the official interactive downloader `OpenWAM/scripts/download_assets/download_benchmark_data.py` — select RoboDojo.
 
 ## Model Assets
 
@@ -83,10 +67,7 @@ bash train.sh <bench_name> <ckpt_name> <env_cfg_type> <action_type> <seed> <gpu_
 bash train.sh RoboDojo cotrain arx_x5 ee 0 0
 ```
 
-This invokes the vendored trainer through torch distributed run with
-`dataloader=robodojo`. Checkpoints land in the standard five-part run directory
-unless `OPENWAM_CHECKPOINT_DIR` is set. Extra Hydra overrides follow the six
-positional arguments; data/frame/checkpoint contract overrides are rejected.
+This wraps official `OpenWAM/scripts/train.sh` with `dataloader=robodojo`. Checkpoints land in `checkpoints/<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>-<seed>/`. Extra Hydra overrides go in `OPENWAM_TRAIN_OVERRIDES`.
 
 ## Evaluation
 
@@ -121,4 +102,4 @@ bash eval.sh RoboDojo stack_bowls New_OpenWAM_RoboDojo_SFT_60k arx_x5 ee 0 0 0 \
 | `OPENWAM_RESUME_CKPT_PATH` | Resume directory for official `training.resume_ckpt_path`. |
 | `OPENWAM_ALLOW_DUMMY_POLICY` | Debug-only: skip checkpoint load and return hold-position chunks. |
 
-`eval_batch: true` stacks every running env into one `engine.generate_batch` forward and forces `dit_cache` / `compile` off. Single-stream deployment uses `engine.generate` and may enable both optimizations. `model.py` always forces `decode_video` off and `inference_mode=sync`. `device: cuda` loads Wan, UMT5-XXL, and ActionDiT on GPU, matching official OpenWAM deploy.
+`eval_batch: true` stacks every running env into one `engine.generate_batch` forward. `model.py` re-forces `dit_cache` / `compile` / `decode_video` off and `inference_mode=sync`. `device: cuda` loads Wan, UMT5-XXL, and ActionDiT on GPU, matching official OpenWAM deploy.

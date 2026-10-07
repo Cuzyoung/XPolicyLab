@@ -18,7 +18,7 @@ source openpi/.venv/bin/activate  # OpenPI is uv-managed; there is no policy con
 
 ## Data Processing
 
-Converts RoboDojo demonstrations into a LeRobot repo named `<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>`; `train.sh` uses the same repo id by default, so keep the naming aligned between processing and training. The optional `raw_task_dirs` is a source task directory or comma-separated task list (defaults to `ckpt_name`) — to merge multiple raw task dirs into one cotrain dataset, pass an empty episode limit, e.g. `bash process_data.sh RoboDojo cotrain arx_x5 joint "" stack_bowls,push_T`.
+Converts RoboDojo demonstrations into a LeRobot repo named `<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>`; `train.sh` uses the same repo id by default, so keep the naming aligned between processing and training. The dataset uses the official keys — `observation.state`, `action`, `observation.images.cam_high` / `cam_left_wrist` / `cam_right_wrist` ([official LeRobot conversion](../../README.md#official-lerobot-conversion)); the bundled script exists because conversion must run inside openpi's own pinned LeRobot environment, which sets the dataset version. The optional `raw_task_dirs` is a source task directory or comma-separated task list (defaults to `ckpt_name`) — to merge multiple raw task dirs into one cotrain dataset, pass an empty episode limit, e.g. `bash process_data.sh RoboDojo cotrain arx_x5 joint "" stack_bowls,push_T`.
 
 ```bash
 cd XPolicyLab/policy/Pi_0

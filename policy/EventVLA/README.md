@@ -16,7 +16,7 @@ conda activate <policy_env>  # e.g. eventvla
 
 ## Data Processing
 
-Downloads the pre-built upstream EventVLA LeRobot dataset from Hugging Face and links it as local training data; this wrapper does not convert per-task RoboDojo demos. The optional `[expert_data_num]` is accepted for interface compatibility but not applied — the upstream dataset is used as a whole:
+Downloads the pre-built upstream EventVLA LeRobot dataset from Hugging Face and links it as local training data; this wrapper does not convert per-task RoboDojo demos. The download is the `RoboDojo_lerobot_v21_video` LeRobot v2.1 video export (from `KailunSu/niantian`), consumed through EventVLA's GR00T-style loader; see [Official LeRobot conversion](../../README.md#official-lerobot-conversion) for the shared converter that produces this layout. The optional `[expert_data_num]` is accepted for interface compatibility but not applied — the upstream dataset is used as a whole:
 
 ```bash
 cd XPolicyLab/policy/EventVLA

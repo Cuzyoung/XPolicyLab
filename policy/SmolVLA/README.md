@@ -18,7 +18,9 @@ Read `INSTALLATION.md` before first use: SmolVLA needs system video dependencies
 
 ## Data Processing
 
-No top-level `process_data.sh`. Training consumes LeRobot datasets by `repo_id`: `train.sh` maps `ckpt_name` to its dataset repo (for example `build_tower` → `RoboDojo_sim_build_tower_v30`; override with `SMOVLA_REPO_ID`) and reads them from the `HF_LEROBOT_HOME` cache. Use the upstream README under `smovla/` when custom conversion is required.
+No top-level `process_data.sh`. Training consumes **LeRobot v3.0** datasets by `repo_id`: `train.sh` maps `ckpt_name` to its dataset repo (for example `build_tower` → `RoboDojo_sim_build_tower_v30`; override with `SMOVLA_REPO_ID`) and reads them from the `HF_LEROBOT_HOME` cache. Use the upstream README under `smovla/` when custom conversion is required.
+
+The on-disk keys are the standard ones of `XPolicyLab/scripts/transform_lerobot_v30_format.py` ([Official LeRobot conversion](../../README.md#official-lerobot-conversion)) — run that script to build a dataset for your own task subset. `train.sh` passes `--rename_map` so the three official camera keys load as SmolVLA's internal `observation.images.camera1` / `camera2` / `camera3`; that is a load-time rename only, so feed the official layout unchanged.
 
 ## Training
 

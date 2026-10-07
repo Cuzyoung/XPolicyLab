@@ -18,7 +18,7 @@ conda activate <policy_env>  # e.g. fastwam
 
 ## Data Processing
 
-No top-level `process_data.sh`. Training consumes a prepared LeRobot v2.1 dataset directly (see Training below); use the upstream FastWAM tooling under `FastWAM/` for data preparation.
+No top-level `process_data.sh`. Training consumes a prepared LeRobot v2.1 dataset directly (see Training below); camera keys are discovered from the dataset metadata, so an export produced by the official `scripts/transform_lerobot_v21_format.py` ([Official LeRobot conversion](../../README.md#official-lerobot-conversion)) is the expected shape. Use the upstream FastWAM tooling under `FastWAM/` for the remaining preparation (dataset stats, text-embedding cache).
 
 ## Training
 
