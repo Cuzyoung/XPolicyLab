@@ -76,7 +76,7 @@ XPolicyLab is benchmark-agnostic: any benchmark, simulator, or real-robot setup 
 | [π0](policy/Pi_0/README.md) | [π0.5](policy/Pi_05/README.md) | [π0-Fast](policy/Pi_0_Fast/README.md) | [RDT-1B](policy/RDT_1B/README.md) | [RISE](policy/RISE/README.md) | [SmolVLA](policy/SmolVLA/README.md) |
 | [Spatial Forcing](policy/Spatial_Forcing/README.md) | [Spirit v1.5](policy/Spirit_v15/README.md) | [TinyVLA](policy/TinyVLA/README.md) | [X-VLA](policy/X_VLA/README.md) | [X-WAM](policy/X_WAM/README.md) | [Xiaomi-Robotics-0](policy/Xiaomi_Robotics_0/README.md) |
 | [Xiaomi-Robotics-1 (XR-1)](policy/Xiaomi_Robotics_1/README.md) | [StarVLA](policy/starVLA/README.md) | [ACT](policy/ACT/README.md) | [DP](policy/DP/README.md) | [demo_policy](policy/demo_policy/README.md) | [Cosmos3](policy/Cosmos3/README.md) |
-| [LingBot-VLA2](policy/LingBot_VLA2/README.md) | [SAPolicy](policy/SAPolicy/README.md) | [Isaac 0.5 (model-only)](policy/Isaac_05/README.md) |  |  |  |
+| [LingBot-VLA2](policy/LingBot_VLA2/README.md) | [SAPolicy](policy/SAPolicy/README.md) | [Isaac 0.5 (model-only)](policy/Isaac_05/README.md) | [ABC-DiT](policy/ABC_DiT/README.md) |  |  |
 
 Adding a policy of your own, or entering a leaderboard, both go through a PR — see [Add Your Own Policy](#-add-your-own-policy).
 
@@ -497,7 +497,7 @@ robot_action_dim_info:
 num_envs: 1
 ```
 
-Pi05, DP, SAPolicy, GR00T N1.7, LingBot-VLA2, OpenWAM, UMI DP, Cosmos3 and the
+Pi05, DP, SAPolicy, ABC-DiT, GR00T N1.7, LingBot-VLA2, OpenWAM, UMI DP, Cosmos3 and the
 reference adapter pass the complete config to the shared dimension helpers.
 Xiaomi XR-1 and Isaac 0.5 already use their own declared checkpoint representations
 without consulting the parent dimension registry. Other adapters still using a

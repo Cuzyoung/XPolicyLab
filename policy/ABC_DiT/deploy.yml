@@ -1,0 +1,29 @@
+policy_name: ABC_DiT
+protocol: ws
+host: 127.0.0.1
+port: 8530
+bench_name: null
+task_name: null
+ckpt_name: null
+env_cfg_type: null
+seed: null
+action_type: joint
+gpu_id: null
+eval_batch: false
+# ABC-DiT specific (see README "Configuration").
+robot_action_dim_info: {arm_dim: [6, 6], ee_dim: [1, 1]}
+num_envs: 1
+model_path: null
+norm_stats_path: null
+prompt: null
+num_steps: 10
+rtc_prefix_length: 4
+inference_seed: 0
+device: cuda:0
+fast_inference: false
+allow_tf32: false
+clip_cache_dir: null
+camera_map:
+  top: cam_head
+  left: cam_left_wrist
+  right: cam_right_wrist
