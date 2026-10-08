@@ -17,7 +17,7 @@ class Model(ModelTemplate):
         self.model_cfg = dict(model_cfg)
         if model_cfg.get("action_type") != "ee":
             raise ValueError("UMI_DP supports action_type=ee")
-        self.robot_action_dim_info = get_robot_action_dim_info(model_cfg["env_cfg_type"])
+        self.robot_action_dim_info = get_robot_action_dim_info(model_cfg)
         if self.robot_action_dim_info != {"arm_dim": [7, 7], "ee_dim": [1, 1]}:
             raise ValueError("UMI_DP requires two 7-joint arms with one aperture each")
         self.cfg, state, self.shape_meta, self._metadata = load_artifact(model_cfg)

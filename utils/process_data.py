@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 import numpy as np
 import os
 import cv2
@@ -245,24 +247,51 @@ def unpack_robot_state(
     return result
 
 def get_robot_action_dim_info(env_cfg_type):
-    env_cfg = load_yaml(os.path.join(os.path.dirname(__file__), "../../env_cfg", f"{env_cfg_type}.yml"))
-    robot_name = env_cfg['config']['robot']
-    robot_action_dim_info = load_json(os.path.join(os.path.dirname(__file__), "../../env_cfg/robot", "_robot_info.json"))[robot_name]
+    """Read an explicit model layout, or a legacy benchmark environment name.
 
-    return robot_action_dim_info
+    Mapping inputs are deployment configuration, not robot SDK configuration.
+    An explicit layout always wins; env_cfg_type may still identify a checkpoint.
+    String inputs retain the external RoboDojo/RoboTwin workspace convention.
+    """
+    config = env_cfg_type
+    if isinstance(config, Mapping):
+        if "robot_action_dim_info" in config:
+            info = config["robot_action_dim_info"]
+            arms, tools = info["arm_dim"], info["ee_dim"]
+            if not arms or len(arms) != len(tools):
+                raise ValueError("robot_action_dim_info requires paired arm_dim and ee_dim lists")
+            if any(type(n) is not int or n <= 0 for n in arms) or any(
+                type(n) is not int or n < 0 for n in tools
+            ):
+                raise ValueError("arm dimensions must be positive integers; tool dimensions nonnegative")
+            return {"arm_dim": list(arms), "ee_dim": list(tools)}
+        config = config["env_cfg_type"]
+    env_cfg = load_yaml(os.path.join(os.path.dirname(__file__), "../../env_cfg", f"{config}.yml"))
+    robot_name = env_cfg["config"]["robot"]
+    return load_json(os.path.join(os.path.dirname(__file__), "../../env_cfg/robot", "_robot_info.json"))[robot_name]
+
 
 def get_batch_size(env_cfg_type):
-    env_cfg = load_yaml(os.path.join(os.path.dirname(__file__), "../../env_cfg", f"{env_cfg_type}.yml"))
-    sim_cfg = env_cfg['config']['sim']
+    """Deployment mappings own num_envs; strings use legacy benchmark metadata."""
+    config = env_cfg_type
+    if isinstance(config, Mapping):
+        if "robot_action_dim_info" in config or "num_envs" in config:
+            size = config.get("num_envs", 1)
+            if type(size) is not int or size <= 0:
+                raise ValueError("num_envs must be a positive integer")
+            return size
+        config = config["env_cfg_type"]
+    env_cfg = load_yaml(os.path.join(os.path.dirname(__file__), "../../env_cfg", f"{config}.yml"))
+    sim_cfg = env_cfg["config"]["sim"]
     sim_info = load_yaml(os.path.join(os.path.dirname(__file__), "../../env_cfg/sim", f"{sim_cfg}.yml"))
+    return sim_info["scene"]["num_envs"]
 
-    return sim_info['scene']['num_envs']
 
 def get_action_dim(env_cfg_type):
-    env_cfg = load_yaml(os.path.join(os.path.dirname(__file__), "../../env_cfg", f"{env_cfg_type}.yml"))
-    robot_name = env_cfg['config']['robot']
-    robot_action_dim_info = load_json(os.path.join(os.path.dirname(__file__), "../../env_cfg/robot", "_robot_info.json"))[robot_name]
-    return sum(robot_action_dim_info["arm_dim"]) + sum(robot_action_dim_info["ee_dim"])
+    """Total joint/tool width; EE representation widths remain adapter-owned."""
+    info = get_robot_action_dim_info(env_cfg_type)
+    return sum(info["arm_dim"]) + sum(info["ee_dim"])
+
 
 def _decode_single_image_bit(image_bit):
     """Decode one encoded image buffer into an HWC uint8 RGB array."""

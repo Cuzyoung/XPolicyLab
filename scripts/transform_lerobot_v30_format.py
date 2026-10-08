@@ -20,7 +20,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from XPolicyLab.utils.data_loader import load
 from XPolicyLab.utils.load_file import load_json, load_yaml
-from XPolicyLab.utils.process_data import decode_image_bit
+from XPolicyLab.utils.process_data import decode_image_bit, get_robot_action_dim_info
 
 
 DEFAULT_DATASET_NAME = "RoboDojo"
@@ -82,7 +82,13 @@ DEFAULT_DATASET_CONFIG = DatasetConfig()
 # Metadata
 # ============================================================
 
-def _load_env_metadata(env_cfg_type):
+def _load_env_metadata(env_cfg_type, model_config=None, fps=None):
+    if model_config is not None:
+        if model_config["env_cfg_type"] != env_cfg_type:
+            raise ValueError("--model-config must match the selected dataset environment")
+        if fps is None or fps <= 0:
+            raise ValueError("--fps is required with --model-config; use the recorded dataset rate")
+        return env_cfg_type, get_robot_action_dim_info(model_config), fps
     env_cfg = load_yaml(str(ENV_CFG_ROOT / f"{env_cfg_type}.yml"))
 
     robot_name = env_cfg["config"]["robot"]
@@ -164,7 +170,7 @@ def _dims_from_robot_action_info(robot_action_dim_info):
     return per_arm_dims
 
 
-def _plan_target_metadata(targets):
+def _plan_target_metadata(targets, model_config=None, fps=None):
     max_per_arm_dims = []
     metadata = {}
     max_fps = 0
@@ -172,7 +178,7 @@ def _plan_target_metadata(targets):
     for bench_name, task_name, env_cfg_type in targets:
 
         robot_name, robot_action_dim_info, fps = _load_env_metadata(
-            env_cfg_type
+            env_cfg_type, model_config, fps
         )
 
         per_arm_dims = _dims_from_robot_action_info(
@@ -855,7 +861,10 @@ def main():
         help="Override target image width (use with --image_height).",
     )
 
+    parser.add_argument("--model-config", type=Path, help="Policy YAML with explicit robot_action_dim_info")
+    parser.add_argument("--fps", type=int, help="Recorded dataset rate; required with --model-config")
     args = parser.parse_args()
+    model_config = load_yaml(str(args.model_config)) if args.model_config else None
 
     targets = _discover_conversion_targets(args.patterns)
 
@@ -865,7 +874,7 @@ def main():
         )
 
     metadata_by_target, target_dims, max_fps = (
-        _plan_target_metadata(targets)
+        _plan_target_metadata(targets, model_config, args.fps)
     )
 
     target_inputs = _collect_target_input_files(targets)

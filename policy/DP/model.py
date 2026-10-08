@@ -23,7 +23,7 @@ class Model(ModelTemplate):
         with open(load_config_path, "r", encoding="utf-8") as f:
             model_training_config = yaml.safe_load(f)
         
-        model_training_config['action_dim'] = get_action_dim(model_cfg['env_cfg_type'])
+        model_training_config['action_dim'] = get_action_dim(model_cfg)
         model_training_config['bench_name'] = model_cfg['bench_name']
         model_training_config['task'] = model_cfg['task_name']
         n_obs_steps = model_training_config['n_obs_steps']
@@ -33,7 +33,7 @@ class Model(ModelTemplate):
         self.runner = DPRunner(n_obs_steps=n_obs_steps, n_action_steps=n_action_steps)
         self.model = self.get_model(model_cfg=model_cfg)
 
-        self.robot_action_dim_info = get_robot_action_dim_info(model_cfg['env_cfg_type'])
+        self.robot_action_dim_info = get_robot_action_dim_info(model_cfg)
         self._latest_env_idx_list = None
 
     def get_model(self, model_cfg):

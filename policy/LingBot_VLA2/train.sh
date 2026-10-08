@@ -59,6 +59,11 @@ echo "[LingBot_VLA2] dataset=${dataset_path}"
 echo "[LingBot_VLA2] checkpoint=${checkpoint_dir}"
 echo "[LingBot_VLA2] GPUs=${gpu_id} action_dim=${action_dim} horizon=${action_horizon}"
 
+epoch_args=()
+if [[ -n "${LINGBOT_VLA2_NUM_EPOCHS:-}" ]]; then
+  epoch_args+=(--train.num_train_epochs "${LINGBOT_VLA2_NUM_EPOCHS}" --train.save_epochs 1)
+fi
+
 cd "${LINGBOT_ROOT}"
 PATH="${VENV_DIR}/bin:${PATH}" bash -o pipefail "${LINGBOT_ROOT}/train.sh" \
   tasks/vla/train_lingbotvla.py "${POLICY_DIR}/training/yam_dual.yaml" \
@@ -77,7 +82,7 @@ PATH="${VENV_DIR}/bin:${PATH}" bash -o pipefail "${LINGBOT_ROOT}/train.sh" \
   --train.max_steps "${LINGBOT_VLA2_MAX_STEPS:-60000}" \
   --train.save_steps "${LINGBOT_VLA2_SAVE_STEPS:-1000}" \
   --train.enable_resume "${LINGBOT_VLA2_ENABLE_RESUME:-false}" \
-  --train.use_wandb false
+  --train.use_wandb false "${epoch_args[@]}"
 
 cp -f "${norm_stats_path}" "${checkpoint_dir}/norm_stats.json"
 cp -f "${robot_config}" "${checkpoint_dir}/robot_config.yaml"

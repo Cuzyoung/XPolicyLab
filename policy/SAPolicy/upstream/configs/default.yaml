@@ -1,0 +1,24 @@
+task: depth_estimation
+exp_name: test
+output_dir: ${env:workspace}/outputs/${task}/${exp_name}
+
+# pytorch lightning
+pl_trainer:
+    devices: 8
+    num_nodes: 1
+    num_sanity_val_steps: 0
+    # limit_train_batches: 5000
+    log_every_n_steps: 50
+    accumulate_grad_batches: 1
+    strategy: ddp_find_unused_parameters_true
+    # check_val_every_n_epoch: 5
+    precision: bf16-mixed
+logger:
+    _target_: pytorch_lightning.loggers.TensorBoardLogger
+    save_dir: ${output_dir}
+    name: ''
+    version: 'tb'
+callbacks:
+    model_checkpoint: CFG:configs/components/pl_callbacks/model_checkpoint_simple.yaml
+    train_speed_timer: CFG:configs/components/pl_callbacks/train_speed_timer.yaml
+    robomimic_eval: CFG:configs/components/pl_callbacks/robomimic_eval.yaml

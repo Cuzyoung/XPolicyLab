@@ -582,7 +582,7 @@ class Model(ModelTemplate):
         self.model_cfg = dict(model_cfg)
         if self.model_cfg.get("action_type") != "joint":
             raise ValueError("LingBot_VLA2 YAM adapter only supports action_type: joint")
-        self.robot_info = get_robot_action_dim_info(str(self.model_cfg["env_cfg_type"]))
+        self.robot_info = get_robot_action_dim_info(self.model_cfg)
         if self.robot_info != {"arm_dim": [6, 6], "ee_dim": [1, 1]}:
             raise ValueError(
                 f"LingBot_VLA2 YAM adapter requires 6+1 dual arms, got {self.robot_info}"

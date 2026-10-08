@@ -34,7 +34,7 @@ gsutil cp gs://openpi-assets/droid/droid_sample_ranges_v1_0_1.json ./data/keep_r
 ## Step 4: Run the conversion
 
 ```bash
-python scripts/data/convert_droid.py \
+python scripts/datasets/convert_droid.py \
     ./data/droid/1.0.1 \
     ./data/droid_lerobot \
     --keep-ranges-path ./data/keep_ranges.json \
@@ -44,7 +44,7 @@ python scripts/data/convert_droid.py \
 
 For a quick test with a small subset:
 ```bash
-python scripts/data/convert_droid.py \
+python scripts/datasets/convert_droid.py \
     ./data/droid/1.0.1 \
     ./data/droid_lerobot_test \
     --keep-ranges-path ./data/keep_ranges.json \
@@ -55,8 +55,8 @@ python scripts/data/convert_droid.py \
 
 ## Script reference
 
-See [`scripts/data/convert_droid.py`](scripts/data/convert_droid.py) for full usage:
+See [`scripts/datasets/convert_droid.py`](scripts/datasets/convert_droid.py) for full usage:
 
 ```
-python scripts/data/convert_droid.py --help
+python scripts/datasets/convert_droid.py --help
 ```

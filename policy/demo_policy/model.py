@@ -10,7 +10,7 @@ class Model(ModelTemplate):
         self.action_type = model_cfg["action_type"]
         self.env_cfg_type = model_cfg["env_cfg_type"]
 
-        self.action_dim = get_action_dim(self.env_cfg_type) # get the total dim of the action
+        self.action_dim = get_action_dim(model_cfg) # get the total dim of the action
 
         # Get robot action dimension metadata
         # Example:
@@ -18,8 +18,8 @@ class Model(ModelTemplate):
         #     "arm_dim": [7] or [7, 7],
         #     "ee_dim": [1] or [1, 1]
         # }
-        self.robot_action_dim_info = get_robot_action_dim_info(self.env_cfg_type)
-        self.batch_size = get_batch_size(self.env_cfg_type)
+        self.robot_action_dim_info = get_robot_action_dim_info(model_cfg)
+        self.batch_size = get_batch_size(model_cfg)
 
         # The number of arm and EE entries must match, e.g. both are 2 for dual-arm robots
         assert len(self.robot_action_dim_info["arm_dim"]) == len(self.robot_action_dim_info["ee_dim"]), \

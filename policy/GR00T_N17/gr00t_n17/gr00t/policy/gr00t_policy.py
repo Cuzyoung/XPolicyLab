@@ -25,7 +25,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from transformers import AutoModel, AutoProcessor
+from transformers import AutoConfig, AutoModel, AutoProcessor
 
 from gr00t.data.embodiment_tags import FINETUNE_ONLY_TAGS, POSTTRAIN_TAGS, EmbodimentTag
 from gr00t.data.interfaces import BaseProcessor
@@ -78,6 +78,7 @@ class Gr00tPolicy(BasePolicy):
         *,
         device: int | str,
         strict: bool = True,
+        cosmos_model_path: str | None = None,
     ):
         """Initialize the Gr00t Policy.
 
@@ -87,6 +88,8 @@ class Gr00tPolicy(BasePolicy):
             model_path: Path to the pretrained model checkpoint directory
             device: Device to run the model on (e.g., 'cuda:0', 0, 'cpu')
             strict: Whether to enforce strict input validation (default: True)
+            cosmos_model_path: Override the backbone and processor asset location
+                in memory when a checkpoint contains a training-machine path.
         """
         # Import this to register all models.
         import gr00t.model  # noqa: F401
@@ -97,7 +100,10 @@ class Gr00tPolicy(BasePolicy):
         model_dir = Path(model_path)
 
         # Load the pretrained model and move to target device with bfloat16 precision
-        model = AutoModel.from_pretrained(model_dir)
+        model_config = AutoConfig.from_pretrained(model_dir)
+        if cosmos_model_path is not None:
+            model_config.model_name = cosmos_model_path
+        model = AutoModel.from_pretrained(model_dir, config=model_config)
         model.eval()  # Set model to evaluation mode
         model.to(device=device, dtype=torch.bfloat16)
         self.model = model
@@ -112,7 +118,8 @@ class Gr00tPolicy(BasePolicy):
             and not (model_dir / "processor_config.json").exists()
             else model_dir
         )
-        self.processor: BaseProcessor = AutoProcessor.from_pretrained(processor_dir)
+        processor_options = {} if cosmos_model_path is None else {"model_name": cosmos_model_path}
+        self.processor: BaseProcessor = AutoProcessor.from_pretrained(processor_dir, **processor_options)
         self.processor.eval()
 
         # Store embodiment-specific configurations
@@ -389,12 +396,21 @@ class Gr00tPolicy(BasePolicy):
         """
         # Step 1: Split batched observation into individual observations
         unbatched_observations = self._unbatch_observation(observation)
+        rtc = None if options is None else options.get("rtc")
+        if rtc is not None and (
+            len(unbatched_observations) != 1 or int(options.get("n_samples", 1)) != 1
+        ):
+            raise ValueError("RTC requires one observation and one action sample")
         processed_inputs = []
 
         # Step 2: Process each observation through the VLA processor
         states = []
         for obs in unbatched_observations:
             vla_step_data = self._to_vla_step_data(obs)
+            if rtc is not None:
+                # Use the checkpoint's training transforms and padding for the
+                # physical condition; never put old actions in measured state.
+                vla_step_data.actions = rtc["action_condition"]
             states.append(vla_step_data.states)  # dict[str, np.ndarray[np.float32, (T, D)]]
             messages = [{"type": MessageType.EPISODE_STEP.value, "content": vla_step_data}]
             processed_inputs.append(self.processor(messages))
@@ -404,7 +420,9 @@ class Gr00tPolicy(BasePolicy):
         collated_inputs = _rec_to_dtype(collated_inputs, dtype=torch.bfloat16)
 
         # Step 4: Run model inference to predict actions
-        with torch.inference_mode():
+        # RTC needs action-input gradients inside the sampler. Keep backbone
+        # feature extraction gradient-free, but do not create inference tensors.
+        with torch.inference_mode(mode=rtc is None), torch.no_grad():
             model_pred = self.model.get_action(**collated_inputs, options=options)
         normalized_action = model_pred["action_pred"].float()
 

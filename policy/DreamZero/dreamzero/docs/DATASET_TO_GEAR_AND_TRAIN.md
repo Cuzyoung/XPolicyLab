@@ -45,7 +45,7 @@ your_dataset/
 ### Run the converter
 
 ```bash
-python scripts/data/convert_lerobot_to_gear.py \
+python scripts/datasets/convert_lerobot_to_gear.py \
     --dataset-path /path/to/your_dataset \
     --embodiment-tag <EMBODIMENT> \
     --state-keys '{"joint_pos": [0, 6], "gripper_pos": [6, 7]}' \
@@ -96,7 +96,7 @@ class EmbodimentTag(str, Enum):
     MY_ROBOT = "<EMBODIMENT>"
 ```
 
-2. Add to `VALID_EMBODIMENT_TAGS` in `scripts/data/convert_lerobot_to_gear.py` (if you want the converter to accept the tag without `--force`):
+2. Add to `VALID_EMBODIMENT_TAGS` in `scripts/datasets/convert_lerobot_to_gear.py` (if you want the converter to accept the tag without `--force`):
 
 ```python
 VALID_EMBODIMENT_TAGS = [

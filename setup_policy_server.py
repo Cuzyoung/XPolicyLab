@@ -28,6 +28,8 @@ _MODEL_IDENTITY_KEYS = (
     "ego_view_mode",
     "action_semantics",
     "rtc_mask_padding",
+    "robot_action_dim_info",
+    "num_envs",
 )
 
 

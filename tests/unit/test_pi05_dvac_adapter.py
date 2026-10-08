@@ -12,6 +12,10 @@ class _FakePolicy:
         self.actions = actions
         self.variances = list(variances)
         self.calls: list[dict[str, object]] = []
+        self.last_seed: int | None = None
+
+    def reset_rng(self, seed: int) -> None:
+        self.last_seed = seed
 
     def infer(self, _observation, **kwargs):
         self.calls.append(kwargs)
@@ -44,6 +48,7 @@ def _model(variances: list[np.ndarray]) -> Model:
     model.action_dim = 32
     model.action_horizon = 4
     model.num_steps = 10
+    model.inference_seed = 0
     model._dvac_history = deque()
     model._dvac_history_size = None
     model.policy = _FakePolicy(np.zeros((4, 14), dtype=np.float32), variances)
@@ -100,6 +105,7 @@ def test_pi05_dvac_reset_clears_calibration_history() -> None:
 
     assert not model._dvac_history
     assert model._dvac_history_size is None
+    assert model.policy.last_seed == 0
 
 
 def test_pi05_dvac_follows_equation_seven_nmax_no_crossing_branch_only() -> None:

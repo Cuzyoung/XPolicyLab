@@ -8,3 +8,7 @@
 [submodule "policy/Isaac_05/lerobot"]
 	path = policy/Isaac_05/lerobot
 	url = https://github.com/perceptron-ai-inc/lerobot.git
+[submodule "policy/OpenLoopVLA/OpenLoopVLA"]
+	path = policy/OpenLoopVLA/OpenLoopVLA
+	url = git@github-cuzyoung:Cuzyoung/OpenLoopVLA.git
+	branch = main

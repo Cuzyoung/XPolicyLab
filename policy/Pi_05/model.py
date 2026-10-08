@@ -5,7 +5,9 @@
 """
 import dataclasses
 import math
+import sys
 from collections import deque
+from importlib import metadata as package_metadata
 from pathlib import Path
 from typing import Any
 
@@ -143,10 +145,18 @@ class Model(ModelTemplate):
 
     def __init__(self, model_cfg: dict[str, Any]):
         self.task_name = model_cfg["task_name"]
+        self.inference_seed = model_cfg.get("inference_seed", 0)
+        if (
+            isinstance(self.inference_seed, bool)
+            or not isinstance(self.inference_seed, int)
+            or not 0 <= self.inference_seed < 2**32
+        ):
+            raise ValueError("inference_seed must be an integer in [0, 2**32)")
         self.action_type = model_cfg.get("action_type", "joint")
         env_cfg_type = model_cfg.get("env_cfg_type")
         self.robot_action_dim_info = (
-            get_robot_action_dim_info(env_cfg_type) if env_cfg_type is not None else None
+            get_robot_action_dim_info(model_cfg)
+            if "robot_action_dim_info" in model_cfg or env_cfg_type is not None else None
         )
         self.robot_action_dim = (
             sum(self.robot_action_dim_info["arm_dim"])
@@ -179,6 +189,7 @@ class Model(ModelTemplate):
             raise ValueError(f"num_steps must be positive, got {self.num_steps}")
 
         self.policy = self.get_model(model_cfg=model_cfg)
+        self.policy.reset_rng(self.inference_seed)
         self.model = self.policy
 
     def get_model(self, model_cfg: dict[str, Any]):
@@ -204,6 +215,82 @@ class Model(ModelTemplate):
         )
 
     def runtime_metadata(self) -> dict[str, Any]:
+        is_pytorch = getattr(self.policy, "_is_pytorch_model", None)
+        backend = None if is_pytorch is None else ("pytorch" if is_pytorch else "jax")
+        execution: dict[str, Any] = {
+            "backend": backend,
+            "framework_versions": {},
+            "parameter_dtypes": [],
+            "parameter_devices": [],
+            "compute_dtype": None,
+            "noise_dtype": None,
+            "inference_seed": self.inference_seed,
+            "unavailable": {
+                "compute_dtype": "not_measured; parameter_dtype_is_not_end_to_end_precision",
+                "noise_dtype": "sampled_noise_is_not_retained; metadata_does_not_run_sampling",
+            },
+        }
+        packages = (
+            ("torch", "numpy", "openpi")
+            if is_pytorch else ("jax", "jaxlib", "flax", "numpy", "openpi")
+        )
+        for name in packages:
+            loaded = sys.modules.get(name)
+            value = getattr(loaded, "__version__", None)
+            if value is None:
+                try:
+                    value = package_metadata.version(name)
+                except package_metadata.PackageNotFoundError:
+                    execution["unavailable"][f"framework_versions.{name}"] = (
+                        "loaded_module_version_and_distribution_metadata_unavailable"
+                    )
+            execution["framework_versions"][name] = None if value is None else str(value)
+        if backend is None:
+            execution["unavailable"]["backend"] = "loaded_policy_backend_flag_unavailable"
+        else:
+            try:
+                native_model = self.policy._model
+                if is_pytorch:
+                    parameters = native_model.parameters()
+                else:
+                    # Inspect array descriptors only. Never transfer parameter values
+                    # to the host or initialize another execution backend for metadata.
+                    jax_module = sys.modules["jax"]
+                    nnx_module = sys.modules["flax.nnx"]
+                    parameters = jax_module.tree.leaves(
+                        nnx_module.state(native_model, nnx_module.Param)
+                    )
+                dtypes = set()
+                devices = {}
+                for parameter in parameters:
+                    dtype = getattr(parameter, "dtype", None)
+                    if dtype is not None:
+                        dtypes.add(str(dtype))
+                    if is_pytorch:
+                        device = parameter.device
+                        devices[str(device)] = {
+                            "platform": str(device.type),
+                            "id": device.index,
+                        }
+                    else:
+                        for device in parameter.devices():
+                            devices[str(device)] = {
+                                "platform": str(device.platform),
+                                "id": int(device.id),
+                                "device_kind": str(device.device_kind),
+                                "process_index": int(device.process_index),
+                            }
+                execution["parameter_dtypes"] = sorted(dtypes)
+                execution["parameter_devices"] = [devices[key] for key in sorted(devices)]
+                if not dtypes:
+                    execution["unavailable"]["parameter_dtypes"] = "no_parameter_dtype_metadata"
+                if not devices:
+                    execution["unavailable"]["parameter_devices"] = "no_parameter_device_metadata"
+            except Exception as exc:
+                execution["unavailable"]["parameter_metadata"] = type(exc).__name__
+        execution["rng"] = (
+            "policy_owned_torch_generator" if is_pytorch else "policy_owned_jax_key"
+        ) if backend is not None else None
         return {
             "policy_family": "pi05",
             "task_name": self.task_name,
@@ -216,7 +303,9 @@ class Model(ModelTemplate):
             "action_horizon": self.action_horizon,
             "action_dim": self.action_dim,
             "num_steps": self.num_steps,
+            "inference_seed": self.inference_seed,
             "observation_profile": self.observation_profile,
+            "execution": execution,
         }
 
     def update_obs(self, obs):
@@ -566,6 +655,7 @@ class Model(ModelTemplate):
         return action_list
 
     def reset(self):
+        self.policy.reset_rng(self.inference_seed)
         self.observation_window = None
         self._latest_env_idx_list = [0]
         self._dvac_history = deque()

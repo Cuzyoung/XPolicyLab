@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
-import json
+import math
 import sys
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -119,38 +117,6 @@ def _resolve_cosmos_model(model_cfg: dict[str, Any]) -> str:
         return raw
 
     return str(_resolve_relative_path(raw, _POLICY_DIR))
-
-
-@contextmanager
-def _override_processor_cosmos_model(checkpoint_dir: Path, cosmos_model: str) -> Iterator[None]:
-    """Replace baked-in absolute Cosmos paths in processor_config.json during load."""
-    config_path = checkpoint_dir / "processor_config.json"
-    if not config_path.is_file():
-        yield
-        return
-
-    with open(config_path, encoding="utf-8") as f:
-        data = json.load(f)
-
-    processor_kwargs = data.setdefault("processor_kwargs", {})
-    previous = processor_kwargs.get("model_name")
-    if previous == cosmos_model:
-        yield
-        return
-
-    processor_kwargs["model_name"] = cosmos_model
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-
-    try:
-        yield
-    finally:
-        if previous is not None:
-            processor_kwargs["model_name"] = previous
-        else:
-            processor_kwargs.pop("model_name", None)
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
 
 
 def _resolve_checkpoint_dir(model_cfg: dict[str, Any]) -> Path:
@@ -416,7 +382,7 @@ class Model(ModelTemplate):
                 f"Unsupported observation_profile={self.observation_profile!r}; "
                 f"expected one of {sorted(OBSERVATION_PROFILES)}"
             )
-        robot_dims = get_robot_action_dim_info(self.env_cfg_type)
+        robot_dims = get_robot_action_dim_info(model_cfg)
         if len(robot_dims["arm_dim"]) != 2 or len(robot_dims["ee_dim"]) != 2:
             raise ValueError("GR00T_N17 adapter requires a dual-arm robot")
         self.arm_dims = tuple(int(value) for value in robot_dims["arm_dim"])
@@ -431,16 +397,17 @@ class Model(ModelTemplate):
                 f"got {modality_config_source!r}"
             )
         checkpoint_dir = _resolve_checkpoint_dir(model_cfg)
+        self.checkpoint_dir = checkpoint_dir
         embodiment_tag = model_cfg.get("embodiment_tag", "NEW_EMBODIMENT")
         cosmos_model = _resolve_cosmos_model(model_cfg)
 
-        with _override_processor_cosmos_model(checkpoint_dir, cosmos_model):
-            self.policy = Gr00tPolicy(
-                model_path=str(checkpoint_dir),
-                embodiment_tag=embodiment_tag,
-                device=self.device,
-                strict=True,
-            )
+        self.policy = Gr00tPolicy(
+            model_path=str(checkpoint_dir),
+            embodiment_tag=embodiment_tag,
+            device=self.device,
+            strict=True,
+            cosmos_model_path=cosmos_model,
+        )
         self.model = self.policy
         self.action_horizon = len(self.policy.modality_configs["action"].delta_indices)
         profile = OBSERVATION_PROFILES[self.observation_profile]
@@ -502,6 +469,64 @@ class Model(ModelTemplate):
         if not self._obs_list:
             raise AssertionError("update_obs or update_obs_batch first!")
         return self.get_action_batch(env_idx_list=[self._latest_env_idx_list[0]], **kwargs)[0]
+
+    def sampling_modes(self) -> list[str]:
+        modes = ["default", "aac"]
+        if self.observation_profile == "yam_bimanual" and self.action_type == "joint":
+            modes.append("rtc")
+        return modes
+
+    def runtime_metadata(self) -> dict[str, Any]:
+        return {
+            "policy_family": "groot_n17",
+            "model_root": str(self.checkpoint_dir.resolve()),
+            "task_name": self.model_cfg.get("task_name"),
+            "checkpoint_source": self.model_cfg.get("checkpoint_source"),
+            "action_type": self.action_type,
+            "action_horizon": self.action_horizon,
+            "observation_profile": self.observation_profile,
+            "rtc_mode": "pi_guided_v1" if "rtc" in self.sampling_modes() else None,
+        }
+
+    def get_action_rtc(self, sampling: dict[str, Any]):
+        """Accept already time-aligned physical actions in arm/gripper wire order."""
+        if "rtc" not in self.sampling_modes():
+            raise ValueError("RTC currently supports yam_bimanual joint actions only")
+        if len(self._obs_list) != 1:
+            raise ValueError("RTC sampling requires exactly one observation")
+        required = {"action_condition", "condition_weights", "beta"}
+        missing = sorted(required - sampling.keys())
+        if missing:
+            raise ValueError(f"RTC sampling is missing fields: {missing}")
+        condition = np.array(sampling["action_condition"], dtype=np.float32, copy=True)
+        weights = np.array(sampling["condition_weights"], dtype=np.float32, copy=True)
+        dims = (self.arm_dims[0], self.ee_dims[0], self.arm_dims[1], self.ee_dims[1])
+        if condition.shape != (self.action_horizon, sum(dims)):
+            raise ValueError(
+                f"action_condition must have shape {(self.action_horizon, sum(dims))}, "
+                f"got {condition.shape}"
+            )
+        if weights.shape != (self.action_horizon,):
+            raise ValueError(f"condition_weights must have shape {(self.action_horizon,)}")
+        if not np.isfinite(condition).all() or not np.isfinite(weights).all():
+            raise ValueError("RTC sampling arrays must be finite")
+        if np.any((weights < 0) | (weights > 1)):
+            raise ValueError("condition_weights must be in [0, 1]")
+        beta = float(sampling["beta"])
+        if not math.isfinite(beta) or beta <= 0:
+            raise ValueError("RTC beta must be finite and positive")
+        # A zero mask must follow precisely the ordinary sampling path.
+        if not np.any(weights):
+            return self.get_action()
+        keys = OBSERVATION_PROFILES[self.observation_profile]["action"]
+        grouped = dict(zip(keys, np.split(condition, np.cumsum(dims)[:-1], axis=-1)))
+        return self.get_action(
+            options={"rtc": {
+                "action_condition": grouped,
+                "condition_weights": weights,
+                "beta": beta,
+            }}
+        )
 
     def get_action_batch(self, env_idx_list=None, **kwargs):
         if not self._obs_list:

@@ -12,7 +12,7 @@ The pre-computed idle filter ranges can be downloaded from:
   gsutil cp gs://openpi-assets/droid/droid_sample_ranges_v1_0_1.json <path>
 
 Usage:
-  python scripts/data/convert_droid.py <raw_dir> <output_dir> \\
+  python scripts/datasets/convert_droid.py <raw_dir> <output_dir> \\
       --keep-ranges-path <path/to/keep_ranges.json> \\
       [--fps 15] [--first-n N] [-n 16] [--filter-failed]
 
@@ -24,7 +24,7 @@ Example:
   gsutil cp gs://openpi-assets/droid/droid_sample_ranges_v1_0_1.json ./data/keep_ranges.json
 
   # Run conversion
-  python scripts/data/convert_droid.py ./data/droid/1.0.1 ./data/droid_lerobot \\
+  python scripts/datasets/convert_droid.py ./data/droid/1.0.1 ./data/droid_lerobot \\
       --keep-ranges-path ./data/keep_ranges.json --filter-failed
 
 Original dataset structure (RLDS):

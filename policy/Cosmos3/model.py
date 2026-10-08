@@ -178,7 +178,7 @@ class Model(ModelTemplate):
             raise ValueError("Cosmos3 DROID checkpoints support action_type='joint' only")
         if not isinstance(self.env_cfg_type, str) or not self.env_cfg_type:
             raise ValueError("env_cfg_type is required")
-        self.robot_action_dim_info = get_robot_action_dim_info(self.env_cfg_type)
+        self.robot_action_dim_info = get_robot_action_dim_info(self.model_cfg)
         if self.robot_action_dim_info != {
             "arm_dim": [EXPECTED_ARM_DIM],
             "ee_dim": [EXPECTED_GRIPPER_DIM],
@@ -187,7 +187,7 @@ class Model(ModelTemplate):
                 f"env_cfg_type={self.env_cfg_type!r} is incompatible with the official "
                 "Cosmos3 DROID 7+1 joint action contract"
             )
-        self.batch_size = get_batch_size(self.env_cfg_type)
+        self.batch_size = get_batch_size(self.model_cfg)
         self._service = create_official_service(self.model_cfg)
         self._obs: Mapping[str, Any] | None = None
         self._obs_batch: list[Mapping[str, Any]] = []

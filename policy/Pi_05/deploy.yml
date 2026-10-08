@@ -6,6 +6,8 @@ bench_name: null
 task_name: null
 env_cfg_type: null
 seed: null
+# Sampling noise; independent of the checkpoint/training seed above.
+inference_seed: 0
 eval_batch: true
 
 checkpoint_num: 59999

@@ -11,7 +11,7 @@ import random
 from tqdm import tqdm
 
 from XPolicyLab.utils.load_file import load_yaml, load_json
-from XPolicyLab.utils.process_data import decode_image_bit
+from XPolicyLab.utils.process_data import decode_image_bit, get_robot_action_dim_info
 
 from lerobot.common.datasets.lerobot_dataset import HF_LEROBOT_HOME
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
@@ -166,6 +166,7 @@ def main():
         default="Do your job.",
         help="Default instruction when not present in HDF5",
     )
+    parser.add_argument("--model-config", type=Path, help="Policy YAML with explicit robot_action_dim_info")
     args = parser.parse_args()
 
     bench_name = args.bench_name
@@ -186,10 +187,16 @@ def main():
             raw_task_dirs_arg = args.expert_data_num
     raw_task_dirs = [item.strip() for item in (raw_task_dirs_arg or ckpt_name).split(",") if item.strip()]
 
-    env_cfg = load_yaml(os.path.join(ROOT_PATH, "./env_cfg", f"{env_cfg_type}.yml"))
-    robot_type = env_cfg['config']['robot']
-
-    robot_action_dim_info = robot_action_dim_info = load_json(os.path.join(ROOT_PATH, "env_cfg/robot", "_robot_info.json"))[robot_type]
+    if args.model_config is not None:
+        model_config = load_yaml(str(args.model_config))
+        if model_config["env_cfg_type"] != env_cfg_type:
+            raise ValueError("--model-config must match env_cfg_type")
+        robot_type = env_cfg_type
+        robot_action_dim_info = get_robot_action_dim_info(model_config)
+    else:
+        env_cfg = load_yaml(os.path.join(ROOT_PATH, "./env_cfg", f"{env_cfg_type}.yml"))
+        robot_type = env_cfg["config"]["robot"]
+        robot_action_dim_info = get_robot_action_dim_info(env_cfg_type)
 
     dataset = create_empty_dataset(
         repo_id=repo_id,

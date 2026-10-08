@@ -74,6 +74,39 @@ Environment variables used by the adapter scripts:
 
 Additional optional overrides: `GR00T_ROOT`, `GR00T_VIDEO_BACKEND`.
 
+### RTC sampling
+
+The `yam_bimanual` joint profile supports `get_action_rtc(sampling)` through the
+shared WebSocket server. Other observation profiles do not advertise RTC.
+The request carries:
+
+- `action_condition`: `(H, D)` physical absolute actions, ordered as left arm,
+  left gripper, right arm, right gripper. Dimensions come from the robot config;
+  the YAM checkpoint uses `H=16`, `D=14`.
+- `condition_weights`: `(H,)` finite weights in `[0, 1]`, already aligned with
+  the condition by the caller. The adapter does not shift the chunk again.
+- `beta`: a finite positive cap on the guidance strength.
+
+The checkpoint processor normalizes and pads the condition using the same
+transforms as training. Padding receives zero guidance weight. The sampler uses
+Pi-style clean-estimate VJP guidance, adapted to GR00T's noise-to-data time
+direction. Backbone features remain gradient-free; only the noisy action input
+requires differentiation, with no parameter gradients accumulated. This is
+separate from upstream's overlap/frozen-step velocity scaling branch.
+
+RTC supports one observation and one action sample per call. A zero weight mask
+uses ordinary inference exactly. Conditions are request-local and `reset()`
+retains its existing episode semantics. Default inference, AAC and the upstream
+prefix-freezing path remain available. Runtime metadata exposes the loaded
+checkpoint directory, actual horizon and `rtc_mode: pi_guided_v1` for deployment
+identity checks.
+
+RTC does not alter RGB conventions, joint/gripper units, the checkpoint horizon,
+or observation state. It adds a backward pass through the action head, so measure
+latency on the deployment GPU before choosing the runtime's execution window.
+`cosmos_model_path` overrides both backbone and processor asset locations in
+memory; checkpoint JSON files are not rewritten during loading.
+
 ## Notes
 
 - The policy-environment argument of the eval scripts accepts a conda env name, `uv`, or a uv project path.

@@ -7,7 +7,7 @@
 # Prerequisites:
 #   - DROID dataset in LeRobot format at DROID_DATA_ROOT
 #     Download: huggingface-cli download GEAR-Dreams/DreamZero-DROID-Data --repo-type dataset --local-dir ./data/droid_lerobot
-#     Or convert from scratch: see scripts/data/convert_droid.py
+#     Or convert from scratch: see scripts/datasets/convert_droid.py
 #   - Wan2.1-I2V-14B-480P weights (auto-downloaded or pre-downloaded from HuggingFace)
 #     Download: huggingface-cli download Wan-AI/Wan2.1-I2V-14B-480P --local-dir ./checkpoints/Wan2.1-I2V-14B-480P
 #   - umt5-xxl tokenizer (auto-downloaded or pre-downloaded from HuggingFace)

@@ -20,7 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from XPolicyLab.utils.data_loader import load
 from XPolicyLab.utils.load_file import load_json, load_yaml
-from XPolicyLab.utils.process_data import decode_image_bit
+from XPolicyLab.utils.process_data import decode_image_bit, get_robot_action_dim_info
 
 
 DEFAULT_DATASET_NAME = "RoboDojo"
@@ -62,7 +62,13 @@ class DatasetConfig:
 DEFAULT_DATASET_CONFIG = DatasetConfig()
 
 
-def _load_env_metadata(env_cfg_type):
+def _load_env_metadata(env_cfg_type, model_config=None, fps=None):
+    if model_config is not None:
+        if model_config["env_cfg_type"] != env_cfg_type:
+            raise ValueError("--model-config must match the selected dataset environment")
+        if fps is None or fps <= 0:
+            raise ValueError("--fps is required with --model-config; use the recorded dataset rate")
+        return env_cfg_type, get_robot_action_dim_info(model_config), fps
     env_cfg = load_yaml(str(ENV_CFG_ROOT / f"{env_cfg_type}.yml"))
     robot_name = env_cfg["config"]["robot"]
     robot_action_dim_info = load_json(str(ROBOT_INFO_PATH))[robot_name]
@@ -118,12 +124,12 @@ def _dims_from_robot_action_info(robot_action_dim_info):
     return per_arm_dims
 
 
-def _plan_target_metadata(targets):
+def _plan_target_metadata(targets, model_config=None, fps=None):
     max_per_arm_dims = []
     metadata = {}
     max_fps = 0
     for bench_name, task_name, env_cfg_type in targets:
-        robot_name, robot_action_dim_info, fps = _load_env_metadata(env_cfg_type)
+        robot_name, robot_action_dim_info, fps = _load_env_metadata(env_cfg_type, model_config, fps)
         per_arm_dims = _dims_from_robot_action_info(robot_action_dim_info)
         if len(max_per_arm_dims) < len(per_arm_dims):
             max_per_arm_dims.extend([0] * (len(per_arm_dims) - len(max_per_arm_dims)))
@@ -612,13 +618,16 @@ def main():
         default=None,
         help="Override target image width (use with --image_height).",
     )
+    parser.add_argument("--model-config", type=Path, help="Policy YAML with explicit robot_action_dim_info")
+    parser.add_argument("--fps", type=int, help="Recorded dataset rate; required with --model-config")
     args = parser.parse_args()
+    model_config = load_yaml(str(args.model_config)) if args.model_config else None
 
     targets = _discover_conversion_targets(args.patterns)
     if not targets:
         raise FileNotFoundError(f"No matching dataset/task/env_cfg targets found for patterns: {args.patterns}")
 
-    metadata_by_target, target_dims, max_fps = _plan_target_metadata(targets)
+    metadata_by_target, target_dims, max_fps = _plan_target_metadata(targets, model_config, args.fps)
     target_inputs = _collect_target_input_files(targets)
     _print_matched_targets(target_inputs)
     image_height, image_width = _resolve_image_hw(args, target_inputs)

@@ -1,0 +1,9 @@
+# https://lightning.ai/docs/pytorch/stable/api/lightning.pytorch.callbacks.ModelCheckpoint.html
+_target_: pytorch_lightning.callbacks.ModelCheckpoint
+dirpath: ${output_dir}/checkpoints/
+filename: "e{epoch:03d}-s{step:06d}"
+save_top_k: -1 # save all checkpoints at each interval
+auto_insert_metric_name: False # when True, the checkpoints filenames will contain the metric name
+save_weights_only: False # if True, then only the model's weights will be saved
+every_n_epochs: 50 # number of epochs between checkpoints (aligned with eval)
+save_last: true # always save last.ckpt at end of training
