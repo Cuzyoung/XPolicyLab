@@ -161,7 +161,7 @@ XPolicyLab/policy/Pi_05/openpi/.venv/bin/python \
 
 The export directory name, step and
 normalization SHA256 must match the selected recipe. See
-`docs/pi05-tianji-taccap-runbook.md` in the parent ManiMux workspace for paired recipes,
+`docs/deployment/pi05-tianji-taccap.md` in the parent ManiMux workspace for paired recipes,
 station binding, artifact checking and full service commands.
 
 ## Tianji pack-plate wrist-only checkpoint
@@ -199,4 +199,4 @@ XPolicyLab/policy/Pi_05/openpi/.venv/bin/python \
 The exported README does not specify the training-time TCP axis conversion.
 The deployment currently shares the tool-axis transform used for the pass-ball
 Tianji data. Confirm it against the pack-plate training source before physical
-execution. See `docs/pi05-tianji-pack-plate-runbook.md` in the parent workspace.
+execution. See `docs/deployment/pi05-tianji-pack-plate.md` in the parent workspace.
