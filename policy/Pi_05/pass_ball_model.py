@@ -173,7 +173,7 @@ class PassBallZeroPoseModel(ModelTemplate):
         for key, value in required.items():
             if model_cfg.get(key) != value:
                 raise ValueError(f"pass-ball requires {key}={value!r}")
-        dims = get_robot_action_dim_info(model_cfg["env_cfg_type"])
+        dims = get_robot_action_dim_info(model_cfg)
         if dims["arm_dim"] != [7, 7] or dims["ee_dim"] != [1, 1]:
             raise ValueError("pass-ball requires Tianji dual 7+1 dimensions")
         self.model_cfg = dict(model_cfg)
