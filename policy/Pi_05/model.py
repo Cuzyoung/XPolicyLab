@@ -123,6 +123,24 @@ def _resolve_train_config(model_cfg: dict[str, Any]):
 
 
 class Model(ModelTemplate):
+    def __new__(cls, model_cfg: dict[str, Any] | None = None):
+        # Explicit opt-in keeps all existing ALOHA/YAM configurations unchanged.
+        if (
+            model_cfg is not None
+            and model_cfg.get("observation_profile") == "tianji_taccap_pi05_zero_pose"
+        ):
+            from .pass_ball_model import PassBallZeroPoseModel
+
+            return PassBallZeroPoseModel(model_cfg)
+        if (
+            model_cfg is not None
+            and model_cfg.get("observation_profile") == "tianji_taccap_pi05_pack_plate"
+        ):
+            from .pack_plate_model import PackPlateZeroPoseModel
+
+            return PackPlateZeroPoseModel(model_cfg)
+        return super().__new__(cls)
+
     def __init__(self, model_cfg: dict[str, Any]):
         self.task_name = model_cfg["task_name"]
         self.action_type = model_cfg.get("action_type", "joint")
