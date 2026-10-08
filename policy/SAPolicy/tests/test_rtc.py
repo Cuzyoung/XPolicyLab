@@ -105,7 +105,8 @@ def test_rtc_condition_inverts_body_actions_for_rotated_both_arm_frames(monkeypa
 
 
 def test_rtc_capability_requires_real_matching_sampler_and_reset_observation():
-    model = Model({"dry_run": True, "action_horizon": 3})
+    model = Model({"dry_run": True, "action_horizon": 3,
+                   "robot_action_dim_info": {"arm_dim": [6, 6], "ee_dim": [1, 1]}})
     assert model.sampling_modes() == ["default"]
     with pytest.raises(NotImplementedError):
         model.get_action_rtc({})
@@ -135,7 +136,8 @@ def test_rtc_capability_requires_real_matching_sampler_and_reset_observation():
     ],
 )
 def test_invalid_rtc_contract_fails_before_sampling(invalid):
-    model = Model({"dry_run": True, "action_horizon": 3})
+    model = Model({"dry_run": True, "action_horizon": 3,
+                   "robot_action_dim_info": {"arm_dim": [6, 6], "ee_dim": [1, 1]}})
     head = SimpleNamespace(rtc_condition=lambda: None, sequence_length=3, action_dim=20)
     model._backend = SimpleNamespace(
         policy=SimpleNamespace(pipeline=SimpleNamespace(action_head=head))

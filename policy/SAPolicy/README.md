@@ -169,8 +169,20 @@ independent histories keyed by `env_idx`, without a vectorized speedup. Reset
 clears all histories. The full-horizon DiT backend advertises `default` and `rtc`;
 dry-run and incompatible heads advertise only `default`.
 PAINT/AAC/DVAC/AutoHorizon hooks remain unsupported and are not advertised.
-A separate `sapolicy_root` is retained only for explicitly
-selected legacy source compatibility; the standard default is policy-local.
+A separate `sapolicy_root` selects checkpoint-matched model source; the default
+is policy-local. The adapter retains its maintained inference wrapper, including
+explicit normalization, resolved configuration and TCP-offset handling, even when
+the selected snapshot contains an older deployment wrapper. Different source roots
+require separate model processes. Pipeline weights load strictly: missing or extra
+keys are errors, and RAW/EMA selection must exist in the checkpoint.
+
+Inference resolves the action dataset from the recorded training configuration.
+For a `combined_loader_opts` configuration, the final branch is the action branch;
+it may contain nested real/sim datasets. Ordinary dataset lists are concatenated
+action datasets. All action leaves must agree on body-frame relative actions,
+image transforms, canonical camera order, action/history lengths and state/depth
+settings. Conflicts are rejected rather than silently choosing one dataset. The
+original TCP supervision branches and training configuration remain intact.
 
 ## RTC and execution smoothing
 

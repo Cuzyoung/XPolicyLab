@@ -31,7 +31,8 @@ def observation(value=0.1, index=0):
 
 def model(**kwargs):
     return Model(
-        {"dry_run": True, "action_horizon": 3, "camera_names": ["top", "left", "right"], **kwargs}
+        {"dry_run": True, "action_horizon": 3, "camera_names": ["top", "left", "right"],
+         "robot_action_dim_info": {"arm_dim": [6, 6], "ee_dim": [1, 1]}, **kwargs}
     )
 
 
