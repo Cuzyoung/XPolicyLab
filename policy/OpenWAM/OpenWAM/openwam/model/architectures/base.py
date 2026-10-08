@@ -676,13 +676,7 @@ class BaseWAMArchitecture(ABC, nn.Module):
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         save_file(state_dict, path)
 
-    def load_checkpoint(
-        self,
-        path: str,
-        strict: bool = True,
-        *,
-        device: str | torch.device | None = None,
-    ) -> None:
+    def load_checkpoint(self, path: str, strict: bool = True) -> None:
         """Load architecture state from a safetensors checkpoint.
 
         VLM backbone weights are not stored in the safetensors file (they
@@ -701,7 +695,7 @@ class BaseWAMArchitecture(ABC, nn.Module):
         """
         from safetensors.torch import load_file
 
-        state_dict = load_file(path, device=str(device or "cpu"))
+        state_dict = load_file(path)
         has_vlm = getattr(self, "vlm_backbone", None) is not None
         has_meta = any(p.device.type == "meta" for p in self.parameters())
         missing, unexpected = self.load_state_dict(state_dict, strict=False, assign=has_meta)

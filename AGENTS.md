@@ -6,16 +6,30 @@ package inside a parent workspace — never as the top-level project.
 
 - Submission standard: [CONTRIBUTING.md](CONTRIBUTING.md). Reference adapter: `policy/demo_policy/`.
   Data formats: [README](README.md#-standard-data-formats).
+- Root docs stay bilingual: when you edit `README.md`, update `README_zh.md` in the same change (and
+  the reverse). Keep structure, anchors, code blocks, and tables aligned; translate prose only.
+  English remains the source of truth on conflict.
 
 The rules below apply to every change in this repo. Their rationale is in CONTRIBUTING.md.
 
 ## Images are RGB from end to end
 
 `decode_image_bit` and `decode_obs_images` return RGB, and the policy server hands `update_obs` /
-`update_obs_batch` RGB. Treat this as settled: do not re-derive it from the usual "OpenCV returns
-BGR" rule, which does not apply, because XPolicyLab buffers are encoded from RGB arrays and
-`cv2.imencode` / `cv2.imdecode` carry channels through JPEG in the order they were given. A
-`COLOR_BGR2RGB` added to "fix" a decode is always a bug: it trains on BGR and evaluates on RGB.
+`update_obs_batch` RGB. Treat this as settled, and note that it holds for a reason no caller can
+reproduce: stored image bits come in **two byte formats**, and `decode_image_bit` reads a marker
+inside each buffer to tell them apart and swap only where a swap is owed.
+
+- **legacy** — a JPEG written by handing an RGB array straight to `cv2.imencode`, which reads it as
+  BGR. The bytes are channel-reversed against the JPEG standard, and `cv2.imdecode` reverses them
+  back. Everything collected before the marker existed is this.
+- **standard** — a conforming RGB JPEG written by `encode_image_bit`, stamped with a JPEG `COM`
+  segment holding `XPL-RGB1`. `cv2.imdecode` returns BGR for it, so it needs exactly one swap.
+
+A `COLOR_BGR2RGB` added to "fix" a decode is therefore still always a bug, and now for a sharper
+reason than before: the decoded pixels are indistinguishable to the eye — only the marker in the
+encoded buffer tells the formats apart — so a caller-side swap is right on at most one of them and
+silently wrong on the other. Channel
+conversion is allowed **only inside `utils/process_data.py`**, which owns the distinction.
 
 No channel conversion belongs in conversion, training, or eval code. Two exceptions only:
 
@@ -29,10 +43,21 @@ No channel conversion belongs in conversion, training, or eval code. Two excepti
 `model.py` never decodes. The server decodes every observation it forwards, including for custom
 RPCs, so `obs["vision"][<camera>]["color"]` is already an array; adapters only reshape, cast, resize.
 
-Offline code — conversion scripts and training dataloaders — decodes only with `decode_image_bit`
-from `XPolicyLab.utils.process_data`. Never hand-roll `cv2.imdecode` / `np.frombuffer` / PIL
-decoding: RoboTwin and RoboDojo legacy image-bit layouts are only handled correctly by that
-function. Mechanically, `cv2.imdecode` must not appear outside `utils/process_data.py`.
+Offline code — conversion scripts and training dataloaders — decodes **only** with
+`decode_image_bit` from `XPolicyLab.utils.process_data`, and encodes **only** with its inverse
+`encode_image_bit`. That is the single supported pair: image bits come in the two byte formats above
+and carry further inconsistency in their container layouts from earlier data versions, and only
+these functions handle every case. Never hand-roll `cv2.imdecode` / `np.frombuffer` / PIL decoding —
+a hand-rolled decoder is right on one byte format and reverses the channels on the other, whichever
+way it is written, and the rest trip over the older layouts.
+
+Mechanically, `cv2.imdecode` must not appear outside `utils/process_data.py`, and image bits that
+get **stored or published** — trajectory files, converted datasets — must come from
+`encode_image_bit`, never from a bare `cv2.imencode`, which omits the marker and so writes a buffer
+that can only be read as legacy — channel-reversed on decode if the frame was converted to BGR
+before encoding, and even when fed RGB it mints more legacy data that every conforming viewer shows
+reversed. The why is in README,
+[Standard Data Formats](README.md#decode-only-through-decode_image_bit).
 
 ## Paths and dimensions come from the shared helpers
 

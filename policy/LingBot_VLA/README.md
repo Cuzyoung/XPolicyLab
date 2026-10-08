@@ -29,6 +29,10 @@ bash process_data.sh RoboDojo stack_bowls arx_x5 joint
 bash process_data.sh RoboDojo stack_bowls_50ep arx_x5 joint 50
 ```
 
+That dataset's columns are exactly the standard keys of the [official LeRobot converters](../../README.md#official-lerobot-conversion): `lingbot_vla/lingbotvla/data/vla_data/base_dataset.py` reads `observation.state`, `action`, and `observation.images.cam_high` / `cam_left_wrist` / `cam_right_wrist`, renaming the three views to the model's internal `base_0_rgb` / `left_wrist_0_rgb` / `right_wrist_0_rgb` only after loading. `train.sh` defaults `arx_x5` to the dataset tag `RoboDojo_sim_arx-x5_v30`. The LeRobot dataset version is whatever the pinned upstream commit reads — `install.sh` pins one that still provides the pre-v3.0 `lerobot.common` API — so match your export to that install rather than assuming v3.0.
+
+Beyond the converter output, training also needs a policy-side normalization-stats JSON (`norm_stats_file`, default `assets/norm_stats/robotwin_50.json`); build one for a RoboDojo export with `lingbot_vla/compute_norm_stat.sh`, following `lingbot_vla/configs/norm/robodojo_sim_arx_x5.yaml`.
+
 ## Training
 
 ```bash

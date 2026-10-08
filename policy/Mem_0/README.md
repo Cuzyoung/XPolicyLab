@@ -20,6 +20,10 @@ Read `INSTALLATION.md` before first use: Mem_0 uses three environments — `mem0
 
 Converts XPolicyLab trajectory HDF5 into a Mem_0 LeRobot dataset at `data/<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>-lerobot`. The optional `task_type` argument selects `M1` (single-stage, default) or `Mn` (multi-stage planning; needs `language_annotation.json` via `LANGUAGE_ANNOTATION` unless an annotation already exists under `Mem_0/xpolicylab_adapter/language_annotation/<task>/`). `TASK_INSTRUCTION` optionally sets the M1 instruction / Mn global task (default `<ckpt_name>`).
 
+The output keys deviate from the [official LeRobot converters](../../README.md#official-lerobot-conversion): a single `observation.image.head_camera` view, a 16-dim `observation.state`, and per-episode subtask annotations for Mn planning. Only the bundled `Mem_0/xpolicylab_adapter/xpolicylab_to_lerobot.py` (which `process_data.sh` invokes) produces this layout; official-converter output is not consumed directly.
+
+Frames come from the trajectory image bits through `decode_image_bit`, so training sees the same RGB that evaluation feeds. The converters also accept `--use-preview` (`USE_PREVIEW=1` for the multi-task `process_data_batch.sh`), which skips the per-frame JPEG decode by reading `preview_video/episode_*_<camera>.mp4` instead. That is faster, but those files are written outside XPolicyLab, so their channel order is not guaranteed — only opt in for previews you know store true RGB.
+
 ```bash
 cd XPolicyLab/policy/Mem_0
 bash process_data.sh <bench_name> <ckpt_name> <env_cfg_type> <action_type> [expert_data_num] [M1|Mn]

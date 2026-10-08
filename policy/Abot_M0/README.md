@@ -18,7 +18,9 @@ conda activate <policy_env>  # e.g. ABot (install.sh env name; override with ABO
 
 ## Data Processing
 
-No top-level `process_data.sh`. Training expects data in the upstream LeRobot format resolved via `ABOT_DATA_ROOT` / `ABOT_DATASET_REPO` / `ABOT_DATA_MIX` (see Configuration); use the upstream README under `abot_m0/` when custom conversion is required.
+No top-level `process_data.sh`. Training consumes a **LeRobot v2.1** dataset resolved via `ABOT_DATA_ROOT` / `ABOT_DATASET_REPO` / `ABOT_DATA_MIX` (see Configuration), defaulting to `RoboDojo_sim_v21_video_abot`.
+
+Its columns are the standard keys of `XPolicyLab/scripts/transform_lerobot_v21_format.py` ([Official LeRobot conversion](../../README.md#official-lerobot-conversion)), but the `_abot` suffix marks two things that converter does not produce. ABot reads through a GR00T-style `meta/modality.json`: its `video` branch maps `cam_high` / `cam_left_wrist` / `cam_right_wrist` onto the official `observation.images.*` keys, and its `state` / `action` branches must already carry `left_joints`, `right_joints`, `left_gripper`, `right_gripper` slices. `abot_m0/scripts/prepare_lerobot_for_abot.py --dataset-dir <root>` writes the video and annotation mappings onto an existing `modality.json`, touching `meta/` only and never data or videos, and fails if those state/action slices are missing — run it on your own export via `ABOT_PREPARE_SCRIPT`, which defaults to empty because the published `_abot` dataset is already prepared. The published export is also AV1-encoded, hence the `ABOT_VIDEO_BACKEND=torchvision_av` default; decord cannot decode it. `RoboDojo_lerobot_v21_video` is the unprepared fallback export. For anything beyond this, follow the upstream README under `abot_m0/`.
 
 ## Training
 

@@ -96,7 +96,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-import cv2
 import h5py
 import imageio.v2 as imageio
 import numpy as np
@@ -113,6 +112,14 @@ CONFIG_DATA_DIR = XR1_DIR / "configs" / "data"
 # makes the script runnable from any cwd without a preset PYTHONPATH.
 if str(XR1_DIR) not in sys.path:
     sys.path.insert(0, str(XR1_DIR))
+
+# Stored image bits decode only through XPolicyLab's decode_image_bit; the
+# checkout root (made importable by its XPolicyLab.py shim) is five levels up.
+XPOLICYLAB_ROOT = SCRIPT_DIR.parents[4]
+if str(XPOLICYLAB_ROOT) not in sys.path:
+    sys.path.insert(0, str(XPOLICYLAB_ROOT))
+
+from XPolicyLab.utils.process_data import decode_image_bit  # noqa: E402
 
 from mibot.utils.io import (  # noqa: E402  (import needs the sys.path tweak above)
     ACTION_DIM,
@@ -375,25 +382,26 @@ def next_state_repeat(seq):
 
 
 def decode_jpeg_seq(colors_dataset):
-    """RoboDojo cam colors: (T,) JPEG byte strings -> list of BGR uint8 frames.
+    """RoboDojo cam colors: (T,) image bit strings -> list of RGB uint8 frames.
 
-    Frames are handed to the writer in cv2's native BGR order, matching the
-    existing RoboTwin/RoboDojo converters.
+    decode_image_bit resolves both stored byte formats to RGB, which is what
+    write_video and the official loader both want, so no channel conversion
+    belongs anywhere in this path.
     """
-    frames = []
-    for index in range(colors_dataset.shape[0]):
-        raw = colors_dataset[index]
-        if isinstance(raw, (bytes, bytearray, np.bytes_)):
-            raw = bytes(raw).rstrip(b"\x00")
-        bgr = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if bgr is None:
-            raise RuntimeError(f"cv2.imdecode failed at frame {index}")
-        frames.append(bgr)
-    return frames
+    return [decode_image_bit(colors_dataset[index]) for index in range(colors_dataset.shape[0])]
 
 
-def write_video(frames_bgr, out_path: Path, fps: float):
-    """Write frames as H.264 with gop=1 so decord can seek to any frame."""
+def write_video(frames_rgb, out_path: Path, fps: float):
+    """Write RGB frames as H.264 with gop=1 so decord can seek to any frame.
+
+    Frames must be RGB, and both ends of the pipeline say so: imageio's ffmpeg
+    writer takes RGB, and training reads these files back through decord in
+    `mibot/data/datasets/json_dataset.py`, which returns RGB too. Handing this
+    BGR would silently train on reversed channels while evaluation feeds RGB.
+    (The earlier hand-rolled cv2.imdecode here happened to yield RGB on the
+    legacy byte format but would yield BGR on marked standard buffers, which is
+    why decoding now goes through decode_image_bit.)
+    """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     writer = imageio.get_writer(
         os.fspath(out_path),
@@ -409,8 +417,8 @@ def write_video(frames_bgr, out_path: Path, fps: float):
         ],
     )
     try:
-        for bgr in frames_bgr:
-            writer.append_data(bgr)
+        for frame in frames_rgb:
+            writer.append_data(frame)
     finally:
         writer.close()
 

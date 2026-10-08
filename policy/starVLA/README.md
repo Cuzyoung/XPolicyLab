@@ -43,6 +43,8 @@ conda activate <policy_env>  # e.g. starvla
 
 Converts RoboDojo demos into a LeRobot dataset at `data/<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>/`. `raw_task_dirs` is the source task dir (or comma-separated list) under `data/<bench_name>/` and defaults to `ckpt_name`; a non-numeric fifth argument is treated as `raw_task_dirs`. Use the same `ckpt_name` when launching `train.sh`, unless you also set `STARVLA_XPOLICY_DATASET_NAME` explicitly.
 
+The output is LeRobot v3.0 with the official keys — `observation.state`, `action`, `observation.images.cam_high` / `cam_left_wrist` / `cam_right_wrist` ([official LeRobot conversion](../../README.md#official-lerobot-conversion)). The bundled converter is used instead of `scripts/transform_lerobot_v30_format.py` because starVLA's GR00T-style loader also needs a `meta/modality.json` written alongside the dataset.
+
 ```bash
 cd XPolicyLab/policy/starVLA
 bash process_data.sh <bench_name> <ckpt_name> <env_cfg_type> <action_type> [expert_data_num] [raw_task_dirs]

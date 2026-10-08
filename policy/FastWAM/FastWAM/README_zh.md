@@ -185,13 +185,14 @@ pip install mujoco==3.3.2
 
 `mujoco` 环境和 LIBERO 数据版本相关，最好保持一致。
 
-我们已经把 `RoboTwin` 评测相关代码copy到了 `third_party/RoboTwin`。
-但仍需按 [RoboTwin 官方仓库](https://github.com/RoboTwin-Platform/RoboTwin) 中的教程完成环境安装并下载相关assets：
-再创建 policy 软链接：
+RoboTwin 评测使用你自己的 RoboTwin 检出：先 clone，按 [RoboTwin 官方仓库](https://github.com/RoboTwin-Platform/RoboTwin) 中的教程完成环境安装并下载相关assets，再创建 policy 软链接：
 
 ```bash
-ln -sfn "$(pwd)/experiments/robotwin/fastwam_policy" "$(pwd)/third_party/RoboTwin/policy/fastwam_policy"
+export ROBOTWIN_ROOT=/path/to/RoboTwin
+ln -sfn "$(pwd)/experiments/robotwin/fastwam_policy" "$ROBOTWIN_ROOT/policy/fastwam_policy"
 ```
+
+每次运行 RoboTwin 评测都要用 `EVALUATION.robotwin_root=$ROBOTWIN_ROOT` 指定这个路径，或者在 `configs/sim_robotwin.yaml` 里设置一次。它默认是 `null`，所以漏传时会立刻报错，而不是跑到一半才失败。
 
 一键评测 release 的 LIBERO 权重：
 
@@ -216,6 +217,7 @@ python experiments/robotwin/run_robotwin_manager.py \
   task=robotwin_uncond_3cam_384_1e-4 \
   ckpt=./checkpoints/fastwam_release/robotwin_uncond_3cam_384.pt \
   EVALUATION.dataset_stats_path=./checkpoints/fastwam_release/robotwin_uncond_3cam_384_dataset_stats.json \
+  EVALUATION.robotwin_root="$ROBOTWIN_ROOT" \
   MULTIRUN.num_gpus=8
 ```
 
@@ -271,18 +273,18 @@ bash scripts/train_zero1.sh 8 task=robotwin_uncond_3cam_384_1e-4
 python experiments/libero/run_libero_manager.py task={task_name} ckpt={ckpt_path}
 ```
 
-我们已经把 `RoboTwin` 评测相关代码copy到了 `third_party/RoboTwin`。
-但仍需按 [RoboTwin 官方仓库](https://github.com/RoboTwin-Platform/RoboTwin) 中的教程完成安装并下载相关assets：
-再创建 policy 软链接：
+RoboTwin 评测使用你自己的 RoboTwin 检出：按 [RoboTwin 官方仓库](https://github.com/RoboTwin-Platform/RoboTwin) 中的教程完成安装并下载相关assets，再创建 policy 软链接：
 
 ```bash
-ln -sfn "$(pwd)/experiments/robotwin/fastwam_policy" "$(pwd)/third_party/RoboTwin/policy/fastwam_policy"
+export ROBOTWIN_ROOT=/path/to/RoboTwin
+ln -sfn "$(pwd)/experiments/robotwin/fastwam_policy" "$ROBOTWIN_ROOT/policy/fastwam_policy"
 ```
 
-之后再运行 RoboTwin 评测：
+之后再运行 RoboTwin 评测，并指向该检出：
 
 ```bash
-python experiments/robotwin/run_robotwin_manager.py task={task_name} ckpt={ckpt_path}
+python experiments/robotwin/run_robotwin_manager.py \
+  task={task_name} ckpt={ckpt_path} EVALUATION.robotwin_root="$ROBOTWIN_ROOT"
 ```
 
 

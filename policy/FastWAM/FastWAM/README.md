@@ -187,13 +187,19 @@ pip install mujoco==3.3.2
 
 The `mujoco` environment should ideally stay consistent with the LIBERO data version.
 
-We have already copied the `RoboTwin` evaluation-related code into `third_party/RoboTwin`.
-You still need to follow the official RoboTwin instructions from the
-[RoboTwin repository](https://github.com/RoboTwin-Platform/RoboTwin) to finish environment installation and download the required assets, then create the policy symlink:
+RoboTwin evaluation runs against your own RoboTwin checkout — clone it, follow the
+official instructions from the [RoboTwin repository](https://github.com/RoboTwin-Platform/RoboTwin)
+to finish environment installation and download the required assets, then create the
+policy symlink:
 
 ```bash
-ln -sfn "$(pwd)/experiments/robotwin/fastwam_policy" "$(pwd)/third_party/RoboTwin/policy/fastwam_policy"
+export ROBOTWIN_ROOT=/path/to/RoboTwin
+ln -sfn "$(pwd)/experiments/robotwin/fastwam_policy" "$ROBOTWIN_ROOT/policy/fastwam_policy"
 ```
+
+Pass that path to every RoboTwin evaluation as `EVALUATION.robotwin_root=$ROBOTWIN_ROOT`,
+or set `EVALUATION.robotwin_root` once in `configs/sim_robotwin.yaml`. It defaults to
+`null`, so an evaluation that omits it fails immediately instead of half-running.
 
 Optional: evaluate released LIBERO checkpoint:
 
@@ -217,6 +223,7 @@ python experiments/robotwin/run_robotwin_manager.py \
   task=robotwin_uncond_3cam_384_1e-4 \
   ckpt=./checkpoints/fastwam_release/robotwin_uncond_3cam_384.pt \
   EVALUATION.dataset_stats_path=./checkpoints/fastwam_release/robotwin_uncond_3cam_384_dataset_stats.json \
+  EVALUATION.robotwin_root="$ROBOTWIN_ROOT" \
   MULTIRUN.num_gpus=8
 ```
 
@@ -271,19 +278,20 @@ The `mujoco` environment should ideally stay consistent with the LIBERO data ver
 python experiments/libero/run_libero_manager.py task={task_name} ckpt={ckpt_path}
 ```
 
-We have already copied the `RoboTwin` evaluation-related code into `third_party/RoboTwin`.
-You still need to follow the official RoboTwin instructions from the
-[RoboTwin repository](https://github.com/RoboTwin-Platform/RoboTwin).
-Finish installation and download the required assets, then create the policy symlink:
+RoboTwin evaluation runs against your own RoboTwin checkout. Follow the official
+instructions from the [RoboTwin repository](https://github.com/RoboTwin-Platform/RoboTwin),
+finish installation and download the required assets, then create the policy symlink:
 
 ```bash
-ln -sfn "$(pwd)/experiments/robotwin/fastwam_policy" "$(pwd)/third_party/RoboTwin/policy/fastwam_policy"
+export ROBOTWIN_ROOT=/path/to/RoboTwin
+ln -sfn "$(pwd)/experiments/robotwin/fastwam_policy" "$ROBOTWIN_ROOT/policy/fastwam_policy"
 ```
 
-Then run RoboTwin evaluation:
+Then run RoboTwin evaluation, pointing it at that checkout:
 
 ```bash
-python experiments/robotwin/run_robotwin_manager.py task={task_name} ckpt={ckpt_path}
+python experiments/robotwin/run_robotwin_manager.py \
+  task={task_name} ckpt={ckpt_path} EVALUATION.robotwin_root="$ROBOTWIN_ROOT"
 ```
 
 Common `task_name` examples:

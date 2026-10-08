@@ -1,0 +1,130 @@
+eval_num_inference_steps: 10
+model:
+  _target_: awomo.awomo.factory.create_imagewam_flux2_klein_actionpatch_vl
+  flux2_model_path: null
+  ae_model_path: null
+  flux2_src_path: null
+  variant: klein-base-4b
+  vl_model_path: null
+  vl_qwen_layers:
+  - 9
+  - 18
+  - 27
+  vl_max_prompt_len: 768
+  vl_attn_implementation: sdpa
+  vl_lora:
+    enabled: true
+    r: 64
+    alpha: 128
+    dropout: 0.05
+    target_modules: .*language_model.*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)$
+  proprio_dim: 14
+  pack_proprio_after_text: true
+  mot_checkpoint_mixed_attn: true
+  mot_gqa_implementation: repeat
+  mot_force_flash_attention: false
+  action_patch_dim: 14
+  action_patch_scale: 1.0
+  target_views: null
+  view_time_stride: 1.0
+  history_max_slots: 20
+  history_pool_grid:
+  - 4
+  - 4
+  history_vae_micro_batch: 16
+  vl_ar:
+    image_size:
+    - 448
+    - 448
+    history_image_size:
+    - 448
+    - 448
+    history_pool:
+    - 4
+    - 4
+    history_num_slots: 20
+    history_period_s: 1.0
+    history_fps: 25.0
+    summary_layers:
+    - 18
+    - 27
+    - 36
+    max_new_tokens: 24
+    decode_every: 4
+  video_scheduler:
+    infer_shift: 5.0
+    num_train_timesteps: 1000
+data:
+  train:
+    num_frames: 17
+    video_size:
+    - 256
+    - 256
+    cameras:
+    - cam_head
+    - cam_left_wrist
+    - cam_right_wrist
+    concat_multi_camera: null
+    action_dim: 14
+    norm_default_mode: z-score
+    history:
+      enabled: true
+      camera: cam_head
+      fps: 25
+      max_slots: 20
+      offset_bins_sec:
+      - - 0.6
+        - 1.4
+      - - 1.6
+        - 2.4
+      - - 2.6
+        - 3.4
+      - - 3.6
+        - 4.4
+      - - 4.6
+        - 5.4
+      - - 5.6
+        - 6.4
+      - - 6.6
+        - 7.4
+      - - 7.6
+        - 8.4
+      - - 8.6
+        - 9.4
+      - - 9.6
+        - 10.4
+      - - 10.6
+        - 11.4
+      - - 11.6
+        - 12.4
+      - - 12.6
+        - 13.4
+      - - 13.6
+        - 14.4
+      - - 14.6
+        - 15.4
+      - - 15.6
+        - 16.4
+      - - 16.6
+        - 17.4
+      - - 17.6
+        - 18.4
+      - - 18.6
+        - 19.4
+      - - 19.6
+        - 20.4
+    vlm:
+      enabled: true
+      model_path: null
+      image_size:
+      - 448
+      - 448
+      history:
+        enabled: true
+        camera: cam_head
+        num_slots: 20
+        period_s: 1.0
+        fps: 25
+        image_size:
+        - 448
+        - 448

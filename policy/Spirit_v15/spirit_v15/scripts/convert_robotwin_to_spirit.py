@@ -1,12 +1,20 @@
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Dict, Iterable, List
 
 import cv2
 import h5py
 import numpy as np
+
+
+XPOLICYLAB_ROOT = Path(__file__).resolve().parents[4]
+if str(XPOLICYLAB_ROOT) not in sys.path:
+    sys.path.insert(0, str(XPOLICYLAB_ROOT))
+
+from XPolicyLab.utils.process_data import decode_image_bit
 
 
 CAMERA_DATASETS = {
@@ -111,13 +119,6 @@ def load_prompt(instruction_file: Path, task_name: str) -> str:
     return humanize_task_name(task_name)
 
 
-def decode_rgb_frame(encoded: bytes) -> np.ndarray:
-    frame = cv2.imdecode(np.frombuffer(encoded, dtype=np.uint8), cv2.IMREAD_COLOR)
-    if frame is None:
-        raise ValueError("Failed to decode RGB frame from RobotWin HDF5 payload.")
-    return frame
-
-
 def ensure_output_root(output_root: Path, overwrite: bool) -> None:
     if output_root.exists() and any(output_root.iterdir()) and not overwrite:
         raise FileExistsError(
@@ -208,7 +209,7 @@ def write_episode(
                 states_file.write(json.dumps(state_record) + "\n")
 
                 for video_name, dataset_name in CAMERA_DATASETS.items():
-                    frame = decode_rgb_frame(data_file[dataset_name][frame_idx])
+                    frame = decode_image_bit(data_file[dataset_name][frame_idx])
                     writer = writers.get(video_name)
                     if writer is None:
                         height, width = frame.shape[:2]
@@ -221,7 +222,7 @@ def write_episode(
                         if not writer.isOpened():
                             raise ValueError(f"Failed to open video writer for {video_name} at {videos_dir}")
                         writers[video_name] = writer
-                    writer.write(frame)
+                    writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
     finally:
         for writer in writers.values():
             writer.release()

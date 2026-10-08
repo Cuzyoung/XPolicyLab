@@ -1,0 +1,34 @@
+policy_name: PatchWAM
+protocol: ws
+host: localhost
+port: null
+bench_name: null
+task_name: null
+ckpt_name: null
+env_cfg_type: null
+seed: 0
+action_type: joint
+gpu_id: null
+eval_batch: false
+
+# Model assets. setup_eval_policy_server.sh supplies these per run.
+checkpoint_path: null
+dataset_stats_path: null
+runtime_config_path: null
+flux2_model_path: null
+ae_model_path: null
+qwen3_model_spec: Qwen/Qwen3-4B
+
+# Published step_140000 inference protocol.
+device: cuda
+mixed_precision: bf16
+action_horizon: 16
+replan_steps: 16
+num_inference_steps: 10
+sigma_shift: null
+text_cfg_scale: 1.0
+negative_prompt: ""
+rand_device: cpu
+tiled: false
+default_instruction: follow the instruction
+allow_dummy_policy: false

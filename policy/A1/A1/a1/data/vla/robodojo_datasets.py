@@ -29,16 +29,25 @@
 episode 的帧数与指令，真正的 array / 图像在 `get()` 内按需打开文件读取。
 """
 
-import io
 import os
 import glob
 import json
 import logging
+import sys
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import h5py
 import numpy as np
-from PIL import Image
+
+# Stored image bits decode only through XPolicyLab's decode_image_bit, which
+# resolves both stored byte formats to RGB. The checkout root (made importable
+# by its XPolicyLab.py shim) sits six levels above this file.
+_XPOLICYLAB_ROOT = Path(__file__).resolve().parents[6]
+if str(_XPOLICYLAB_ROOT) not in sys.path:
+    sys.path.insert(0, str(_XPOLICYLAB_ROOT))
+
+from XPolicyLab.utils.process_data import decode_image_bit
 
 from a1.data.dataset import Dataset
 from a1.data.vla.utils import NormalizationType
@@ -60,16 +69,12 @@ _DEFAULT_CAMERA_KEYS = ["cam_head", "cam_left_wrist", "cam_right_wrist"]
 
 
 def _decode_jpeg(raw) -> np.ndarray:
-    """HDF5 colors 元素(定长字节串, 可能 null 填充) -> HWC uint8 RGB。"""
-    b = raw.tobytes() if isinstance(raw, np.ndarray) else bytes(raw)
-    try:
-        img = Image.open(io.BytesIO(b)).convert("RGB")
-    except Exception:
-        # framepad, then
-        img = Image.open(io.BytesIO(b.rstrip(b"\x00"))).convert("RGB")
-    # use np.array( np.asarray), avoidunder torch.from_numpy
-    # foronly "NumPy array is not writable" (only, ).
-    return np.array(img, dtype=np.uint8)
+    """HDF5 colors 元素(定长字节串, 可能 null 填充) -> HWC uint8 RGB。
+
+    decode_image_bit 统一处理两种存储字节格式(legacy 反转与带标记的标准
+    RGB)以及 null 填充,直接 PIL 解码会把 legacy 数据读成 BGR。
+    """
+    return decode_image_bit(raw)
 
 
 class RoboDojoDatasetReader(Dataset):

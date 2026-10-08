@@ -30,7 +30,7 @@ bash process_data.sh <bench_name> <ckpt_name> <env_cfg_type> <action_type> <sour
 bash process_data.sh RoboDojo cotrain arx_x5 joint RoboDojo_sim_arx-x5_v21
 ```
 
-The extra argument `source_repo_id` names the existing LeRobot dataset folder under `LDA_LEROBOT_ROOT`.
+The extra argument `source_repo_id` names the existing LeRobot dataset folder under `LDA_LEROBOT_ROOT`. The source export (e.g. `RoboDojo_sim_arx-x5_v21`) carries the official converter keys ([Official LeRobot conversion](../../README.md#official-lerobot-conversion)); this script only layers a GR00T-style `meta/modality.json` view on top without touching data or videos.
 
 ## Training
 

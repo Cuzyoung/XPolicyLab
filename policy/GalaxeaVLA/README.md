@@ -20,6 +20,8 @@ source GalaxeaVLA/.venv/bin/activate  # or pass GalaxeaVLA as <policy_uv_env_pat
 
 No top-level `process_data.sh`. Training consumes a **LeRobot v3.0** dataset (with `meta/tasks.parquet`) directly; set `GALAXEA_DATASET_DIR` to its root before running `train.sh` (see Training below).
 
+The keys are the standard ones of `XPolicyLab/scripts/transform_lerobot_v30_format.py` ([Official LeRobot conversion](../../README.md#official-lerobot-conversion)) — run that script to build a dataset for your own task subset, and no conversion step of its own is needed for a prepared export. `configs/data/xpolicylab/dual_arm_joint_robodojo.yaml` reads `observation.images.cam_high` / `cam_left_wrist` / `cam_right_wrist` and slices the flat 14-dim `observation.state` / `action` into per-arm and per-gripper spans, so the official layout is consumed unchanged. Normalization stats are computed on the first training run, not by a preprocessing step.
+
 ## Training
 
 ```bash

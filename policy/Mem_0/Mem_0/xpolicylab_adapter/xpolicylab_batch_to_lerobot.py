@@ -9,7 +9,7 @@ Called by ../process_data_batch.sh:
     python xpolicylab_batch_to_lerobot.py <bench_name> <env_cfg_type> <action_type> \
         --m1_tasks t1,t2 --mn_tasks t3,t4 \
         --annotation_root <path/to/language_annotation> \
-        [--expert_data_num N] [--dataset_id NAME] [--vcodec h264] [--no-use-preview]
+        [--expert_data_num N] [--dataset_id NAME] [--vcodec h264] [--use-preview]
 
 ``--expert_data_num`` is optional (episodes kept per task); when omitted, every
 episode found under each task dir is converted.
@@ -84,8 +84,10 @@ def main() -> None:
                         help="Output tag (default <bench>-cotrain-<env>-<action>)")
     parser.add_argument("--camera", default="cam_head")
     parser.add_argument(
-        "--no-use-preview", action="store_true",
-        help="Decode JPEG frames from HDF5 instead of preview mp4",
+        "--use-preview", action="store_true",
+        help="Read frames from preview mp4 instead of decoding the HDF5 image bits: "
+             "faster, but only correct if the preview stores true RGB "
+             "(default: decode the HDF5 bits)",
     )
     parser.add_argument(
         "--vcodec", default=DEFAULT_VCODEC,
@@ -113,7 +115,7 @@ def main() -> None:
         shutil.rmtree(out_root)
 
     dataset = create_mem0_lerobot_dataset(dataset_id, out_root, vcodec=args.vcodec)
-    use_preview = not args.no_use_preview
+    use_preview = args.use_preview
     annotation_root = Path(args.annotation_root)
 
     mn_annotations: dict[str, dict] = {}

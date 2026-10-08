@@ -30,7 +30,7 @@ bash process_data.sh RoboDojo stack_bowls arx_x5 joint
 GR00T_SRC_DATASET=RoboDojo_sim_arx-x5_50ep bash process_data.sh RoboDojo stack_bowls_50ep arx_x5 joint
 ```
 
-The source dataset defaults to `RoboDojo_sim_arx-x5_v30` for `arx_x5`; other `env_cfg_type` values require setting `GR00T_SRC_DATASET` explicitly. `expert_data_num` is accepted for compatibility only — it is logged but not applied for episode subsetting; to ablate data scale, point `GR00T_SRC_DATASET` at a subset dataset and use a distinct `ckpt_name`.
+The source dataset defaults to `RoboDojo_sim_arx-x5_v30` for `arx_x5` — a prepared LeRobot v3.0 export with the official keys ([Official LeRobot conversion](../../README.md#official-lerobot-conversion)); `process_data.sh` copies it and downgrades v3.0 to v2.1 with upstream LeRobot tooling, without touching keys or images. Other `env_cfg_type` values require setting `GR00T_SRC_DATASET` explicitly. `expert_data_num` is accepted for compatibility only — it is logged but not applied for episode subsetting; to ablate data scale, point `GR00T_SRC_DATASET` at a subset dataset and use a distinct `ckpt_name`.
 
 ## Training
 

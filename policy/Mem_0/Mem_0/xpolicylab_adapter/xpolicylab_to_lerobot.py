@@ -142,6 +142,11 @@ def _decode_rgb(img_bit) -> np.ndarray:
 
 
 def _load_preview_frames(preview_path: Path, expected_length: int) -> List[np.ndarray]:
+    """Read a preview mp4 as RGB.
+
+    The BGR2RGB below is only right if the preview stores true RGB, and nothing
+    in XPolicyLab writes these files — hence the opt-in in load_episode_images.
+    """
     cap = cv2.VideoCapture(str(preview_path))
     if not cap.isOpened():
         raise FileNotFoundError(f"Cannot open preview video: {preview_path}")
@@ -208,9 +213,19 @@ def load_episode_images(
     episode_idx: int,
     *,
     camera: str = "cam_head",
-    use_preview: bool = True,
+    use_preview: bool = False,
     episode_length: int,
 ) -> List[np.ndarray]:
+    """Load one episode's head-camera frames as RGB.
+
+    Defaults to the HDF5 image bits because `decode_image_bit` is the only
+    source whose channel order XPolicyLab guarantees. `use_preview` skips the
+    per-frame JPEG decode by reading `preview_video/*.mp4` instead, which is
+    faster but makes the training colour order depend on a producer outside
+    this repo: a preview written by handing RGB straight to `cv2.VideoWriter`
+    reads back channel-reversed, and training would silently diverge from the
+    RGB that evaluation feeds.
+    """
     if use_preview:
         preview_path = (
             task_dir / "preview_video" / f"episode_{episode_idx:07d}_{camera}.mp4"
@@ -341,8 +356,10 @@ def main() -> None:
                         help="Mn segmentation JSON {episode_<i>:[[text,duration],...]}")
     parser.add_argument("--camera", default="cam_head",
                         help="vision camera key holding the head view (default cam_head)")
-    parser.add_argument("--no-use-preview", action="store_true",
-                        help="Decode JPEG frames from HDF5 instead of preview mp4")
+    parser.add_argument("--use-preview", action="store_true",
+                        help="Read frames from preview mp4 instead of decoding the HDF5 "
+                             "image bits: faster, but only correct if the preview stores "
+                             "true RGB (default: decode the HDF5 bits)")
     parser.add_argument("--vcodec", default=DEFAULT_VCODEC,
                         help=f"Video codec for LeRobot encoding (default: {DEFAULT_VCODEC})")
     args = parser.parse_args()
@@ -379,7 +396,7 @@ def main() -> None:
         shutil.rmtree(out_root)
 
     dataset = create_mem0_lerobot_dataset(out_name, out_root, vcodec=args.vcodec)
-    use_preview = not args.no_use_preview
+    use_preview = args.use_preview
 
     written, total_frames = 0, 0
     episode_indices = list_episode_indices(task_dir, args.expert_data_num)

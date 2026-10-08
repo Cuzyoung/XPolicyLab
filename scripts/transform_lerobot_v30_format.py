@@ -49,7 +49,7 @@ CAMERA_CANDIDATES = {
 
 
 # ============================================================
-# Fast community-recommended v3.0 config
+# Published v3.0 config: AV1 (libsvtav1), streaming, CRF 18
 # ============================================================
 
 @dataclasses.dataclass(frozen=True)
@@ -69,10 +69,16 @@ class DatasetConfig:
     # instead of relying on LeRobot's internal default of 30.
     streaming_encoding: bool = True
 
+    # libsvtav1: CRF. h264_nvenc: LeRobot 0.4.4 maps this to constqp qp.
     video_crf: int | None = 18
 
-    # pyav is the fastest & most stable in community
-    video_backend: str | None = "h264_nvenc"
+    # Decoder. None keeps LeRobot's default decoder. It does not select the encoder.
+    video_backend: str | None = None
+
+    # Encoder.
+    # libsvtav1: AV1, CRF 18, preset 12, g=2, yuv420p.
+    # h264_nvenc: NVIDIA H.264, rc=constqp, qp=18, yuv420p. Not video_backend.
+    vcodec: Literal["libsvtav1", "h264_nvenc"] = "libsvtav1"
 
 
 DEFAULT_DATASET_CONFIG = DatasetConfig()
@@ -621,6 +627,7 @@ def create_empty_dataset(
 
         streaming_encoding=dataset_config.streaming_encoding,
         video_backend=dataset_config.video_backend,
+        vcodec=dataset_config.vcodec,
     )
 
 
@@ -715,6 +722,25 @@ def convert_one(
 
     num_frames = state.shape[0]
 
+    # Every episode carries the full declared camera feature set, matching the
+    # v2.1 converter: a camera absent from the source is filled with black
+    # frames, and a camera shorter than the state sequence is corrupt data.
+    # Extra trailing frames are tolerated (only the first num_frames are used).
+    for camera_name in CAMERA_CANDIDATES:
+
+        image_array = images.get(camera_name)
+
+        if image_array is None:
+            images[camera_name] = np.zeros(
+                (num_frames, image_height, image_width, 3),
+                dtype=np.uint8,
+            )
+        elif len(image_array) < num_frames:
+            raise ValueError(
+                f"Camera '{camera_name}' has {len(image_array)} frames but the "
+                f"state sequence has {num_frames}"
+            )
+
     for index in range(num_frames):
 
         frame = {
@@ -724,10 +750,6 @@ def convert_one(
         }
 
         for image_name, image_array in images.items():
-
-            if index >= len(image_array):
-                continue
-
             frame[f"observation.images.{image_name}"] = image_array[index]
 
         dataset.add_frame(frame)

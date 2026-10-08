@@ -16,7 +16,9 @@ conda activate <policy_env>  # e.g. internvla_a1
 
 ## Data Processing
 
-No top-level `process_data.sh`. The adapter expects a LeRobot dataset repo id that the upstream trainer can load. By default, `train.sh` uses `<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>` as `INTERNVLA_REPO_ID`; set `INTERNVLA_REPO_ID=<repo_id>` when the prepared dataset uses a different name.
+No top-level `process_data.sh`. The adapter expects a **LeRobot v3.0** dataset repo id that the upstream trainer can load — the vendored trainer pins `CODEBASE_VERSION = "v3.0"` and rejects older layouts. By default, `train.sh` uses `<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>` as `INTERNVLA_REPO_ID`; set `INTERNVLA_REPO_ID=<repo_id>` when the prepared dataset uses a different name.
+
+The keys are the standard ones of `XPolicyLab/scripts/transform_lerobot_v30_format.py` ([Official LeRobot conversion](../../README.md#official-lerobot-conversion)) — run that script to build a dataset for your own task subset. It stamps `robot_type: unified_robot`, which is what selects the mapping in `internvla_a1/src/lerobot/transforms/constants.py` that reads `observation.state`, `action`, and `observation.images.cam_high` / `cam_left_wrist` / `cam_right_wrist` and remaps the three views to internal `observation.images.image0` / `image1` / `image2`. A dataset carrying a different `robot_type` selects different column names, so keep the converter's value.
 
 Before training with the default `INTERNVLA_USE_EXTERNAL_STATS=true`, compute normalization stats for the same repo id and action mode:
 

@@ -25,6 +25,7 @@ from XPolicyLab.model_template import ModelTemplate
 from XPolicyLab.utils.checkpoint_resolver import resolve_checkpoint_root
 from XPolicyLab.utils.process_data import (
     decode_image_bit,
+    encode_image_bit,
     get_robot_action_dim_info,
     unpack_robot_state,
 )
@@ -344,11 +345,11 @@ class Model(ModelTemplate):
     def _jpeg_mapping(self, img):
         """Replay the lossy JPEG round-trip the training data went through.
 
-        This is a compression simulator, not an observation decoder: the input
-        is an array this adapter just encoded, and the channel order is
-        unchanged across the round-trip.
+        This is a compression simulator, not an observation decoder: the RGB
+        input goes through the shared encode/decode pair, which keeps the
+        channel order unchanged across the round-trip.
         """
-        return decode_image_bit(cv2.imencode(".jpg", img)[1].tobytes())
+        return decode_image_bit(encode_image_bit(img))
 
     def _resize_img(self, img):
         img_size = tuple(self.model_cfg.get("image_size", (640, 480)))
