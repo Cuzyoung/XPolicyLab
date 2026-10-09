@@ -6,8 +6,12 @@ def eval_one_episode(TASK_ENV, model_client):
         model_client.call(func_name="update_obs", obs=obs)  # Update Observation
 
         actions = model_client.call(func_name="get_action")  # Get Action chunk
+        if isinstance(actions, dict):
+            actions = actions["actions"]
         for action_idx, action in enumerate(actions):
             TASK_ENV.take_action(action)
+            if TASK_ENV.is_episode_end():
+                break
 
             if action_idx != len(actions) - 1:
                 obs = TASK_ENV.get_obs()  # Get Observation

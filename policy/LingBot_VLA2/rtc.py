@@ -81,12 +81,13 @@ def sample_actions_rtc(
     lang_masks: torch.Tensor,
     state: torch.Tensor,
     *,
-    action_condition: torch.Tensor,
-    condition_weights: torch.Tensor,
+    action_condition: torch.Tensor | None,
+    condition_weights: torch.Tensor | None,
     beta: float,
     noise: torch.Tensor | None = None,
     image_grid_thw: torch.Tensor | None = None,
     _make_masks: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
+    sampler=None,
 ) -> torch.Tensor:
     """Run LingBot's native flow loop with RTC guidance on every step."""
 
@@ -108,12 +109,12 @@ def sample_actions_rtc(
     if noise.shape != actions_shape:
         raise ValueError(f"RTC noise must have shape {actions_shape}, got {tuple(noise.shape)}")
 
-    target = action_condition.to(device=device, dtype=dtype)
-    weights = condition_weights.to(device=device, dtype=dtype)
-    if target.shape != actions_shape or weights.shape != actions_shape:
+    target = None if action_condition is None else action_condition.to(device=device, dtype=dtype)
+    weights = None if condition_weights is None else condition_weights.to(device=device, dtype=dtype)
+    if sampler is None and (target is None or weights is None or target.shape != actions_shape or weights.shape != actions_shape):
         raise ValueError(
             "RTC normalized condition and weights must match model action shape "
-            f"{actions_shape}, got {tuple(target.shape)} and {tuple(weights.shape)}"
+            f"{actions_shape}"
         )
 
     (
@@ -142,6 +143,14 @@ def sample_actions_rtc(
         visual_pos_masks=visual_pos_masks,
         deepstack_visual_embeds=deepstack_visual_embeds,
     )
+
+    if sampler is not None:
+        def velocity(sample, clean_time):
+            time = torch.full((batch_size,), 1.0 - clean_time, device=device, dtype=dtype)
+            return -flow_model.predict_velocity(
+                state, prefix_pad_masks, past_key_values, sample, time,
+                prefix_position_ids=prefix_position_ids)
+        return sampler(velocity, noise, target, weights)
 
     dt = torch.tensor(-1.0 / flow_model.config.num_steps, dtype=dtype, device=device)
     x_t = noise
@@ -303,18 +312,17 @@ class LingBotRtcBridge:
     def infer(
         self,
         observation: Mapping[str, Any],
-        action_condition: np.ndarray,
-        condition_weights: np.ndarray,
+        action_condition: np.ndarray | None,
+        condition_weights: np.ndarray | None,
         beta: float,
+        *, sampler=None,
     ) -> dict[str, np.ndarray]:
-        raw_actions = encode_raw_condition(action_condition, self.robot_info)
-        current_state = self._current_state(observation)
-        target, weights = normalize_condition(
-            self.server.vla.feature_transform,
-            raw_actions,
-            condition_weights,
-            current_state,
-        )
+        target = weights = None
+        if action_condition is not None:
+            raw_actions = encode_raw_condition(action_condition, self.robot_info)
+            current_state = self._current_state(observation)
+            target, weights = normalize_condition(
+                self.server.vla.feature_transform, raw_actions, condition_weights, current_state)
 
         item = dict(observation)
         self.server.resize_image(item)
@@ -348,10 +356,11 @@ class LingBotRtcBridge:
             lang_tokens.to(device="cuda"),
             lang_masks.to(device="cuda"),
             state.to(device="cuda", dtype=dtype),
-            action_condition=target.unsqueeze(0),
-            condition_weights=weights.unsqueeze(0),
+            action_condition=None if target is None else target.unsqueeze(0),
+            condition_weights=None if weights is None else weights.unsqueeze(0),
             beta=beta,
             image_grid_thw=grid,
+            sampler=sampler,
         )
         transformed["actions"] = actions[0].to(dtype=torch.float32, device="cpu")
         if self.server.use_bf16:

@@ -49,7 +49,7 @@ class SAPolicyRoboTwinModel:
     def __init__(self, cfg_file, ckpt_path, workspace=None, n_action_steps=8,
                  device="cuda", use_ema=True, normalizer_path=None,
                  tcp_forward_offset_m=None, warmup_iterations=0,
-                 warmup_camera_names=None, resolved_cfg=None):
+                 warmup_camera_names=None, resolved_cfg=None, strict_checkpoint=False):
         import os
         import sys
 
@@ -112,7 +112,22 @@ class SAPolicyRoboTwinModel:
         # uninstantiated hydra DictConfig (that produced a false "EMA copy skipped").
         if hasattr(model, "use_ema"):
             model.use_ema = bool(use_ema)
-        model.load_pretrained_model(ckpt_path, cfg.get("ckpt_type", None))
+        if strict_checkpoint:
+            checkpoint = torch.load(ckpt_path, map_location='cpu', weights_only=True)
+            prefix = 'ema_pipeline.' if use_ema else 'pipeline.'
+            state = {key[len(prefix):]: value for key, value in checkpoint['state_dict'].items()
+                     if key.startswith(prefix)}
+            if not state:
+                raise ValueError(f'Checkpoint has no {prefix} weights')
+            loaded = model.pipeline.load_state_dict(state, strict=True)
+            self.checkpoint_load_report = {
+                'strict': True, 'weight_prefix': prefix, 'tensor_count': len(state),
+                'missing_keys': list(loaded.missing_keys),
+                'unexpected_keys': list(loaded.unexpected_keys),
+            }
+            del checkpoint, state
+        else:
+            model.load_pretrained_model(ckpt_path, cfg.get("ckpt_type", None))
         if use_ema and getattr(model, "use_ema", False):
             print(
                 "[SAPolicy] using EMA weights (ema_pipeline.* -> pipeline via load)",
@@ -179,15 +194,9 @@ class SAPolicyRoboTwinModel:
         """Reuse the training transform stack so eval preprocessing cannot drift."""
         import hydra
         from torchvision.transforms import Compose  # same one robomimic_hdf5.py uses
-        from sapolicy.entrys.normalizer_utils import is_joint_train_cfg, resolve_dataset_opt
+        from XPolicyLab.policy.SAPolicy.inference_config import resolve_action_dataset
 
-        # Joint TCP+action: dataset_opts[0] is the TCP branch (single agentview);
-        # closed-loop eval executes the action branch (third + wrists) -> use [-1].
-        if is_joint_train_cfg(cfg):
-            node = resolve_dataset_opt(cfg, -1)
-        else:
-            opts = cfg.data.train_dataset.dataset_opts
-            node = opts[0] if isinstance(opts, (list, tuple)) else opts
+        node = resolve_action_dataset(cfg)
         tf_cfg = node.get("transforms", None)
         if not tf_cfg:
             return None

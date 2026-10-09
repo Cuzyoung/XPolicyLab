@@ -483,6 +483,12 @@ class ActionDiT(ActionDiTBackbone):
         if not isinstance(getattr(self, "freqs", None), torch.Tensor):
             return
         ref = next(self.parameters(), None)
+        if self.freqs.device.type == "meta":
+            with torch.device("cpu"):
+                self.freqs = precompute_freqs_cis_1d(
+                    self._head_dim,
+                    self.max_action_len,
+                )
         if ref is not None and self.freqs.device != ref.device:
             self.freqs = self.freqs.to(device=ref.device)
 

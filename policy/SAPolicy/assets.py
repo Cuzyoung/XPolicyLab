@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from XPolicyLab.utils.checkpoint_resolver import resolve_checkpoint_root
+from .inference_config import resolve_action_dataset
 
 POLICY_DIR = Path(__file__).resolve().parent
 
@@ -58,12 +59,11 @@ def resolve_assets(config: Mapping[str, Any]) -> dict[str, Any]:
     def enabled(value):
         return value is True or str(value).lower() == "true"
 
-    if not enabled(resolved.get("use_relative_actions")) or not enabled(
-        resolved.data.train_dataset.dataset_opts[0].get("body_frame_actions")
-    ):
+    if not enabled(resolved.get("use_relative_actions")):
         raise ValueError(
             "This adapter requires the checkpoint's body-frame relative-action contract"
         )
+    resolve_action_dataset(resolved)
     resolved.model.pipeline.load_pretrain_backbone = cfg["backbone_path"]
     resolved.model.use_ema = bool(cfg.get("use_ema", False))
     resolved.model.clear_output_dir = False

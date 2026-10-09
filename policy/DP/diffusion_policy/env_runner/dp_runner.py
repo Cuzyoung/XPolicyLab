@@ -67,7 +67,7 @@ class DPRunner:
             result_list.append(result)
         return result_list
 
-    def get_action(self, policy: BaseImagePolicy, env_idx_list):
+    def get_action(self, policy: BaseImagePolicy, env_idx_list, **sampling):
         device = policy.device
         obs_list = self.get_n_steps_obs(env_idx_list)
 
@@ -93,7 +93,7 @@ class DPRunner:
                 [obs_torch["agent_pos"] for obs_torch in obs_list_numpy], dim=0
             )
 
-            action_dict = policy.predict_action(obs_dict_input)
+            action_dict = policy.predict_action(obs_dict_input, **sampling)
 
         np_action_dict = dict_apply(action_dict, lambda x: x.detach().cpu().numpy())
         actions = np_action_dict["action"][:, :self.n_action_steps]

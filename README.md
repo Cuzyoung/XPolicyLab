@@ -97,7 +97,7 @@ XPolicyLab is benchmark-agnostic: any benchmark, simulator, or real-robot setup 
 | [Awomo-0.5](policy/Awomo05/README.md) | [MoPA](policy/MoPA/README.md) | [PhysicalRSI](policy/physicalRSI/README.md) | [Simate-beta](policy/Simate_beta/README.md) | [SimpleMemVLA](policy/SimpleMemVLA/README.md) | [WorldScape Policy 2.0](policy/WorldScape_Policy_2/README.md) |
 | [GPT-6-Astra-Direct-EEF](policy/GPT_6_Astra_Direct_EEF/README.md) | [demo_policy](policy/demo_policy/README.md) | | | | |
 
-This fork also carries [Cosmos3](policy/Cosmos3/README.md), [LingBot-VLA2](policy/LingBot_VLA2/README.md), [SAPolicy](policy/SAPolicy/README.md), [OpenLoopVLA](policy/OpenLoopVLA/README.md), [UMI-DP](policy/UMI_DP/README.md), and [Isaac 0.5](policy/Isaac_05/README.md). Isaac 0.5 is a model-service-only LIBERO integration, not a leaderboard or real-robot result.
+This fork also carries [ABC-DiT](policy/ABC_DiT/README.md), [Cosmos3](policy/Cosmos3/README.md), [LingBot-VLA2](policy/LingBot_VLA2/README.md), [SAPolicy](policy/SAPolicy/README.md), [OpenLoopVLA](policy/OpenLoopVLA/README.md), [UMI-DP](policy/UMI_DP/README.md), and [Isaac 0.5](policy/Isaac_05/README.md). Isaac 0.5 is a model-service-only LIBERO integration, not a leaderboard or real-robot result.
 
 Adding a policy of your own, or entering a leaderboard, both go through a PR — see [Add Your Own Policy](#-add-your-own-policy).
 
@@ -556,7 +556,7 @@ robot_action_dim_info:
 num_envs: 1
 ```
 
-Pi05, DP, SAPolicy, GR00T N1.7, LingBot-VLA2, OpenWAM, UMI DP, Cosmos3 and the
+Pi05, DP, SAPolicy, ABC-DiT, GR00T N1.7, LingBot-VLA2, OpenWAM, UMI DP, Cosmos3 and the
 reference adapter pass the complete config to the shared dimension helpers.
 Xiaomi XR-1 and Isaac 0.5 already use their own declared checkpoint representations
 without consulting the parent dimension registry. Other adapters still using a
