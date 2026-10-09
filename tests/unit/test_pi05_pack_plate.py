@@ -17,6 +17,7 @@ from XPolicyLab.policy.Pi_05.pack_plate_contract import (
 from XPolicyLab.policy.Pi_05.pack_plate_model import (
     PackPlateZeroPoseModel,
     encode_rtc_condition,
+    make_pack_plate_train_config,
 )
 from XPolicyLab.policy.Pi_05.pass_ball_model import PassBallInputs
 from XPolicyLab.policy.Pi_05.pass_ball_pose import (
@@ -33,6 +34,23 @@ def test_pack_plate_dispatch_does_not_change_pass_ball(monkeypatch):
     monkeypatch.setattr(pack_plate_model, "PackPlateZeroPoseModel", lambda config: sentinel)
     assert Model.__new__(Model, {"observation_profile": PROFILE}) is sentinel
     assert type(Model.__new__(Model, {"observation_profile": "yam_native"})) is Model
+
+
+def test_full_checkpoint_architecture_preserves_old_lora_profile():
+    pytest.importorskip("openpi")
+    common = {"repo_id": "pack-plate", "train_config_name": TRAIN_CONFIG}
+    old = make_pack_plate_train_config(common)
+    full = make_pack_plate_train_config({
+        **common,
+        "paligemma_variant": "gemma_2b",
+        "action_expert_variant": "gemma_300m",
+    })
+    assert old.model.paligemma_variant == "gemma_2b_lora"
+    assert old.model.action_expert_variant == "gemma_300m_lora"
+    assert full.model.paligemma_variant == "gemma_2b"
+    assert full.model.action_expert_variant == "gemma_300m"
+    assert full.model.pi05 and full.model.action_dim == 32
+    assert full.model.action_horizon == 32
 
 
 def test_pack_plate_requires_its_own_checkpoint_and_stats(tmp_path):

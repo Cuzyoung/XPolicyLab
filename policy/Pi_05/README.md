@@ -177,6 +177,13 @@ absolute normalized grippers use the Tianji transform helpers above. The local
 the submitted training configuration. Data conversion and training entry points
 for this specific checkpoint are not included.
 
+The `pi05-pack-plate-full-zero-state-pack-instruction-final-59999` export uses
+the same deployment transforms with full-model weights. Its recipe explicitly
+selects `paligemma_variant: gemma_2b` and `action_expert_variant: gemma_300m`;
+it has no LoRA parameter leaves. Its normalization asset is
+`pack-plate-taccap-h32-zero-pose-pack-instruction`. The old wrist-only export
+continues to use `gemma_2b_lora` and `gemma_300m_lora` by default.
+
 This pack-plate profile supports default and RTC sampling. The RTC condition
 arrives as left/right absolute TCP poses and normalized openings from ManiMux;
 it is converted to the model's right/left 20-D absolute layout, then the

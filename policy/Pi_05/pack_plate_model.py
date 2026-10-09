@@ -16,9 +16,23 @@ from scipy.spatial.transform import Rotation
 
 from XPolicyLab.utils.process_data import get_robot_action_dim_info
 
-from .pack_plate_contract import PROFILE, TRAIN_CONFIG, validate_artifacts
+from .pack_plate_contract import PROFILE, validate_artifacts
 from .pass_ball_model import PassBallZeroPoseModel, decode_actions, make_train_config
 from .pass_ball_pose import OPTICAL_FROM_FLU, rotation_to_6d
+
+
+def make_pack_plate_train_config(model_cfg: dict):
+    """Reuse zero-pose transforms with the selected checkpoint's model architecture."""
+    base = make_train_config(model_cfg)
+    return dataclasses.replace(
+        base,
+        name=str(model_cfg["train_config_name"]),
+        model=dataclasses.replace(
+            base.model,
+            paligemma_variant=model_cfg.get("paligemma_variant", "gemma_2b_lora"),
+            action_expert_variant=model_cfg.get("action_expert_variant", "gemma_300m_lora"),
+        ),
+    )
 
 
 def encode_rtc_condition(
@@ -72,10 +86,7 @@ class PackPlateZeroPoseModel(PassBallZeroPoseModel):
         from .model import _resolve_pi05_model_root
 
         validate_artifacts(model_cfg)
-        if (
-            model_cfg["observation_profile"] != PROFILE
-            or model_cfg["train_config_name"] != TRAIN_CONFIG
-        ):
+        if model_cfg["observation_profile"] != PROFILE:
             raise ValueError("pack-plate deployment profile mismatch")
         dims = get_robot_action_dim_info(model_cfg)
         if dims["arm_dim"] != [7, 7] or dims["ee_dim"] != [1, 1]:
@@ -85,7 +96,7 @@ class PackPlateZeroPoseModel(PassBallZeroPoseModel):
         self.model_root = _resolve_pi05_model_root(model_cfg)
         self.norm_stats_path = Path(model_cfg["norm_stats_path"]).expanduser().resolve()
         norm_stats = normalize.load(self.norm_stats_path)
-        train_config = dataclasses.replace(make_train_config(model_cfg), name=TRAIN_CONFIG)
+        train_config = make_pack_plate_train_config(model_cfg)
         self.policy = create_trained_policy(
             train_config, str(self.model_root), norm_stats=norm_stats
         )

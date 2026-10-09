@@ -18,7 +18,8 @@ def main() -> None:
     config = yaml.safe_load(args.config.read_text())
     checkpoint = args.checkpoint.expanduser().resolve()
     config["model_path"] = str(checkpoint)
-    config["norm_stats_path"] = str(checkpoint / "assets/pack-plate-taccap-h32-zero-pose")
+    asset_name = Path(config["norm_stats_path"]).name
+    config["norm_stats_path"] = str(checkpoint / "assets" / asset_name)
 
     from .model import Model
 

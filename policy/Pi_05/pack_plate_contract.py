@@ -14,8 +14,31 @@ SOURCE = "pi05-pack-plate-wrist-only-final-59999"
 ASSET = "pack-plate-taccap-h32-zero-pose"
 STEP = 59999
 
+ARTIFACTS = {
+    "pi05_pack_plate_wrist_only_step59999": {
+        "train_config_name": TRAIN_CONFIG,
+        "checkpoint_source": SOURCE,
+        "asset": ASSET,
+        "checkpoint_num": STEP,
+    },
+    "pi05_pack_plate_full_zero_state_pack_instruction_step59999": {
+        "train_config_name": "pi05_pack_plate_full_zero_state_pack_instruction_deploy",
+        "checkpoint_source": "pi05-pack-plate-full-zero-state-pack-instruction-final-59999",
+        "asset": "pack-plate-taccap-h32-zero-pose-pack-instruction",
+        "checkpoint_num": STEP,
+        "model_variants": {
+            "paligemma_variant": "gemma_2b",
+            "action_expert_variant": "gemma_300m",
+        },
+    },
+}
+
 
 def validate_artifacts(config: dict) -> dict:
+    variant = config.get("checkpoint_variant")
+    if variant not in ARTIFACTS:
+        raise ValueError(f"unsupported pack-plate checkpoint_variant={variant!r}")
+    artifact = ARTIFACTS[variant]
     required = {
         "policy_name": "Pi_05",
         "protocol": "ws",
@@ -23,14 +46,14 @@ def validate_artifacts(config: dict) -> dict:
         "env_cfg_type": "tianji_dual",
         "action_type": "ee",
         "observation_profile": PROFILE,
-        "train_config_name": TRAIN_CONFIG,
         "model_state_encoding": "zero_pose",
         "action_horizon": 32,
         "output_format": "xpolicylab",
         "action_semantics": "absolute_per_arm_base_xyz_wxyz",
-        "checkpoint_source": SOURCE,
-        "checkpoint_num": STEP,
-        "checkpoint_variant": "pi05_pack_plate_wrist_only_step59999",
+        "train_config_name": artifact["train_config_name"],
+        "checkpoint_source": artifact["checkpoint_source"],
+        "checkpoint_num": artifact["checkpoint_num"],
+        **artifact.get("model_variants", {}),
     }
     for key, value in required.items():
         if config.get(key) != value:
@@ -38,9 +61,13 @@ def validate_artifacts(config: dict) -> dict:
     checkpoint = Path(config["model_path"]).expanduser().resolve()
     stats_dir = Path(config["norm_stats_path"]).expanduser().resolve()
     stats = stats_dir / "norm_stats.json"
-    if checkpoint.name != f"checkpoint-{STEP}" or checkpoint.parent.name != SOURCE:
+    step = artifact["checkpoint_num"]
+    if (
+        checkpoint.name != f"checkpoint-{step}"
+        or checkpoint.parent.name != artifact["checkpoint_source"]
+    ):
         raise ValueError("pack-plate checkpoint step or export directory does not match recipe")
-    if stats_dir != checkpoint / "assets" / ASSET:
+    if stats_dir != checkpoint / "assets" / artifact["asset"]:
         raise ValueError("pack-plate normalization must come from this checkpoint's assets")
     if not (checkpoint / "params/_METADATA").is_file():
         raise FileNotFoundError(f"Orbax Pi05 params metadata missing: {checkpoint}")
