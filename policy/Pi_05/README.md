@@ -87,7 +87,10 @@ Environment variables used by the adapter scripts:
 
 ## Inference Sampling Capabilities
 
-The adapter exposes six explicit WebSocket sampling modes:
+The adapter implements the following WebSocket sampling modes. The handshake reports
+only modes available for the loaded backend: PyTorch exposes `default`; JAX exposes
+`default`, `rtc`, `aac` and `paint`, plus `autohorizon` with at least three denoising
+steps. Per-request parameter validation still applies.
 
 | Mode | Adapter method | OpenPI path |
 |---|---|---|
@@ -96,7 +99,6 @@ The adapter exposes six explicit WebSocket sampling modes:
 | `aac` | `get_action_aac` | one prefix/KV-cache pass followed by an `N`-sample denoising batch |
 | `paint` | `get_action_paint` | paper Algorithm 1: naive forward, backward Euler, prefix noise repaint, final forward |
 | `autohorizon` | `get_action_autohorizon` | third-step action self-attention plus the pinned official bidirectional soft-pointer |
-| `dvac` | `get_action_dvac` | final-step clean-estimate variance and the paper's rolling adaptive prefix rule |
 
 AAC accepts `{"mode": "aac", "num_samples": N}` for exactly one observation and returns `N`
 native action chunks. It is JAX-only and cannot be combined with RTC conditioning. The adapter does
@@ -109,10 +111,3 @@ normalizes the raw robot-unit prefix with the same official input transform as m
 runs `3N` velocity evaluations without gradients. The public PAINT repository currently contains
 documentation rather than source code, so this path is an explicit paper reproduction of
 arXiv:2606.19774, not an upstream-code claim.
-
-DVAC accepts `{"mode": "dvac", "tail_steps": 5, "alpha": 2.0,
-"rolling_window_size": 5, "min_execution_steps": 1, "max_execution_steps": H}`. It reuses the
-existing JAX Euler velocity evaluations, computes Equation 4 over the valid normalized action
-dimensions, and keeps the rolling threshold state in the Pi05 adapter. No author repository was
-located, so this path is an explicit paper reproduction of arXiv:2606.03847v1 rather than an
-official-code port.

@@ -6,7 +6,6 @@
 import dataclasses
 import math
 import sys
-from collections import deque
 from importlib import metadata as package_metadata
 from pathlib import Path
 from typing import Any
@@ -148,8 +147,6 @@ class Model(ModelTemplate):
         )
         self.observation_window: dict[str, Any] | None = None
         self._latest_env_idx_list: list[int] = [0]
-        self._dvac_history: deque[np.ndarray] = deque()
-        self._dvac_history_size: int | None = None
 
         self._train_config = _resolve_train_config(model_cfg)
         expected_profile = (
@@ -195,6 +192,15 @@ class Model(ModelTemplate):
             str(model_root),
             norm_stats=norm_stats,
         )
+
+    def sampling_modes(self) -> list[str]:
+        """Advertise hooks supported by the loaded backend and denoising budget."""
+        if self.policy._is_pytorch_model:
+            return ["default"]
+        modes = ["default", "rtc", "aac", "paint"]
+        if self.num_steps >= 3:
+            modes.append("autohorizon")
+        return modes
 
     def runtime_metadata(self) -> dict[str, Any]:
         is_pytorch = getattr(self.policy, "_is_pytorch_model", None)
@@ -480,137 +486,6 @@ class Model(ModelTemplate):
             )
         return {"actions": decoded, "autohorizon": metadata}
 
-    def get_action_dvac(self, sampling: dict[str, Any]):
-        allowed = {
-            "mode",
-            "alpha",
-            "min_execution_steps",
-            "max_execution_steps",
-            "rolling_window_size",
-            "tail_steps",
-        }
-        unexpected = sorted(set(sampling) - allowed)
-        if unexpected:
-            raise ValueError(f"DVAC received unsupported fields: {unexpected}")
-        if self.observation_window is None:
-            raise AssertionError("update_obs or update_obs_batch first!")
-        if len(self._latest_env_idx_list) != 1:
-            raise ValueError("DVAC sampling requires exactly one observation")
-
-        alpha = float(sampling.get("alpha", 2.0))
-        integer_settings = {
-            "min_execution_steps": sampling.get("min_execution_steps", 1),
-            "max_execution_steps": sampling.get(
-                "max_execution_steps", self.action_horizon
-            ),
-            "rolling_window_size": sampling.get("rolling_window_size", 5),
-            "tail_steps": sampling.get("tail_steps", 5),
-        }
-        for name, value in integer_settings.items():
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise ValueError(f"DVAC {name} must be an integer")
-        minimum = int(integer_settings["min_execution_steps"])
-        maximum = int(integer_settings["max_execution_steps"])
-        window_size = int(integer_settings["rolling_window_size"])
-        tail_steps = int(integer_settings["tail_steps"])
-        if not math.isfinite(alpha) or alpha < 0:
-            raise ValueError("DVAC alpha must be finite and non-negative")
-        if not 1 <= minimum <= maximum <= self.action_horizon:
-            raise ValueError(
-                "DVAC execution bounds must satisfy "
-                f"1 <= N_min <= N_max <= {self.action_horizon}"
-            )
-        if window_size <= 0:
-            raise ValueError("DVAC rolling_window_size must be positive")
-        if not 1 < tail_steps <= self.num_steps:
-            raise ValueError(
-                f"DVAC tail_steps must satisfy 1 < L <= {self.num_steps}"
-            )
-
-        if self._dvac_history_size != window_size:
-            if self._dvac_history:
-                raise ValueError("DVAC rolling_window_size cannot change within a session")
-            self._dvac_history = deque(maxlen=window_size)
-            self._dvac_history_size = window_size
-
-        single_observation = slice_stacked_obs(self.observation_window, 0)
-        result = self.policy.infer(
-            single_observation,
-            num_steps=self.num_steps,
-            dvac=True,
-            dvac_tail_steps=tail_steps,
-            dvac_action_dim=self.robot_action_dim or self.action_dim,
-        )
-        actions = np.asarray(result["actions"])
-        expected_action_dim = self.robot_action_dim or self.action_dim
-        expected_shape = (self.action_horizon, expected_action_dim)
-        if actions.shape != expected_shape:
-            raise ValueError(
-                f"Pi05 DVAC actions must have shape {expected_shape}, got {actions.shape}"
-            )
-        if not np.isfinite(actions).all():
-            raise ValueError("Pi05 DVAC actions must be finite")
-
-        sampler_metadata = result.get("dvac")
-        if not isinstance(sampler_metadata, dict):
-            raise ValueError("Pi05 DVAC inference did not return metadata")
-        variance = np.asarray(sampler_metadata.get("variance"), dtype=np.float64)
-        if (
-            variance.shape != (self.action_horizon,)
-            or not np.isfinite(variance).all()
-            or np.any(variance < 0)
-        ):
-            raise ValueError(
-                "Pi05 DVAC variance must contain one finite non-negative value "
-                f"per action step, got {variance.shape}"
-            )
-
-        cold_start = not self._dvac_history
-        calibration = (
-            variance
-            if cold_start
-            else np.concatenate(tuple(self._dvac_history), axis=0)
-        )
-        rolling_mean = float(np.mean(calibration))
-        rolling_std = float(np.std(calibration, ddof=0))
-        threshold = rolling_mean + alpha * rolling_std
-        high_variance = np.flatnonzero(variance > threshold)
-        if high_variance.size == 0:
-            execution_steps = maximum
-            first_crossing = None
-        else:
-            first_crossing = int(high_variance[0])
-            execution_steps = max(minimum, first_crossing)
-
-        self._dvac_history.append(variance.copy())
-        metadata = {
-            **sampler_metadata,
-            "execution_steps": execution_steps,
-            "first_threshold_crossing": first_crossing,
-            "threshold": threshold,
-            "rolling_mean": rolling_mean,
-            "rolling_std": rolling_std,
-            "alpha": alpha,
-            "min_execution_steps": minimum,
-            "max_execution_steps": maximum,
-            "rolling_window_size": window_size,
-            "rolling_states": len(self._dvac_history),
-            "cold_start": cold_start,
-            "cold_start_policy": "current_variance_bootstrap",
-            "method": "denoising_variance_adaptive_chunking",
-            "source": "arxiv:2606.03847v1",
-        }
-        if self.robot_action_dim_info is None:
-            decoded = actions
-        else:
-            decoded = unpack_robot_state(
-                actions,
-                self.action_type,
-                self.robot_action_dim_info,
-                source_type="obs",
-            )
-        return {"actions": decoded, "dvac": metadata}
-
     def get_action_batch(self, env_idx_list=None, **kwargs):
         if self.observation_window is None:
             raise AssertionError("update_obs or update_obs_batch first!")
@@ -640,8 +515,6 @@ class Model(ModelTemplate):
         self.policy.reset_rng(self.inference_seed)
         self.observation_window = None
         self._latest_env_idx_list = [0]
-        self._dvac_history = deque()
-        self._dvac_history_size = None
 
     def reset_obsrvationwindows(self):
         self.reset()
