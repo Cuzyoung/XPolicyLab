@@ -1391,6 +1391,7 @@ class BaseWAMArchitecture(ABC, nn.Module):
         cfg_scale: float = 1.0,
         cfg_merge: bool = False,
         active_action_mask: Optional[Tensor] = None,
+        denoise_loop=None,
         **extra_pipeline_inputs: Any,
     ) -> dict:
         """Execute joint video-action denoising driven by a schedule.
@@ -1507,7 +1508,8 @@ class BaseWAMArchitecture(ABC, nn.Module):
 
         t_loop = time.time()
 
-        action_latents = self._run_joint_denoising(
+        loop = self._run_joint_denoising if denoise_loop is None else denoise_loop
+        action_latents = loop(
             schedule,
             inputs_shared,
             action_latents,
