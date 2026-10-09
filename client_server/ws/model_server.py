@@ -504,8 +504,6 @@ class PolicyServer:
                     sampling_modes.append("paint")
                 if callable(getattr(self.model, "get_action_autohorizon", None)):
                     sampling_modes.append("autohorizon")
-                if callable(getattr(self.model, "get_action_dvac", None)):
-                    sampling_modes.append("dvac")
             model_metadata: dict[str, Any] = {
                 "module": type(self.model).__module__,
                 "class": type(self.model).__name__,
@@ -648,7 +646,7 @@ class PolicyServer:
             raise WsError(ErrorCode.INVALID_FRAME, "infer sampling must be a map")
         sampling = dict(sampling)
         mode = sampling.get("mode", "default")
-        if mode not in {"default", "rtc", "aac", "paint", "autohorizon", "dvac"}:
+        if mode not in {"default", "rtc", "aac", "paint", "autohorizon"}:
             raise WsError(ErrorCode.INVALID_FRAME, f"unsupported sampling mode: {mode!r}")
 
         try:
@@ -673,7 +671,6 @@ class PolicyServer:
                         "aac": "get_action_aac",
                         "paint": "get_action_paint",
                         "autohorizon": "get_action_autohorizon",
-                        "dvac": "get_action_dvac",
                     }[mode],
                     None,
                 )

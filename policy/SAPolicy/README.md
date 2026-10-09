@@ -168,7 +168,7 @@ input state uses `[poseL9,gripL,poseR9,gripR]`. Batch inference is sequential wi
 independent histories keyed by `env_idx`, without a vectorized speedup. Reset
 clears all histories. The full-horizon DiT backend advertises `default` and `rtc`;
 dry-run and incompatible heads advertise only `default`.
-PAINT/AAC/DVAC/AutoHorizon hooks remain unsupported and are not advertised.
+PAINT/AAC/AutoHorizon hooks remain unsupported and are not advertised.
 A separate `sapolicy_root` selects checkpoint-matched model source; the default
 is policy-local. The adapter retains its maintained inference wrapper, including
 explicit normalization, resolved configuration and TCP-offset handling, even when

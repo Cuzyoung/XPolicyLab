@@ -48,9 +48,6 @@ class FakeModel:
         self.calls.append(("get_action_autohorizon", sampling))
         return [5]
 
-    def get_action_dvac(self, sampling: dict[str, Any]) -> list[int]:
-        self.calls.append(("get_action_dvac", sampling))
-        return [6]
 
 
 def _frame(sampling: dict[str, Any] | None = None) -> Frame:
@@ -84,7 +81,6 @@ def test_hello_advertises_available_sampling_modes() -> None:
         "aac",
         "paint",
         "autohorizon",
-        "dvac",
     ]
     assert reply.payload["model_metadata"] == {
         "module": __name__,
@@ -123,7 +119,6 @@ def test_hello_does_not_advertise_rtc_without_a_sampler_hook() -> None:
         "aac",
         "paint",
         "autohorizon",
-        "dvac",
     ]
 
 
@@ -157,7 +152,6 @@ def test_rtc_infer_updates_observation_then_uses_rtc_action() -> None:
     assert reply.payload["actions"] == [2]
     assert [name for name, _ in model.calls] == ["update_obs", "get_action_rtc"]
     assert model.calls[-1][1] == sampling
-
 
 def test_rtc_infer_fails_when_model_has_no_rtc_method() -> None:
     model = FakeModel()
@@ -210,18 +204,8 @@ def test_autohorizon_infer_updates_observation_then_uses_attention_action() -> N
     assert model.calls[-1][1] == sampling
 
 
-def test_dvac_infer_updates_observation_then_uses_variance_action() -> None:
+def test_removed_sampling_mode_is_rejected_before_model_execution() -> None:
     model = FakeModel()
-    sampling = {
-        "mode": "dvac",
-        "tail_steps": 5,
-        "alpha": 2.0,
-        "rolling_window_size": 5,
-        "min_execution_steps": 1,
-        "max_execution_steps": 50,
-    }
-    reply = asyncio.run(PolicyServer(model)._handle_infer(_frame(sampling)))
-
-    assert reply.payload["actions"] == [6]
-    assert [name for name, _ in model.calls] == ["update_obs", "get_action_dvac"]
-    assert model.calls[-1][1] == sampling
+    with pytest.raises(WsError, match="unsupported sampling mode"):
+        asyncio.run(PolicyServer(model)._handle_infer(_frame({"mode": "dvac"})))
+    assert model.calls == []
