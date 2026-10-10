@@ -1,4 +1,4 @@
-# liber_0_lite
+# Liber_0_lite
 
 **Contributor:** LiberAI | **Paper:** Pending | **arXiv:** Pending | **Original code:** [liber0/](liber0/)
 
@@ -27,7 +27,7 @@ The inference engine and backend source are bundled; no external runtime/source
 checkout or FlashAttention installation is required.
 
 ```bash
-cd XPolicyLab/policy/liber_0_lite
+cd XPolicyLab/policy/Liber_0_lite
 bash install.sh /path/to/env
 export PATH=/path/to/env/bin:$PATH
 export TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=0

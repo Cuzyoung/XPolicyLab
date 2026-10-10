@@ -81,7 +81,7 @@ XPolicyLab is benchmark-agnostic: any benchmark, simulator, or real-robot setup 
 
 ## 🧭 Integrated Policies
 
-55 policies are currently integrated, spanning VLA, world-action, imitation-learning, and memory-augmented families, plus [demo_policy](policy/demo_policy/README.md) as the minimal reference adapter. Top-level adapters live in `policy/`; each policy README documents that model's paper/repo link, environment, data format, training entrypoint, and checkpoint layout.
+57 policies are currently integrated, spanning VLA, world-action, imitation-learning, and memory-augmented families, plus [demo_policy](policy/demo_policy/README.md) as the minimal reference adapter. Top-level adapters live in `policy/`; each policy README documents that model's paper/repo link, environment, data format, training entrypoint, and checkpoint layout.
 
 
 | Policy                                   | Policy                                               | Policy                                      | Policy                                                     | Policy                                                         | Policy                                            |
@@ -95,7 +95,7 @@ XPolicyLab is benchmark-agnostic: any benchmark, simulator, or real-robot setup 
 | [TinyVLA](policy/TinyVLA/README.md)      | [X-VLA](policy/X_VLA/README.md)                      | [X-WAM](policy/X_WAM/README.md)             | [Xiaomi-Robotics-0](policy/Xiaomi_Robotics_0/README.md)    | [Xiaomi-Robotics-1 (XR-1)](policy/Xiaomi_Robotics_1/README.md) | [StarVLA](policy/starVLA/README.md)               |
 | [ACT](policy/ACT/README.md) | [DP](policy/DP/README.md) | [Evo-1](policy/Evo_1/README.md) | [InternW0_delta](policy/InternW0_delta/README.md) | [KinRT](policy/KinRT/README.md) | [PatchWAM-Lite](policy/PatchWAM/README.md) |
 | [Awomo-0.5](policy/Awomo05/README.md) | [MoPA](policy/MoPA/README.md) | [PhysicalRSI](policy/physicalRSI/README.md) | [Simate-beta](policy/Simate_beta/README.md) | [SimpleMemVLA](policy/SimpleMemVLA/README.md) | [WorldScape Policy 2.0](policy/WorldScape_Policy_2/README.md) |
-| [GPT-6-Astra-Direct-EEF](policy/GPT_6_Astra_Direct_EEF/README.md) | [demo_policy](policy/demo_policy/README.md) | | | | |
+| [GPT-6-Astra-Direct-EEF](policy/GPT_6_Astra_Direct_EEF/README.md) | [VPP2](policy/VPP2/README.md) | [Liber_0_lite](policy/Liber_0_lite/README.md) | [demo_policy](policy/demo_policy/README.md) | | |
 
 This fork also carries [ABC-DiT](policy/ABC_DiT/README.md), [Cosmos3](policy/Cosmos3/README.md), [LingBot-VLA2](policy/LingBot_VLA2/README.md), [SAPolicy](policy/SAPolicy/README.md), [OpenLoopVLA](policy/OpenLoopVLA/README.md), [UMI-DP](policy/UMI_DP/README.md), and [Isaac 0.5](policy/Isaac_05/README.md). Isaac 0.5 is a model-service-only LIBERO integration, not a leaderboard or real-robot result.
 
