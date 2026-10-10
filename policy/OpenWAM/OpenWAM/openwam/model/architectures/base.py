@@ -676,7 +676,13 @@ class BaseWAMArchitecture(ABC, nn.Module):
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         save_file(state_dict, path)
 
-    def load_checkpoint(self, path: str, strict: bool = True) -> None:
+    def load_checkpoint(
+        self,
+        path: str,
+        strict: bool = True,
+        *,
+        device: str | torch.device | None = None,
+    ) -> None:
         """Load architecture state from a safetensors checkpoint.
 
         VLM backbone weights are not stored in the safetensors file (they
@@ -695,7 +701,7 @@ class BaseWAMArchitecture(ABC, nn.Module):
         """
         from safetensors.torch import load_file
 
-        state_dict = load_file(path)
+        state_dict = load_file(path, device=str(device or "cpu"))
         has_vlm = getattr(self, "vlm_backbone", None) is not None
         has_meta = any(p.device.type == "meta" for p in self.parameters())
         missing, unexpected = self.load_state_dict(state_dict, strict=False, assign=has_meta)
@@ -1385,6 +1391,7 @@ class BaseWAMArchitecture(ABC, nn.Module):
         cfg_scale: float = 1.0,
         cfg_merge: bool = False,
         active_action_mask: Optional[Tensor] = None,
+        denoise_loop=None,
         **extra_pipeline_inputs: Any,
     ) -> dict:
         """Execute joint video-action denoising driven by a schedule.
@@ -1501,7 +1508,8 @@ class BaseWAMArchitecture(ABC, nn.Module):
 
         t_loop = time.time()
 
-        action_latents = self._run_joint_denoising(
+        loop = self._run_joint_denoising if denoise_loop is None else denoise_loop
+        action_latents = loop(
             schedule,
             inputs_shared,
             action_latents,

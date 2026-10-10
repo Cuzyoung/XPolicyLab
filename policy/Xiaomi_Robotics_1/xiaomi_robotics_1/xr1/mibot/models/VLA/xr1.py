@@ -127,6 +127,9 @@ class Attention(nn.Module):
         cache_value = repeat_kv(repeat_batch(cache_value, batch_size), self.kv_group)
         key = torch.cat([cache_key, key], dim=-2)
         value = torch.cat([cache_value, value], dim=-2)
+        capture = getattr(self, "_action_attention_capture", None)
+        if capture is not None:
+            capture(query, key, attn_mask)
         output = F.scaled_dot_product_attention(query, key, value, attn_mask=attn_mask, dropout_p=0.0)
         output = output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.hidden_size)
         return self.o_proj(output)
@@ -324,6 +327,13 @@ class xr1(nn.Module):
 
     @torch.no_grad()
     def _generate(self, noise, kwargs):
+        sampler = getattr(self, "_inference_sampler", None)
+        if sampler is not None:
+            def velocity(sample, time):
+                timestep = torch.full((sample.shape[0], 1, 1), time,
+                                      device=sample.device, dtype=sample.dtype)
+                return self.dit_forward(sample, timestep, **kwargs)
+            return sampler(velocity, noise)
         if getattr(self, "_rtc_condition", None) is not None:
             return self._generate_pi_rtc(noise, kwargs)
         sample = noise.clone()
@@ -334,6 +344,16 @@ class xr1(nn.Module):
             ) * step / self.num_steps
             sample = sample + self.dit_forward(sample, timestep, **kwargs) * dt
         return sample
+
+    @contextlib.contextmanager
+    def inference_sampler(self, sampler):
+        if getattr(self, "_inference_sampler", None) is not None or getattr(self, "_rtc_condition", None) is not None:
+            raise RuntimeError("an inference sampler is already active")
+        self._inference_sampler = sampler
+        try:
+            yield
+        finally:
+            self._inference_sampler = None
 
     @contextlib.contextmanager
     def rtc_condition(self, condition, weights, beta: float = 5.0):

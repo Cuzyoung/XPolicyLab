@@ -1,11 +1,12 @@
-"""XPolicyLab adapter for the OpenWAM policy (RoboDojo dual-arm arx_x5, EE control).
+"""XPolicyLab adapter for OpenWAM: ARX-X5 simulation and YAM base-frame EE control.
 
 Loads the OpenWAM checkpoint in-process through the standard deploy path
 (``openwam.deploy.server.build_server_from_config`` — the same construction
 the JSON WebSocket server and ``scripts/verify_batch_equivalence.py`` use),
-then serves XPolicyLab's batched eval protocol. Every ``get_action_batch``
-call stacks all running envs into ONE ``engine.generate_batch`` forward pass
-(true batch inference, verified contamination-free on real weights).
+then serves XPolicyLab's single-robot and batched eval protocols. Single-stream
+inference uses ``engine.generate`` so OpenWAM's compile and DiT-cache fast paths
+remain available; ``eval_batch: true`` stacks running envs into one
+``engine.generate_batch`` forward pass.
 
 Coordinate contract (must mirror training — ``openwam/dataloader/robodojo.py``):
 
@@ -22,7 +23,8 @@ Coordinate contract (must mirror training — ``openwam/dataloader/robodojo.py``
                                    right_ee_pose, right_ee_joint_state}
 
 Correctness-first settings are re-forced at load time regardless of the yaml:
-dit_cache off, compile off, decode_video off, sync executor.
+decode_video off and sync executor. True batch inference additionally forces
+dit_cache and compile off because those paths carry single-stream state.
 """
 
 from __future__ import annotations
@@ -71,6 +73,34 @@ def _is_none_like(value: Any) -> bool:
     return isinstance(value, str) and value.strip().lower() in {"", "none", "null"}
 
 
+def _configure_deploy_runtime(deploy_cfg, model_cfg: Mapping[str, Any]) -> bool:
+    """Apply XPolicy mode constraints and return whether true batching is enabled."""
+    from omegaconf import OmegaConf
+
+    eval_batch = _is_true(model_cfg.get("eval_batch", False))
+    if eval_batch:
+        OmegaConf.update(deploy_cfg, "optimization.dit_cache.enabled", False, merge=False)
+        OmegaConf.update(deploy_cfg, "optimization.compile.enabled", False, merge=False)
+    else:
+        if "dit_cache_enabled" in model_cfg:
+            OmegaConf.update(
+                deploy_cfg,
+                "optimization.dit_cache.enabled",
+                _is_true(model_cfg["dit_cache_enabled"]),
+                merge=False,
+            )
+        if "compile_enabled" in model_cfg:
+            OmegaConf.update(
+                deploy_cfg,
+                "optimization.compile.enabled",
+                _is_true(model_cfg["compile_enabled"]),
+                merge=False,
+            )
+    OmegaConf.update(deploy_cfg, "optimization.decode_video", False, merge=False)
+    OmegaConf.update(deploy_cfg, "inference.inference_mode", "sync", merge=False)
+    return eval_batch
+
+
 def _resolve_ckpt_dir(model_cfg: dict) -> Path:
     """Resolve the OpenWAM checkpoint directory via the shared XPolicyLab rules.
 
@@ -98,7 +128,11 @@ def _resolve_openwam_root(openwam_root: Any) -> Path:
     editable install pointing at the external dev repo, and the vendored /
     explicitly-configured tree must take precedence over it.
     """
-    root = VENDORED_OPENWAM_ROOT if _is_none_like(openwam_root) else Path(str(openwam_root)).expanduser()
+    root = (
+        VENDORED_OPENWAM_ROOT
+        if _is_none_like(openwam_root)
+        else Path(str(openwam_root)).expanduser()
+    )
     if not (root / "openwam" / "__init__.py").is_file():
         raise FileNotFoundError(f"openwam package not found under openwam_root: {root}")
     root_str = str(root)
@@ -115,11 +149,77 @@ def _resolve_openwam_root(openwam_root: Any) -> Path:
     return root
 
 
+def validate_deployment(model_cfg):
+    """Check deployment artifacts without loading neural network weights."""
+    import yaml
+
+    profile = model_cfg.get("observation_profile") or "arx_x5_sim"
+    if {"arx_x5_sim": "arx_x5", "yam_base": "yam_dual"}.get(profile) != model_cfg.get(
+        "env_cfg_type"
+    ):
+        raise ValueError("OpenWAM profile and robot must match")
+    if model_cfg.get("action_type", "ee") != "ee":
+        raise ValueError("OpenWAM requires action_type=ee")
+    root = _resolve_openwam_root(model_cfg.get("openwam_root"))
+    horizon = model_cfg.get("replan_steps")
+    dummy = _is_true(model_cfg.get("allow_dummy_policy", False))
+    report = {
+        "policy_family": "openwam",
+        "observation_profile": profile,
+        "allow_dummy_policy": dummy,
+        "source_root": str(root.resolve()),
+    }
+    if dummy:
+        report["action_horizon"] = int(horizon or 8)
+        return report
+    checkpoint = _resolve_ckpt_dir(model_cfg)
+    if not any(checkpoint.glob("checkpoint_step_*.safetensors")):
+        raise ValueError("OpenWAM checkpoint is missing checkpoint_step_*.safetensors")
+    cfg = yaml.safe_load((checkpoint / "config.yaml").read_text())
+    data = cfg.get("dataloader", {})
+    if profile == "yam_base":
+        expected = {
+            "embodiment": "yam_dual",
+            "variant": "real",
+            "action_mode": "eef",
+            "num_frames": 33,
+            "video_stride": 4,
+            "normalize_mode": "min-max",
+        }
+        for key, value in expected.items():
+            if data.get(key) != value:
+                raise ValueError(f"YAM checkpoint requires dataloader.{key}={value}")
+        from openwam.dataloader.robodojo import _load_validated_stats
+
+        _load_validated_stats(
+            checkpoint / "normalization_stats.npy",
+            calibration=None,
+            variant="real",
+            embodiment="yam_dual",
+        )
+    trained_horizon = int(data["num_frames"]) - 1
+    if horizon is not None and not 1 <= int(horizon) <= trained_horizon:
+        raise ValueError("replan_steps exceeds checkpoint action horizon")
+    from XPolicyLab.policy.OpenWAM.artifact_identity import artifact_identity
+
+    report.update(artifact_identity(checkpoint), action_horizon=int(horizon or trained_horizon))
+    expected = model_cfg.get("expected_artifacts")
+    if expected is not None:
+        if not isinstance(expected, dict) or not expected:
+            raise ValueError("expected_artifacts must be a nonempty mapping")
+        for key, value in expected.items():
+            if key not in report or report[key] != value:
+                raise ValueError(f"OpenWAM artifact identity mismatch: {key}")
+    return report
+
+
 def _decode_instruction(value: Any, fallback: str) -> str:
     if isinstance(value, (list, tuple)):
         value = value[0] if value else None
     if isinstance(value, np.ndarray):
-        value = value.item() if value.shape == () else (value.reshape(-1)[0] if value.size else None)
+        value = (
+            value.item() if value.shape == () else (value.reshape(-1)[0] if value.size else None)
+        )
     if isinstance(value, (bytes, np.bytes_)):
         value = bytes(value).decode("utf-8")
     if value is None:
@@ -179,17 +279,28 @@ def _to_pil(value: Any, ctx: str):
 class Model(ModelTemplate):
     def __init__(self, model_cfg):
         self.model_cfg = dict(model_cfg)
+        self._metadata = validate_deployment(self.model_cfg)
+        self.eval_batch = _is_true(self.model_cfg.get("eval_batch", False))
 
         action_type = self.model_cfg.get("action_type") or "ee"
         if action_type != "ee":
-            raise ValueError(f"OpenWAM RoboDojo is an EE-space policy; action_type must be 'ee', got {action_type!r}.")
+            raise ValueError(
+                f"OpenWAM RoboDojo is an EE-space policy; action_type must be 'ee', got {action_type!r}."
+            )
         env_cfg_type = self.model_cfg.get("env_cfg_type")
         if not env_cfg_type:
             raise ValueError("env_cfg_type is required for the OpenWAM adapter.")
-        dim_info = get_robot_action_dim_info(env_cfg_type)
-        if list(dim_info.get("arm_dim") or []) != _EXPECTED_ARM_DIMS or list(dim_info.get("ee_dim") or []) != _EXPECTED_EE_DIMS:
+        dim_info = get_robot_action_dim_info(self.model_cfg)
+        self.observation_profile = self.model_cfg.get("observation_profile") or "arx_x5_sim"
+        expected_env = {"arx_x5_sim": "arx_x5", "yam_base": "yam_dual"}
+        if expected_env.get(self.observation_profile) != env_cfg_type:
+            raise ValueError("OpenWAM observation_profile does not match env_cfg_type")
+        if (
+            list(dim_info.get("arm_dim") or []) != _EXPECTED_ARM_DIMS
+            or list(dim_info.get("ee_dim") or []) != _EXPECTED_EE_DIMS
+        ):
             raise ValueError(
-                "OpenWAM's RoboDojo checkpoint is dual-X5 only (arm_dim [6, 6], ee_dim [1, 1]); "
+                "OpenWAM requires arm_dim [6, 6], ee_dim [1, 1]; "
                 f"env_cfg_type={env_cfg_type!r} resolves to {dim_info!r}."
             )
 
@@ -203,9 +314,13 @@ class Model(ModelTemplate):
 
         self._poses = _poses
         self._format_prompt = format_prompt_for_inference
-        self._calibration = arx_x5_calibration()
+        self._calibration = (
+            arx_x5_calibration() if self.observation_profile == "arx_x5_sim" else None
+        )
 
-        self.default_instruction = str(self.model_cfg.get("default_instruction") or "follow the instruction")
+        self.default_instruction = str(
+            self.model_cfg.get("default_instruction") or "follow the instruction"
+        )
         replan = self.model_cfg.get("replan_steps")
         self.replan_steps = None if _is_none_like(replan) else int(replan)
         if self.replan_steps is not None and self.replan_steps <= 0:
@@ -220,7 +335,9 @@ class Model(ModelTemplate):
         self._wam_policy = None
         self._preprocessor = None
         if self.allow_dummy_policy:
-            print("[OpenWAM] allow_dummy_policy=true; checkpoint loading skipped (protocol debug only).")
+            print(
+                "[OpenWAM] allow_dummy_policy=true; checkpoint loading skipped (protocol debug only)."
+            )
             return
 
         ckpt_dir = str(_resolve_ckpt_dir(self.model_cfg))
@@ -234,16 +351,22 @@ class Model(ModelTemplate):
 
         from omegaconf import OmegaConf
 
+        if self.observation_profile == "yam_base":
+            cfg = OmegaConf.load(str(Path(ckpt_dir) / "config.yaml"))
+            for key, expected in {
+                "dataloader.embodiment": "yam_dual",
+                "dataloader.variant": "real",
+                "dataloader.action_mode": "eef",
+            }.items():
+                if OmegaConf.select(cfg, key) != expected:
+                    raise ValueError(f"YAM checkpoint requires {key}={expected}")
+            if not (Path(ckpt_dir) / "normalization_stats.npy").is_file():
+                raise ValueError("YAM checkpoint is missing normalization_stats.npy")
+
         from openwam.deploy.server import _load_deploy_yaml, build_server_from_config
 
         deploy_cfg = _load_deploy_yaml(deploy_config)
-        # Correctness-first: batch inference forbids the single-stream /
-        # shape-sensitive acceleration paths. Force them off even if the yaml
-        # drifts; engine.generate_batch fails fast if these were re-enabled.
-        OmegaConf.update(deploy_cfg, "optimization.dit_cache.enabled", False, merge=False)
-        OmegaConf.update(deploy_cfg, "optimization.compile.enabled", False, merge=False)
-        OmegaConf.update(deploy_cfg, "optimization.decode_video", False, merge=False)
-        OmegaConf.update(deploy_cfg, "inference.inference_mode", "sync", merge=False)
+        self.eval_batch = _configure_deploy_runtime(deploy_cfg, self.model_cfg)
 
         print(f"[OpenWAM] loading checkpoint from {ckpt_dir} on {device} ...")
         server = build_server_from_config(deploy_cfg, ckpt_dir, device=device)
@@ -251,12 +374,21 @@ class Model(ModelTemplate):
         self._engine = server.engine
         self._wam_policy = server._policy  # for the binary-dim legality projection
         self._preprocessor = server._obs_preprocessor
+        contract = server._ckpt_contract()
+        if (
+            contract.get("representation") != "eef"
+            or contract.get("gripper_convention", "zero_closed_one_open") != "zero_closed_one_open"
+        ):
+            raise ValueError(
+                "OpenWAM requires physical EEF actions and zero_closed_one_open grippers"
+            )
 
         if self.replan_steps is None:
             horizon = OmegaConf.select(server.cfg, "inference.inference_horizon", default=None)
             self.replan_steps = None if horizon is None else int(horizon)
 
         resolved = {
+            "execution_path": "generate_batch" if self.eval_batch else "generate",
             "denoise_steps": OmegaConf.select(server.cfg, "inference.denoise_steps"),
             "denoise_mode": OmegaConf.select(server.cfg, "inference.denoise_mode"),
             "num_frames": OmegaConf.select(server.cfg, "inference.num_frames"),
@@ -271,9 +403,25 @@ class Model(ModelTemplate):
     # Observation: obs dict -> OpenWAM conditions (world -> base -> EEF20)
     # ------------------------------------------------------------------
     def _state_to_eef20(self, state: Mapping) -> np.ndarray:
-        missing = [k for k in ("left_ee_pose", "left_ee_joint_state", "right_ee_pose", "right_ee_joint_state") if k not in state]
+        missing = [
+            k
+            for k in (
+                "left_ee_pose",
+                "left_ee_joint_state",
+                "right_ee_pose",
+                "right_ee_joint_state",
+            )
+            if k not in state
+        ]
         if missing:
             raise KeyError(f"obs['state'] is missing required field(s): {', '.join(missing)}")
+        if self._calibration is None:
+            return self._poses.arms_to_eef20(
+                _validated_pose(state["left_ee_pose"], "left_ee_pose"),
+                _validated_gripper(state["left_ee_joint_state"], "left_ee_joint_state"),
+                _validated_pose(state["right_ee_pose"], "right_ee_pose"),
+                _validated_gripper(state["right_ee_joint_state"], "right_ee_joint_state"),
+            )
         left = self._calibration["arms"]["left"]
         right = self._calibration["arms"]["right"]
         left_base = self._poses.env_relative_world_to_robot_base(
@@ -337,7 +485,27 @@ class Model(ModelTemplate):
     # Action: EEF20 chunk (base frame) -> env-relative world ee dicts
     # ------------------------------------------------------------------
     def _eef20_chunk_to_native(self, chunk: np.ndarray) -> list[dict]:
-        left_pose, left_grip, right_pose, right_grip = self._poses.eef20_to_arms(np.asarray(chunk, dtype=np.float64))
+        chunk = np.asarray(chunk)
+        if chunk.ndim != 2 or chunk.shape[1] != 20 or not np.isfinite(chunk).all():
+            raise ValueError("OpenWAM actions must be finite EEF20 chunks")
+        left_pose, left_grip, right_pose, right_grip = self._poses.eef20_to_arms(
+            np.asarray(chunk, dtype=np.float64)
+        )
+        # Flow matching is unconstrained and can overshoot the continuous
+        # training range slightly after unnormalization. Enforce the physical
+        # YAM gripper contract at the embodiment boundary.
+        left_grip = np.clip(left_grip, 0.0, 1.0)
+        right_grip = np.clip(right_grip, 0.0, 1.0)
+        if self._calibration is None:
+            return [
+                {
+                    "left_ee_pose": left_pose[t].astype(np.float32),
+                    "right_ee_pose": right_pose[t].astype(np.float32),
+                    "left_ee_joint_state": left_grip[t].astype(np.float32),
+                    "right_ee_joint_state": right_grip[t].astype(np.float32),
+                }
+                for t in range(len(chunk))
+            ]
         left = self._calibration["arms"]["left"]
         right = self._calibration["arms"]["right"]
         left_world = self._poses.robot_base_to_env_relative_world(
@@ -346,8 +514,6 @@ class Model(ModelTemplate):
         right_world = self._poses.robot_base_to_env_relative_world(
             right_pose, right["base_pos_relative_to_env_origin"], right["base_quat_wxyz"]
         )
-        left_grip = np.clip(left_grip, 0.0, 1.0)
-        right_grip = np.clip(right_grip, 0.0, 1.0)
         return [
             {
                 "left_ee_pose": left_world[t].astype(np.float32),
@@ -379,12 +545,38 @@ class Model(ModelTemplate):
         self._order = []
         for index, obs in enumerate(obs_list):
             env_idx = int(obs.get("env_idx", index))
+            if env_idx in self._batch:
+                self.reset()
+                raise ValueError("Duplicate env_idx in observation batch")
             self._batch[env_idx] = self._encode_obs(obs)
             self._order.append(env_idx)
 
     def get_action(self):
         env_idx = self._order[0] if self._order else 0
-        return self.get_action_batch([env_idx])[0]
+        actions = self.get_action_batch([env_idx])[0]
+        if self.observation_profile == "yam_base":
+            return {"actions": actions, "action_semantics": "absolute_per_arm_base_xyz_wxyz"}
+        return actions
+
+    def _generate_single(self, payload: dict) -> list[dict]:
+        conditions = self._conditions(payload)
+        # Explicit matrix seed settings also apply to its default-sampler baselines.
+        if "inference_seed" in self.model_cfg:
+            conditions["seed"] = self._next_sampling_seed()
+        result = self._engine.generate(conditions)
+        actions = result["actions"]
+        if hasattr(actions, "cpu"):
+            actions = actions.detach().cpu().numpy()
+        actions = np.asarray(actions)
+        if actions.ndim != 2 or actions.shape[1] != _EEF20_DIM:
+            raise RuntimeError(
+                f"generate returned actions of shape {actions.shape}; expected (T, {_EEF20_DIM})."
+            )
+        actions = self._wam_policy._project_binary_dims(actions)
+        n_exec = actions.shape[0]
+        if self.replan_steps is not None:
+            n_exec = min(self.replan_steps, n_exec)
+        return self._eef20_chunk_to_native(actions[:n_exec])
 
     def get_action_batch(self, env_idx_list=None):
         if env_idx_list is None:
@@ -401,11 +593,16 @@ class Model(ModelTemplate):
 
         missing = [e for e in env_idx_list if e not in self._batch]
         if missing:
-            raise ValueError(f"No stored observation for env_idx {missing}; call update_obs_batch first.")
+            raise ValueError(
+                f"No stored observation for env_idx {missing}; call update_obs_batch first."
+            )
         payloads = [self._batch[e] for e in env_idx_list]
 
         if self.allow_dummy_policy:
             return [self._hold_position_chunk(p) for p in payloads]
+
+        if not self.eval_batch:
+            return [self._generate_single(payload) for payload in payloads]
 
         conditions = [self._conditions(p) for p in payloads]
         result = self._engine.generate_batch(conditions)
@@ -413,7 +610,11 @@ class Model(ModelTemplate):
         if hasattr(actions, "cpu"):
             actions = actions.detach().cpu().numpy()
         actions = np.asarray(actions)
-        if actions.ndim != 3 or actions.shape[0] != len(env_idx_list) or actions.shape[2] != _EEF20_DIM:
+        if (
+            actions.ndim != 3
+            or actions.shape[0] != len(env_idx_list)
+            or actions.shape[2] != _EEF20_DIM
+        ):
             raise RuntimeError(
                 f"generate_batch returned actions of shape {actions.shape}; "
                 f"expected (B={len(env_idx_list)}, T, {_EEF20_DIM})."
@@ -430,3 +631,103 @@ class Model(ModelTemplate):
     def reset(self):
         self._batch = {}
         self._order = []
+        self._sampling_rng = np.random.default_rng(int(self.model_cfg.get("inference_seed", 0)))
+
+    def sampling_modes(self):
+        if self.allow_dummy_policy or self._engine is None or self.observation_profile != "yam_base":
+            return ["default"]
+        if self.replan_steps != int(self._engine.cfg.inference.num_frames) - 1:
+            return ["default"]
+        modes = ["default", "aac"]
+        # Differentiable RTC and attention capture must not reuse stale DiT results.
+        if self.model_cfg.get("compile_enabled", True) or self._engine._dit_cache is not None:
+            return modes
+        import inspect
+        arch = self._engine.architecture
+        if "denoise_loop" not in inspect.signature(arch.generate).parameters:
+            return modes
+        if float(self._engine._cfg_scale) != 1.0:
+            return modes
+        modes += ["rtc", "paint"]
+        if getattr(arch, "mot_driver", None) is not None and int(self._engine.cfg.inference.denoise_steps) >= 3:
+            modes.append("autohorizon")
+        return modes
+
+    def _next_sampling_seed(self):
+        if not hasattr(self, "_sampling_rng"):
+            self._sampling_rng = np.random.default_rng(int(self.model_cfg.get("inference_seed", 0)))
+        return int(self._sampling_rng.integers(0, 2**31-1))
+
+    def _sampling_conditions(self):
+        if len(self._order) != 1:
+            raise ValueError("Specialized sampling requires exactly one observation")
+        return {**self._conditions(self._batch[self._order[0]]),
+                "seed": self._next_sampling_seed()}
+
+    def _decode_sampling_result(self, result):
+        actions = result["actions"]
+        if hasattr(actions, "detach"):
+            actions = actions.detach().float().cpu().numpy()
+        actions = self._wam_policy._project_binary_dims(np.asarray(actions))
+        if self.replan_steps is not None and len(actions) != self.replan_steps:
+            raise ValueError("Specialized sampling requires the complete served action horizon")
+        raw = {"actions": self._eef20_chunk_to_native(actions)}
+        if self.observation_profile == "yam_base":
+            raw["action_semantics"] = "absolute_per_arm_base_xyz_wxyz"
+        return raw
+
+    def get_action_aac(self, sampling):
+        from XPolicyLab.utils.flow_sampling import validate_samples
+        count = validate_samples(sampling)
+        if "aac" not in self.sampling_modes():
+            raise ValueError("AAC is unavailable for the loaded OpenWAM backend")
+        # Independent seeds are essential: engine.generate otherwise defaults to 42.
+        return {"actions": [self._decode_sampling_result(self._engine.generate(self._sampling_conditions()))
+                            for _ in range(count)]}
+
+    def _sample_conditioned(self, sampling, mode):
+        from .sampling import JointFlowSampler, normalize_action
+        from XPolicyLab.utils.flow_sampling import validate_prefix
+        if mode not in self.sampling_modes():
+            raise ValueError(f"OpenWAM {mode} needs an eager compatible backend with DiT cache disabled")
+        arch = self._engine.architecture
+        horizon = int(self._engine.cfg.inference.num_frames)-1
+        target = weights = delay = None
+        beta = 5.0
+        if mode == "paint":
+            prefix, delay = validate_prefix(sampling, horizon, 20)
+            raw = np.zeros((horizon, 20), dtype=np.float32)
+            raw[:delay] = prefix
+            target = normalize_action(arch, raw)
+        elif mode == "rtc":
+            if set(sampling) != {"mode", "action_condition", "condition_weights", "beta"}:
+                raise ValueError("RTC requires action_condition, condition_weights and beta")
+            raw = np.asarray(sampling["action_condition"], dtype=np.float32)
+            if raw.shape != (horizon, 20) or not np.isfinite(raw).all():
+                raise ValueError("OpenWAM RTC condition must be finite raw EEF20 [H,20]")
+            target = normalize_action(arch, raw)
+            weights, beta = sampling["condition_weights"], float(sampling["beta"])
+        elif set(sampling) != {"mode"}:
+            raise ValueError("AutoHorizon accepts no overrides")
+        loop = JointFlowSampler(arch, mode, target=target, weights=weights, delay=delay, beta=beta)
+        result = self._engine.generate({**self._sampling_conditions(), "denoise_loop": loop})
+        raw = self._decode_sampling_result(result)
+        if mode != "rtc":
+            raw[mode] = loop.metadata
+        return raw
+
+    def get_action_rtc(self, sampling):
+        return self._sample_conditioned(sampling, "rtc")
+
+    def get_action_paint(self, sampling):
+        return self._sample_conditioned(sampling, "paint")
+
+    def get_action_autohorizon(self, sampling):
+        return self._sample_conditioned(sampling, "autohorizon")
+
+    def runtime_metadata(self):
+        return {**self._metadata, "replan_steps": self.replan_steps,
+                "conditioned_sampler": "joint_flow_v1",
+                "sampling_seed": int(self.model_cfg.get("inference_seed", 0)),
+                "compile_enabled": self.model_cfg.get("compile_enabled", True),
+                "dit_cache_enabled": self._engine is not None and self._engine._dit_cache is not None}

@@ -692,7 +692,36 @@ class Model(ModelTemplate):
         batch["state"] = normalized_state.clamp(-1.0, 1.0)
 
         rtc_context = contextlib.nullcontext()
-        if sampling is not None:
+        mode = None if sampling is None else sampling.get("mode", "rtc")
+        if mode in {"paint", "autohorizon"}:
+            from XPolicyLab.utils.flow_sampling import PaintSampler, AutoHorizonSampler, validate_prefix
+
+            self._sampling_metadata = None
+            if mode == "paint":
+                prefix, delay = validate_prefix(sampling, self.action_shape[0], self.action_shape[1])
+                raw_target = torch.zeros((1, *self.action_shape), device=self.device, dtype=torch.float32)
+                raw_target[:, :delay] = torch.as_tensor(prefix, device=self.device)
+                target = ((raw_target - self.mean) / (self.std + self._action_eps)) * mask
+                paint_mask = torch.zeros_like(target, dtype=torch.bool)
+                paint_mask[:, :delay] = mask[:, :delay].bool()
+
+                def sampler(velocity, noise):
+                    return PaintSampler(self.model.num_steps).sample(
+                        velocity, noise, target=target.to(noise), mask=paint_mask)
+                self._sampling_metadata = {"delay_steps": delay, "inversion": "backward_euler",
+                                           "num_steps": self.model.num_steps,
+                                           "model_evaluations": 3 * self.model.num_steps}
+            else:
+                if set(sampling) != {"mode"}:
+                    raise ValueError("AutoHorizon accepts no overrides")
+                def sampler(velocity, noise):
+                    from mibot.models.VLA.xr1 import Attention
+                    owners = [module for module in self.model.dit.modules() if isinstance(module, Attention)]
+                    actions, self._sampling_metadata = AutoHorizonSampler(self.model.num_steps).sample(
+                        velocity, noise, attention_owners=owners)
+                    return actions
+            rtc_context = self.model.inference_sampler(sampler)
+        elif sampling is not None:
             required = {"action_condition", "condition_weights", "beta"}
             missing = sorted(required - set(sampling))
             if missing:
@@ -821,6 +850,37 @@ class Model(ModelTemplate):
                 "[Xiaomi_Robotics_1] Call update_obs before get_action_rtc."
             )
         return self._predict_action_chunks(self._encoded_obs_list[:1], sampling=sampling)[0]
+
+    def sampling_modes(self):
+        modes = ["default", "rtc", "aac", "paint"]
+        if self.model.num_steps >= 3 and self.action_length == self.action_shape[0]:
+            modes.append("autohorizon")
+        return modes
+
+    def get_action_aac(self, sampling):
+        from XPolicyLab.utils.flow_sampling import validate_samples
+        count = validate_samples(sampling)
+        if len(self._encoded_obs_list) != 1:
+            raise ValueError("AAC requires exactly one observation")
+        # One batched call; independent noise per candidate, same observation.
+        chunks = self._predict_action_chunks(self._encoded_obs_list * count)
+        if self.output_format == "packed_ee_delta":
+            chunks = [{"actions": chunk, "action_semantics": "anchor_relative_eef_axis_angle_60"} for chunk in chunks]
+        return {"actions": chunks}
+
+    def _specialized_action(self, sampling, mode):
+        if len(self._encoded_obs_list) != 1:
+            raise ValueError(f"{mode} requires exactly one observation")
+        if mode not in self.sampling_modes():
+            raise ValueError(f"Unsupported sampling mode: {mode}")
+        actions = self._predict_action_chunks(self._encoded_obs_list, sampling={**sampling, "mode": mode})[0]
+        return {"actions": actions, mode: self._sampling_metadata}
+
+    def get_action_paint(self, sampling):
+        return self._specialized_action(sampling, "paint")
+
+    def get_action_autohorizon(self, sampling):
+        return self._specialized_action(sampling, "autohorizon")
 
     def get_action_batch(self, env_idx_list=None, **kwargs):
         if not self._encoded_obs_list:
