@@ -31,6 +31,33 @@ ARTIFACTS = {
             "action_expert_variant": "gemma_300m",
         },
     },
+    "pi05_pack_plate_full_zero_state_pack_instruction_step20000": {
+        "train_config_name": "pi05_pack_plate_full_zero_state_pack_instruction_deploy",
+        "checkpoint_source": "pi05-pack-plate-full-zero-state-pack-instruction-20000",
+        "asset": "pack-plate-taccap-h32-zero-pose-pack-instruction",
+        "checkpoint_num": 20000,
+        "model_variants": {
+            "paligemma_variant": "gemma_2b",
+            "action_expert_variant": "gemma_300m",
+        },
+    },
+    **{
+        f"pi05_pack_plate_inter_hand_relative_step{step}": {
+            "train_config_name": "pi05_pack_plate_inter_hand_relative_deploy",
+            "checkpoint_source": (
+                "pi05-pack-plate-inter-hand-relative-tracker-fixed-best-20000-final-59999"
+            ),
+            "checkpoint_subdir": f"checkpoints/{step}",
+            "asset": "pack-plate-taccap-h32-inter-hand-relative",
+            "checkpoint_num": step,
+            "model_state_encoding": "inter_hand_relative",
+            "model_variants": {
+                "paligemma_variant": "gemma_2b_lora",
+                "action_expert_variant": "gemma_300m_lora",
+            },
+        }
+        for step in (20000, 59999)
+    },
 }
 
 
@@ -46,7 +73,7 @@ def validate_artifacts(config: dict) -> dict:
         "env_cfg_type": "tianji_dual",
         "action_type": "ee",
         "observation_profile": PROFILE,
-        "model_state_encoding": "zero_pose",
+        "model_state_encoding": artifact.get("model_state_encoding", "zero_pose"),
         "action_horizon": 32,
         "output_format": "xpolicylab",
         "action_semantics": "absolute_per_arm_base_xyz_wxyz",
@@ -62,10 +89,10 @@ def validate_artifacts(config: dict) -> dict:
     stats_dir = Path(config["norm_stats_path"]).expanduser().resolve()
     stats = stats_dir / "norm_stats.json"
     step = artifact["checkpoint_num"]
-    if (
-        checkpoint.name != f"checkpoint-{step}"
-        or checkpoint.parent.name != artifact["checkpoint_source"]
-    ):
+    suffix = Path(artifact["checkpoint_source"]) / artifact.get(
+        "checkpoint_subdir", f"checkpoint-{step}"
+    )
+    if checkpoint.parts[-len(suffix.parts) :] != suffix.parts:
         raise ValueError("pack-plate checkpoint step or export directory does not match recipe")
     if stats_dir != checkpoint / "assets" / artifact["asset"]:
         raise ValueError("pack-plate normalization must come from this checkpoint's assets")

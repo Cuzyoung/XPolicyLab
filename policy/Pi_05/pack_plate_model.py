@@ -1,7 +1,7 @@
 """Pack-plate Pi05 inference using its own checkpoint and normalization.
 
-The exported contract is two wrist images, zero pose / live opening state,
-and one current-TCP-relative 32-step action chunk. Numerical pose helpers are
+The exported contract is two wrist images, checkpoint-specific pose state with
+live openings, and one current-TCP-relative 32-step action chunk. Pose helpers are
 shared with the pass-ball profile; artifact identity and task are separate.
 """
 
@@ -17,13 +17,17 @@ from scipy.spatial.transform import Rotation
 from XPolicyLab.utils.process_data import get_robot_action_dim_info
 
 from .pack_plate_contract import PROFILE, validate_artifacts
+from .pack_plate_state import InterHandRelativeState
 from .pass_ball_model import PassBallZeroPoseModel, decode_actions, make_train_config
 from .pass_ball_pose import OPTICAL_FROM_FLU, rotation_to_6d
 
 
 def make_pack_plate_train_config(model_cfg: dict):
-    """Reuse zero-pose transforms with the selected checkpoint's model architecture."""
-    base = make_train_config(model_cfg)
+    """Select model state independently of the original per-arm action anchors."""
+    state_transform = None
+    if model_cfg.get("model_state_encoding") == "inter_hand_relative":
+        state_transform = InterHandRelativeState(model_cfg["state_base_to_common"])
+    base = make_train_config(model_cfg, state_transform=state_transform)
     return dataclasses.replace(
         base,
         name=str(model_cfg["train_config_name"]),
@@ -104,6 +108,12 @@ class PackPlateZeroPoseModel(PassBallZeroPoseModel):
 
     def sampling_modes(self) -> list[str]:
         return ["default", "rtc"]
+
+    def runtime_metadata(self):
+        metadata = super().runtime_metadata()
+        if self.model_cfg["model_state_encoding"] == "inter_hand_relative":
+            metadata["state_base_to_common"] = self.model_cfg["state_base_to_common"]
+        return metadata
 
     def get_action_rtc(self, sampling: dict) -> list[dict]:
         if len(self.env_indices) != 1:

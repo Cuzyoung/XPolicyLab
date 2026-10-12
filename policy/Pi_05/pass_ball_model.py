@@ -58,23 +58,28 @@ class PassBallOutputs:
         return {"actions": np.asarray(data["actions"])[..., :20]}
 
 
-def make_train_config(model_cfg: dict):
+def make_train_config(model_cfg: dict, *, state_transform=None):
     """Rebuild deployment transforms without the training machine/dataset paths."""
     from openpi import transforms
     from openpi.models.pi0_config import Pi0Config
     from openpi.training import config as oc
 
+    state_encoding = model_cfg.get("model_state_encoding", "zero_pose")
+    if state_transform is None:
+        state_transform = EncodeState(state_encoding)
+
     @dataclasses.dataclass(frozen=True)
     class PassBallDataConfig(oc.DataConfigFactory):
         def create(self, assets_dirs: Path, model_config):
             model_transforms = oc.ModelTransformFactory()(model_config)
-            model_transforms = dataclasses.replace(
-                model_transforms, inputs=(ZeroNormalizedPose(), *model_transforms.inputs)
-            )
+            if state_encoding == "zero_pose":
+                model_transforms = dataclasses.replace(
+                    model_transforms, inputs=(ZeroNormalizedPose(), *model_transforms.inputs)
+                )
             return dataclasses.replace(
                 self.create_base_config(assets_dirs, model_config),
                 data_transforms=transforms.Group(
-                    inputs=(PassBallInputs(), EncodeState("zero_pose")),
+                    inputs=(PassBallInputs(), state_transform),
                     outputs=(PassBallOutputs(),),
                 ),
                 model_transforms=model_transforms,
@@ -92,7 +97,7 @@ def make_train_config(model_cfg: dict):
         ),
         data=PassBallDataConfig(repo_id=model_cfg["repo_id"]),
         policy_metadata={
-            "model_state_encoding": "zero_pose",
+            "model_state_encoding": state_encoding,
             "action_encoding": "tcp_relative_chunk",
         },
     )

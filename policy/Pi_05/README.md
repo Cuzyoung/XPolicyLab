@@ -207,3 +207,23 @@ The exported README does not specify the training-time TCP axis conversion.
 The deployment currently shares the tool-axis transform used for the pass-ball
 Tianji data. Confirm it against the pack-plate training source before physical
 execution. See `docs/deployment/pi05-tianji-pack-plate.md` in the parent workspace.
+
+## Tianji pack-plate inter-hand-relative checkpoints
+
+The tracker-fixed export adds independently selectable step 20000 (best validation)
+and step 59999 (final) **LoRA** recipes. They select `model_state_encoding:
+inter_hand_relative` and provide `state_base_to_common` as left/right rigid 4x4
+transforms in metres. The transforms are part of the reported backend identity.
+
+`pack_plate_state.InterHandRelativeState` converts the per-arm TCPs into a common
+frame and encodes each hand in the other hand's training tool frame. It runs after
+`PassBallInputs` has formed relative RTC targets and before state normalization.
+Unlike zero-pose recipes, this variant preserves normalized pose values during
+tokenization. Original per-arm observation anchors, action decoding and the RTC
+sampler remain shared. Existing zero-pose recipes keep their previous transforms.
+
+Each recipe pins its own checkpoint-local normalization artifact. The deployment
+uses the existing `PackPlateZeroPoseModel` class and server dispatch; its historical
+class name does not choose the state representation. See
+[the independent experiment runbook](../../../docs/deployment/pi05-tianji-pack-plate-inter-hand-relative.md)
+for geometry provenance, frozen settings, launch commands and validation status.
