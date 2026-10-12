@@ -29,6 +29,23 @@ bash process_data.sh RoboDojo stack_bowls arx_x5 joint
 bash process_data.sh RoboDojo stack_bowls_50ep arx_x5 joint 50
 ```
 
+`train.sh` accepts two LeRobot sources, resolved in this order: `LEROBOT_DATA_PATH`, then this script's output, then the shared **LeRobot v3.0** export `RoboDojo_sim_arx-x5_v30`.
+
+That shared export carries the standard keys of `XPolicyLab/scripts/transform_lerobot_v30_format.py` ([Official LeRobot conversion](../../README.md#official-lerobot-conversion)) and needs no preparation: for a v3.0 root the loader synthesizes `meta/modality.json` itself, mapping the GEAR-style names `top_head` / `hand_left` / `hand_right` onto `observation.images.cam_high` / `cam_left_wrist` / `cam_right_wrist`, and computes its relative-action stats on first load.
+
+The output of `process_data.sh` deliberately **deviates** from those keys, because it converts trajectory HDF5 into DreamZero's native AgiBot layout: the image columns are named `observation.images.top_head` / `hand_left` / `hand_right`, and `observation.state` / `action` are re-padded to 20 and 22 dims rather than the converter's packed robot vector. It reads trajectory HDF5, not LeRobot, and only it produces that layout — so its output is not interchangeable with the shared export, and a dataset for this path has to come from here rather than from the official converters.
+
+`process_data.py` can also build that AgiBot layout from an existing official v3.0 export instead of from HDF5, which `process_data.sh` does not expose because it always passes `--source_format hdf5`:
+
+```bash
+cd XPolicyLab/policy/DreamZero
+python process_data.py --bench_name RoboDojo --ckpt_name stack_bowls \
+    --env_cfg_type arx_x5 --action_type joint \
+    --source_format lerobot_v3 --source_lerobot_path /path/to/RoboDojo_sim_arx-x5_v30
+```
+
+This path symlinks the source videos and keeps their official `observation.images.*` column names, re-pads `observation.state` / `action` to the AgiBot 20 and 22 dims, and writes the GEAR `meta/modality.json` that maps `top_head` / `hand_left` / `hand_right` onto the official image keys. The source root is required — it comes from `--source_lerobot_path` or `LEROBOT_DATA_PATH`, and there is deliberately no default, since a converter that guessed its input would silently produce data for the wrong task.
+
 ## Training
 
 ```bash

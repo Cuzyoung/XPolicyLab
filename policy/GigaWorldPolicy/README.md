@@ -31,6 +31,8 @@ GIGAWORLD_TASK_NAMES=stack_bowls bash process_data.sh RoboDojo stack_bowls_50ep 
 
 `expert_data_num` is an optional episode limit (empty = all episodes). `GIGAWORLD_TASK_NAMES` selects the source task name or a comma-separated task list and defaults to `ckpt_name`; `GIGAWORLD_SOURCE_DATA_DIR` overrides the source data directory. Converted data is written to `data/<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>/`.
 
+The output is LeRobot v2.1 with the official camera keys ([official LeRobot conversion](../../README.md#official-lerobot-conversion)) plus `observation.images.cam_third_view` when the source carries that view — that extra camera is why the bundled converter is used instead of `scripts/transform_lerobot_v21_format.py`.
+
 ## Training
 
 ```bash

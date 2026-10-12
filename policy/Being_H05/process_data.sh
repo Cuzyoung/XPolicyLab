@@ -13,7 +13,7 @@ omitted, all episodes are used. To ablate data scale, use a distinct ckpt_name
 
 Optional environment:
   LEROBOT_DATA_PATH   Source LeRobot repo (default: shared RoboDojo v21)
-  RAW_DATA_ROOT       If set, print a hint to run XPolicyLab/scripts/transform_lerobot_v30_format.py first
+  RAW_DATA_ROOT       If set, print a hint to run XPolicyLab/scripts/transform_lerobot_v21_format.py first
 
 Output layout (XPolicyLab convention):
   data/<bench_name>-<ckpt_name>-<env_cfg_type>-<action_type>/
@@ -46,7 +46,7 @@ fi
 if [[ ! -d "${SRC_DIR}" ]]; then
     echo -e "\033[31m[process_data] LeRobot source not found: ${SRC_DIR}\033[0m" >&2
     if [[ -n "${RAW_DATA_ROOT:-}" ]]; then
-        echo -e "\033[33m[process_data] Convert HDF5 with XPolicyLab/scripts/transform_lerobot_v30_format.py, then set LEROBOT_DATA_PATH.\033[0m"
+        echo -e "\033[33m[process_data] Convert HDF5 with XPolicyLab/scripts/transform_lerobot_v21_format.py, then set LEROBOT_DATA_PATH.\033[0m"
     else
         echo -e "\033[33m[process_data] Set LEROBOT_DATA_PATH or convert raw data under ${ROOT_DIR}/data/${bench_name}/...\033[0m"
     fi

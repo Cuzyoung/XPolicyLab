@@ -1,17 +1,21 @@
 import argparse
 import dataclasses
 import fnmatch
+import glob
 import random
 import sys
 from pathlib import Path
 from typing import Literal
 
+import av
 import cv2
-import h5py
 import numpy as np
+from PIL import Image
 from tqdm import tqdm
 import shutil
 from lerobot.datasets.lerobot_dataset import HF_LEROBOT_HOME, LeRobotDataset
+from lerobot.datasets import lerobot_dataset as lerobot_dataset_mod
+from lerobot.datasets.video_utils import encode_video_frames as encode_video_frames_orig
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -44,9 +48,6 @@ CAMERA_CANDIDATES = {
     "cam_right_wrist": [
         ("vision", "cam_right_wrist", "colors"),
     ],
-    "cam_wrist": [
-        ("vision", "cam_wrist", "colors"),
-    ],
 }
 
 @dataclasses.dataclass(frozen=True)
@@ -56,10 +57,98 @@ class DatasetConfig:
     # Conservative defaults reduce RAM pressure during long conversions.
     image_writer_processes: int = 0
     image_writer_threads: int = 4
+    # Decoder. None keeps LeRobot's default decoder. It does not select the encoder.
     video_backend: str | None = None
+    # Encoder. LeRobot 0.3.3 create() does not take vcodec; this script
+    # replaces encode_video_frames in-process from this field.
+    # libsvtav1: AV1, CRF 30, g=2, yuv420p.
+    # h264_nvenc: NVIDIA H.264, rc=constqp, qp=18, yuv420p. Not video_backend.
+    vcodec: Literal["libsvtav1", "h264_nvenc"] = "libsvtav1"
 
 
 DEFAULT_DATASET_CONFIG = DatasetConfig()
+
+
+def _encode_video_frames_nvenc(imgs_dir, video_path, fps, overwrite=False) -> None:
+    # LeRobot 0.3.3 rejects any vcodec outside h264/hevc/libsvtav1, so NVENC is
+    # encoded here. The inputs are the PNG frames LeRobot itself wrote, not
+    # XPolicyLab trajectories, so they are read with PIL like LeRobot does.
+    video_path = Path(video_path)
+    imgs_dir = Path(imgs_dir)
+    video_path.parent.mkdir(parents=True, exist_ok=overwrite)
+
+    template = "frame_" + ("[0-9]" * 6) + ".png"
+    input_list = sorted(
+        glob.glob(str(imgs_dir / template)),
+        key=lambda x: int(x.split("_")[-1].split(".")[0]),
+    )
+    if not input_list:
+        raise FileNotFoundError(f"No images found in {imgs_dir}.")
+    with Image.open(input_list[0]) as dummy_image:
+        width, height = dummy_image.size
+
+    # No GOP option: NVENC refuses to open with a keyframe interval below 4, so
+    # the g=2 used for AV1 cannot be matched. LeRobot 0.4.4 likewise omits it for
+    # hardware encoders (_get_codec_options in datasets/video_utils.py).
+    options = {"rc": "constqp", "qp": "18"}
+    with av.open(str(video_path), "w") as output:
+        output_stream = output.add_stream("h264_nvenc", fps, options=options)
+        output_stream.pix_fmt = "yuv420p"
+        output_stream.width = width
+        output_stream.height = height
+        for input_data in input_list:
+            with Image.open(input_data) as input_image:
+                input_frame = av.VideoFrame.from_image(input_image.convert("RGB"))
+            packet = output_stream.encode(input_frame)
+            if packet:
+                output.mux(packet)
+        packet = output_stream.encode()
+        if packet:
+            output.mux(packet)
+
+    if not video_path.exists():
+        raise OSError(f"Video encoding did not work. File not found: {video_path}.")
+
+
+def configure_video_encoding(dataset_config: DatasetConfig) -> None:
+    if dataset_config.vcodec == "libsvtav1":
+
+        def encode_video_frames(imgs_dir, video_path, fps, overwrite=False, **_kwargs):
+            return encode_video_frames_orig(
+                imgs_dir,
+                video_path,
+                fps,
+                vcodec="libsvtav1",
+                pix_fmt="yuv420p",
+                g=2,
+                crf=30,
+                overwrite=overwrite,
+            )
+
+    elif dataset_config.vcodec == "h264_nvenc":
+
+        def encode_video_frames(imgs_dir, video_path, fps, overwrite=False, **_kwargs):
+            return _encode_video_frames_nvenc(
+                imgs_dir, video_path, fps, overwrite=overwrite
+            )
+
+    else:
+        raise ValueError(
+            f"Unsupported vcodec {dataset_config.vcodec!r}; "
+            "use 'libsvtav1' or 'h264_nvenc'"
+        )
+
+    # Fail loudly rather than write the wrong codec if a future LeRobot stops
+    # calling encode_video_frames as a module global.
+    current = getattr(lerobot_dataset_mod, "encode_video_frames", None)
+    if current is not encode_video_frames_orig and not getattr(current, "_vcodec_patched", False):
+        raise RuntimeError(
+            "LeRobot no longer calls encode_video_frames as a module global; "
+            "the vcodec selection would be a no-op"
+        )
+
+    encode_video_frames._vcodec_patched = True
+    lerobot_dataset_mod.encode_video_frames = encode_video_frames
 
 
 def _load_env_metadata(env_cfg_type, model_config=None, fps=None):
@@ -145,34 +234,6 @@ def _plan_target_metadata(targets, model_config=None, fps=None):
     return metadata, max_per_arm_dims, max_fps
 
 
-def _build_motor_names(robot_action_dim_info):
-    arm_dims = robot_action_dim_info.get("arm_dim", [])
-    ee_dims = robot_action_dim_info.get("ee_dim", [])
-    if not arm_dims:
-        raise ValueError("robot_action_dim_info.arm_dim is empty")
-
-    if len(arm_dims) == 1:
-        prefixes = ["arm"]
-    elif len(arm_dims) == 2:
-        prefixes = ["left", "right"]
-    else:
-        prefixes = [f"arm_{index}" for index in range(len(arm_dims))]
-
-    motors = []
-    for index, prefix in enumerate(prefixes):
-        for joint_idx in range(arm_dims[index]):
-            motors.append(f"{prefix}_arm_joint_{joint_idx}")
-
-        ee_dim = ee_dims[index] if index < len(ee_dims) else 0
-        if ee_dim == 1:
-            motors.append(f"{prefix}_gripper")
-        else:
-            for ee_idx in range(ee_dim):
-                motors.append(f"{prefix}_ee_joint_{ee_idx}")
-
-    return motors
-
-
 def _build_motor_names_from_dims(per_arm_dims):
     if not per_arm_dims:
         raise ValueError("per_arm_dims is empty")
@@ -190,10 +251,6 @@ def _build_motor_names_from_dims(per_arm_dims):
         for joint_idx in range(total_dim):
             motors.append(f"{prefix}_joint_{joint_idx}")
     return motors
-
-
-def _expected_state_dim(robot_action_dim_info):
-    return sum(robot_action_dim_info.get("arm_dim", [])) + sum(robot_action_dim_info.get("ee_dim", []))
 
 
 def _pad_state_to_target_dims(array, current_dims, target_dims, name):
@@ -228,9 +285,6 @@ def _resolve_input_dir(bench_name, task_name, env_cfg_type, input_dir=None):
         return Path(input_dir)
     return DATA_ROOT / bench_name / task_name / env_cfg_type / "data"
 
-
-def _default_repo_id(bench_name, task_name, env_cfg_type):
-    return f"{bench_name}_{task_name}_{env_cfg_type}".replace("/", "_").lower()
 
 def create_empty_dataset(
     repo_id: str,
@@ -622,6 +676,7 @@ def main():
     parser.add_argument("--fps", type=int, help="Recorded dataset rate; required with --model-config")
     args = parser.parse_args()
     model_config = load_yaml(str(args.model_config)) if args.model_config else None
+    configure_video_encoding(DEFAULT_DATASET_CONFIG)
 
     targets = _discover_conversion_targets(args.patterns)
     if not targets:

@@ -490,7 +490,7 @@ def _replace_with_symlink(target: Path, link_path: Path) -> None:
 
 
 def convert_lerobot_v3(args: argparse.Namespace) -> None:
-    source_path = Path(args.source_lerobot_path or DEFAULT_LEROBOT_V3_PATH).expanduser().resolve()
+    source_path = Path(args.source_lerobot_path).expanduser().resolve()
     if not (source_path / "meta" / "info.json").exists():
         raise FileNotFoundError(f"LeRobot v3 info.json not found: {source_path / 'meta' / 'info.json'}")
 
@@ -731,10 +731,19 @@ def main() -> None:
 
     source_format = args.source_format
     if source_format is None:
-        source_path = Path(args.source_lerobot_path or DEFAULT_LEROBOT_V3_PATH)
-        source_format = "lerobot_v3" if (source_path / "meta" / "info.json").exists() else "hdf5"
+        # Without a source path there is no LeRobot tree to detect, so this is an HDF5 run.
+        source_root = Path(args.source_lerobot_path).expanduser() if args.source_lerobot_path else None
+        source_format = (
+            "lerobot_v3"
+            if source_root is not None and (source_root / "meta" / "info.json").exists()
+            else "hdf5"
+        )
 
     if source_format == "lerobot_v3":
+        if not args.source_lerobot_path:
+            parser.error(
+                "--source_lerobot_path (or LEROBOT_DATA_PATH) is required for lerobot_v3 conversion."
+            )
         convert_lerobot_v3(args)
     else:
         if not (args.ckpt_name or args.task_name):

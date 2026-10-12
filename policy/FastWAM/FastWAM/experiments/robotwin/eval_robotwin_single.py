@@ -103,6 +103,22 @@ def _resolve_ckpt_tag(ckpt_path: Path) -> str:
     return ckpt_path.stem
 
 
+def _resolve_robotwin_root(cfg: DictConfig) -> Path:
+    root_cfg = cfg.EVALUATION.robotwin_root
+    if root_cfg is None or str(root_cfg).strip() == "":
+        raise ValueError(
+            "`EVALUATION.robotwin_root` must point at a RoboTwin checkout. Pass "
+            "EVALUATION.robotwin_root=/path/to/RoboTwin, or set it in "
+            "configs/sim_robotwin.yaml."
+        )
+
+    root = _resolve_path(str(root_cfg), base=PROJECT_ROOT)
+    if not root.exists():
+        raise FileNotFoundError(f"RoboTwin root not found: {root}")
+
+    return root
+
+
 def _ensure_policy_symlink(robotwin_root: Path, policy_source_dir: Path) -> Path:
     policy_root = robotwin_root / "policy"
     if not policy_root.is_dir():
@@ -158,9 +174,7 @@ def main(cfg: DictConfig):
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
     ckpt_tag = _resolve_ckpt_tag(ckpt_path)
 
-    robotwin_root = _resolve_path(str(cfg.EVALUATION.robotwin_root), base=PROJECT_ROOT)
-    if not robotwin_root.exists():
-        raise FileNotFoundError(f"RoboTwin root not found: {robotwin_root}")
+    robotwin_root = _resolve_robotwin_root(cfg)
 
     policy_source_dir = (PROJECT_ROOT / "experiments" / "robotwin" / POLICY_NAME).resolve()
     if not policy_source_dir.is_dir():

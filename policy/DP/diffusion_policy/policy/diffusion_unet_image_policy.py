@@ -91,6 +91,7 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         local_cond=None,
         global_cond=None,
         generator=None,
+        rtc=None,
         # keyword arguments to scheduler.step
         **kwargs,
     ):
@@ -112,7 +113,13 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
             trajectory[condition_mask] = condition_data[condition_mask]
 
             # 2. predict model output
-            model_output = model(trajectory, t, local_cond=local_cond, global_cond=global_cond)
+            if rtc is None:
+                model_output = model(trajectory, t, local_cond=local_cond, global_cond=global_cond)
+            else:
+                from XPolicyLab.policy.DP.rtc import guided_prediction
+                model_output = guided_prediction(model, trajectory, t, scheduler,
+                    target=rtc["target"], weights=rtc["weights"], beta=rtc["beta"],
+                    local_cond=local_cond, global_cond=global_cond)
 
             # 3. compute previous image: x_t -> x_t-1
             trajectory = scheduler.step(model_output, t, trajectory, generator=generator, **kwargs).prev_sample
@@ -122,7 +129,7 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
 
         return trajectory
 
-    def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def predict_action(self, obs_dict: Dict[str, torch.Tensor], *, rtc=None) -> Dict[str, torch.Tensor]:
         """
         obs_dict: must include "obs" key
         result: must include "action" key
@@ -164,12 +171,28 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
             cond_data[:, :To, Da:] = nobs_features
             cond_mask[:, :To, Da:] = True
 
+        normalized_rtc = None
+        if rtc is not None:
+            target = torch.zeros_like(cond_data)
+            weights = torch.zeros_like(cond_data)
+            start = To - 1
+            end = start + self.n_action_steps
+            if end > T:
+                raise ValueError("RTC served action horizon exceeds the trained trajectory")
+            native = torch.as_tensor(rtc["action_condition"], device=device, dtype=dtype)
+            step_weights = torch.as_tensor(rtc["condition_weights"], device=device, dtype=dtype)
+            if native.shape != (self.n_action_steps, Da) or step_weights.shape != (self.n_action_steps,):
+                raise ValueError("DP RTC condition shape does not match the served chunk")
+            target[:, start:end, :Da] = self.normalizer["action"].normalize(native)
+            weights[:, start:end, :Da] = step_weights[None, :, None]
+            normalized_rtc = {"target": target, "weights": weights, "beta": float(rtc["beta"])}
         # run sampling
         nsample = self.conditional_sample(
             cond_data,
             cond_mask,
             local_cond=local_cond,
             global_cond=global_cond,
+            rtc=normalized_rtc,
             **self.kwargs,
         )
 

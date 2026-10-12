@@ -559,7 +559,11 @@ class Model(ModelTemplate):
         return actions
 
     def _generate_single(self, payload: dict) -> list[dict]:
-        result = self._engine.generate(self._conditions(payload))
+        conditions = self._conditions(payload)
+        # Explicit matrix seed settings also apply to its default-sampler baselines.
+        if "inference_seed" in self.model_cfg:
+            conditions["seed"] = self._next_sampling_seed()
+        result = self._engine.generate(conditions)
         actions = result["actions"]
         if hasattr(actions, "cpu"):
             actions = actions.detach().cpu().numpy()
@@ -627,6 +631,103 @@ class Model(ModelTemplate):
     def reset(self):
         self._batch = {}
         self._order = []
+        self._sampling_rng = np.random.default_rng(int(self.model_cfg.get("inference_seed", 0)))
+
+    def sampling_modes(self):
+        if self.allow_dummy_policy or self._engine is None or self.observation_profile != "yam_base":
+            return ["default"]
+        if self.replan_steps != int(self._engine.cfg.inference.num_frames) - 1:
+            return ["default"]
+        modes = ["default", "aac"]
+        # Differentiable RTC and attention capture must not reuse stale DiT results.
+        if self.model_cfg.get("compile_enabled", True) or self._engine._dit_cache is not None:
+            return modes
+        import inspect
+        arch = self._engine.architecture
+        if "denoise_loop" not in inspect.signature(arch.generate).parameters:
+            return modes
+        if float(self._engine._cfg_scale) != 1.0:
+            return modes
+        modes += ["rtc", "paint"]
+        if getattr(arch, "mot_driver", None) is not None and int(self._engine.cfg.inference.denoise_steps) >= 3:
+            modes.append("autohorizon")
+        return modes
+
+    def _next_sampling_seed(self):
+        if not hasattr(self, "_sampling_rng"):
+            self._sampling_rng = np.random.default_rng(int(self.model_cfg.get("inference_seed", 0)))
+        return int(self._sampling_rng.integers(0, 2**31-1))
+
+    def _sampling_conditions(self):
+        if len(self._order) != 1:
+            raise ValueError("Specialized sampling requires exactly one observation")
+        return {**self._conditions(self._batch[self._order[0]]),
+                "seed": self._next_sampling_seed()}
+
+    def _decode_sampling_result(self, result):
+        actions = result["actions"]
+        if hasattr(actions, "detach"):
+            actions = actions.detach().float().cpu().numpy()
+        actions = self._wam_policy._project_binary_dims(np.asarray(actions))
+        if self.replan_steps is not None and len(actions) != self.replan_steps:
+            raise ValueError("Specialized sampling requires the complete served action horizon")
+        raw = {"actions": self._eef20_chunk_to_native(actions)}
+        if self.observation_profile == "yam_base":
+            raw["action_semantics"] = "absolute_per_arm_base_xyz_wxyz"
+        return raw
+
+    def get_action_aac(self, sampling):
+        from XPolicyLab.utils.flow_sampling import validate_samples
+        count = validate_samples(sampling)
+        if "aac" not in self.sampling_modes():
+            raise ValueError("AAC is unavailable for the loaded OpenWAM backend")
+        # Independent seeds are essential: engine.generate otherwise defaults to 42.
+        return {"actions": [self._decode_sampling_result(self._engine.generate(self._sampling_conditions()))
+                            for _ in range(count)]}
+
+    def _sample_conditioned(self, sampling, mode):
+        from .sampling import JointFlowSampler, normalize_action
+        from XPolicyLab.utils.flow_sampling import validate_prefix
+        if mode not in self.sampling_modes():
+            raise ValueError(f"OpenWAM {mode} needs an eager compatible backend with DiT cache disabled")
+        arch = self._engine.architecture
+        horizon = int(self._engine.cfg.inference.num_frames)-1
+        target = weights = delay = None
+        beta = 5.0
+        if mode == "paint":
+            prefix, delay = validate_prefix(sampling, horizon, 20)
+            raw = np.zeros((horizon, 20), dtype=np.float32)
+            raw[:delay] = prefix
+            target = normalize_action(arch, raw)
+        elif mode == "rtc":
+            if set(sampling) != {"mode", "action_condition", "condition_weights", "beta"}:
+                raise ValueError("RTC requires action_condition, condition_weights and beta")
+            raw = np.asarray(sampling["action_condition"], dtype=np.float32)
+            if raw.shape != (horizon, 20) or not np.isfinite(raw).all():
+                raise ValueError("OpenWAM RTC condition must be finite raw EEF20 [H,20]")
+            target = normalize_action(arch, raw)
+            weights, beta = sampling["condition_weights"], float(sampling["beta"])
+        elif set(sampling) != {"mode"}:
+            raise ValueError("AutoHorizon accepts no overrides")
+        loop = JointFlowSampler(arch, mode, target=target, weights=weights, delay=delay, beta=beta)
+        result = self._engine.generate({**self._sampling_conditions(), "denoise_loop": loop})
+        raw = self._decode_sampling_result(result)
+        if mode != "rtc":
+            raw[mode] = loop.metadata
+        return raw
+
+    def get_action_rtc(self, sampling):
+        return self._sample_conditioned(sampling, "rtc")
+
+    def get_action_paint(self, sampling):
+        return self._sample_conditioned(sampling, "paint")
+
+    def get_action_autohorizon(self, sampling):
+        return self._sample_conditioned(sampling, "autohorizon")
 
     def runtime_metadata(self):
-        return {**self._metadata, "replan_steps": self.replan_steps}
+        return {**self._metadata, "replan_steps": self.replan_steps,
+                "conditioned_sampler": "joint_flow_v1",
+                "sampling_seed": int(self.model_cfg.get("inference_seed", 0)),
+                "compile_enabled": self.model_cfg.get("compile_enabled", True),
+                "dit_cache_enabled": self._engine is not None and self._engine._dit_cache is not None}

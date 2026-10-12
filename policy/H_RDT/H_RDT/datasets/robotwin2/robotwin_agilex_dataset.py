@@ -13,6 +13,8 @@ import warnings
 import traceback
 import torch
 
+from XPolicyLab.utils.process_data import decode_image_bit
+
 warnings.filterwarnings(
     "ignore",
     category=FutureWarning,
@@ -258,7 +260,7 @@ class RobotwinAgilexDataset:
 
     def decode_image_with_opencv(self, img_data):
         """
-        Decode image data using OpenCV, maintaining RGB format
+        Decode stored image bits via decode_image_bit, maintaining RGB format
         
         Args:
             img_data (bytes): Binary image data
@@ -267,16 +269,9 @@ class RobotwinAgilexDataset:
             np.ndarray: Decoded image array, shape=(480, 640, 3), RGB format
         """
         try:
-            # Decode using OpenCV
-            nparr = np.frombuffer(img_data, np.uint8)
-            bgr_img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            
-            # Ensure decoding was successful
-            if bgr_img is None:
-                raise Exception("OpenCV decoding failed")
-                
-            # OpenCV uses BGR format by default, convert to RGB
-            rgb_img = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
+            # decode_image_bit resolves both stored byte formats to RGB; a
+            # caller-side BGR2RGB would be wrong on one of the two formats.
+            rgb_img = decode_image_bit(img_data)
             
             # Resize to expected standard size if needed (640x480).
             if rgb_img.shape[:2] != (480, 640):

@@ -745,7 +745,62 @@ class Model(ModelTemplate):
         }
 
     def sampling_modes(self) -> list[str]:
-        return ["default", "rtc"]
+        modes = ["default", "aac"]
+        flow = self.model.vla.model
+        if self.action_horizon == flow.config.n_action_steps:
+            modes.extend(["rtc", "paint"])
+            if flow.config.num_steps >= 3 and not self.model_cfg.get("use_compile", False):
+                modes.append("autohorizon")
+        return modes
+
+    def get_action_aac(self, sampling):
+        from XPolicyLab.utils.flow_sampling import validate_samples
+        count = validate_samples(sampling)
+        if self._observations is None or len(self._observations) != 1:
+            raise ValueError("AAC requires exactly one observation")
+        # Re-evaluate the same observation, without appending observation history.
+        candidates = [self._infer_one(self._observations[0]) for _ in range(count)]
+        return {"actions": candidates}
+
+    def _sample_flow(self, sampling, mode):
+        from XPolicyLab.utils.flow_sampling import PaintSampler, AutoHorizonSampler, validate_prefix
+        if self._observations is None or len(self._observations) != 1:
+            raise ValueError(f"{mode} requires exactly one observation")
+        if mode not in self.sampling_modes():
+            raise ValueError(f"Unsupported sampling mode: {mode}")
+        flow = self.model.vla.model
+        target = weights = None
+        metadata = {}
+        if mode == "paint":
+            prefix, delay = validate_prefix(sampling, self.action_horizon, self.action_dim)
+            target = np.zeros((self.action_horizon, self.action_dim), dtype=np.float32)
+            target[:delay] = prefix
+            weights = np.zeros(self.action_horizon, dtype=np.float32)
+            weights[:delay] = 1
+            def sampler(velocity, noise, target, weights):
+                return PaintSampler(flow.config.num_steps).sample(
+                    velocity, noise, target=target.to(noise), mask=weights.to(noise).bool())
+            metadata = {"delay_steps": delay, "num_steps": flow.config.num_steps,
+                        "model_evaluations": 3 * flow.config.num_steps, "inversion": "backward_euler"}
+        else:
+            if set(sampling) != {"mode"}:
+                raise ValueError("AutoHorizon accepts no overrides")
+            def sampler(velocity, noise, target, weights):
+                actions, selected = AutoHorizonSampler(flow.config.num_steps).sample(
+                    velocity, noise, attention_owners=[flow.qwenvl_with_expert])
+                metadata.update(selected)
+                return actions
+        result = self._rtc_bridge.infer(self._observations[0], target, weights, 5.0, sampler=sampler)
+        result = {"actions": decode_actions(result, self.robot_info), mode: metadata}
+        if self.action_semantics == RELATIVE_ACTION_SEMANTICS:
+            result["action_semantics"] = RELATIVE_ACTION_SEMANTICS
+        return result
+
+    def get_action_paint(self, sampling):
+        return self._sample_flow(sampling, "paint")
+
+    def get_action_autohorizon(self, sampling):
+        return self._sample_flow(sampling, "autohorizon")
 
     def reset(self) -> None:
         self._observations = None

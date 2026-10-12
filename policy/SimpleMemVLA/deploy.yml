@@ -1,0 +1,17 @@
+policy_name: SimpleMemVLA
+protocol: ws
+host: localhost
+port: null
+bench_name: null
+task_name: null
+ckpt_name: null
+env_cfg_type: arx_x5
+seed: 0
+action_type: joint
+gpu_id: null
+eval_batch: true
+
+checkpoint_path: null
+execute_horizon: 24
+attn_implementation: flash_attention_2
+warmup: true

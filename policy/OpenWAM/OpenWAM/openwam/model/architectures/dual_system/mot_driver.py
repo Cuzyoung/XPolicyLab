@@ -139,6 +139,9 @@ class DualSystemMoTDriver:
         q = rearrange(q_cat, "b s (n d) -> b n s d", n=n)
         k = rearrange(k_cat, "b s (n d) -> b n s d", n=n)
         v = rearrange(v_cat, "b s (n d) -> b n s d", n=n)
+        capture = getattr(self, "_action_attention_capture", None)
+        if capture is not None:
+            capture(q, k, attn_mask)
         out = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
         return rearrange(out, "b n s d -> b s (n d)", n=n)
 

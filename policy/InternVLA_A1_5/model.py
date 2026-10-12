@@ -281,10 +281,17 @@ class Model(ModelTemplate):
         return requested
 
     def _load_robot_action_dim_info(self, env_cfg):
-        # deploy.sh 不传 env_cfg_type（与官方 A1 一致），用 arx_x5 作为默认
-        # （RoboDojo 当前所有机器人都是 14 维双臂 [6,6]+[1,1]）
+        # setup_eval_policy_server.sh always overrides env_cfg_type (arg 4), so
+        # a missing value means the server was launched off the bare deploy.yml,
+        # where the key is null. Fail loudly: silently defaulting to arx_x5
+        # would mis-pack the robot state for any non-14-dim-dual-arm robot
+        # without raising anywhere.
         if env_cfg is None:
-            env_cfg = "arx_x5"
+            raise ValueError(
+                "env_cfg_type is not set. Launch through setup_eval_policy_server.sh "
+                "(which passes it as arg 4), or supply env_cfg_type via --overrides "
+                "or deploy.yml."
+            )
         try:
             return get_robot_action_dim_info(env_cfg)
         except (FileNotFoundError, KeyError, OSError):

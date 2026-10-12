@@ -1,6 +1,6 @@
 import os
+import sys
 import h5py
-import cv2
 import numpy as np
 from pathlib import Path
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -8,6 +8,14 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 workspace = os.path.dirname(os.path.abspath(__file__))
 RMBench_workspace = os.path.join(workspace, "..", "..", "..", "..")
 Mem0_workspace = os.path.join(workspace, "..", "..")
+
+# XPolicyLab imports resolve from the parent of the checkout:
+# hdf5_to_lerobot -> scripts -> Mem_0 -> Mem_0 -> policy -> XPolicyLab -> parent.
+XPOLICYLAB_PARENT = os.path.abspath(os.path.join(workspace, *[".."] * 6))
+if XPOLICYLAB_PARENT not in sys.path:
+    sys.path.insert(0, XPOLICYLAB_PARENT)
+
+from XPolicyLab.utils.process_data import decode_image_bit
 
 # Define task names to process
 TASK_NAMES = [
@@ -103,7 +111,7 @@ for dataset_name in TASK_NAMES:
                 for frame_idx in range(episode_length):
                     # Get image
                     image_bits = f["observation"]["head_camera"]["rgb"][frame_idx]
-                    image_rgb = cv2.imdecode(np.frombuffer(image_bits, np.uint8), cv2.IMREAD_COLOR)
+                    image_rgb = decode_image_bit(image_bits)
                     images.append(image_rgb)
                     
                     # Get joint states

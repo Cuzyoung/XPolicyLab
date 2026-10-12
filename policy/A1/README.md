@@ -16,7 +16,7 @@ conda activate <policy_env>  # e.g. a1
 
 ## Data Processing
 
-Converts RoboDojo HDF5 demonstrations to LeRobot format. Beyond the standard arguments the script accepts `[expert_data_num]` (episode limit; empty = all), `[raw_task_dirs]` (raw HDF5 task dir(s) under `data/<bench_name>/`, comma-separated to merge; defaults to `ckpt_name`), `[fps]` (default `30`), and `[output_dir]` (defaults to the policy `data/` directory):
+Converts RoboDojo HDF5 demonstrations to a LeRobot v2.1 video dataset. Its camera keys deviate from the [official converters](../../README.md#official-lerobot-conversion): the head view is stored as `observation.images.cam_head`, not `cam_high`, which is what the A1 dataloader expects — so produce the dataset with this `process_data.sh` rather than the shared `scripts/transform_lerobot_v21_format.py`. Beyond the standard arguments the script accepts `[expert_data_num]` (episode limit; empty = all), `[raw_task_dirs]` (raw HDF5 task dir(s) under `data/<bench_name>/`, comma-separated to merge; defaults to `ckpt_name`), `[fps]` (default `30`), and `[output_dir]` (defaults to the policy `data/` directory):
 
 ```bash
 cd XPolicyLab/policy/A1

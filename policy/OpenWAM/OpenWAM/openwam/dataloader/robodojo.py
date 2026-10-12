@@ -24,6 +24,7 @@ import bisect
 import hashlib
 import json
 import os
+import sys
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -33,6 +34,15 @@ import h5py
 import numpy as np
 import torch
 from PIL import Image
+
+# Stored image bits decode only through XPolicyLab's decode_image_bit, which
+# resolves both stored byte formats to RGB. The checkout root (made importable
+# by its XPolicyLab.py shim) sits five levels above this file.
+_XPOLICYLAB_ROOT = Path(__file__).resolve().parents[5]
+if str(_XPOLICYLAB_ROOT) not in sys.path:
+    sys.path.insert(0, str(_XPOLICYLAB_ROOT))
+
+from XPolicyLab.utils.process_data import decode_image_bit
 
 from openwam.dataloader.bases import BaseDataset
 from openwam.dataloader.robodojo_contract import (
@@ -360,9 +370,9 @@ def _decode_jpeg(value: Any, *, source: str) -> Image.Image:
     if not encoded:
         raise ValueError(f"{source}: JPEG entry is empty")
     try:
-        from XPolicyLab.utils.process_data import decode_image_bit
-
-        return Image.fromarray(decode_image_bit(np.frombuffer(encoded, dtype=np.uint8)))
+        # decode_image_bit resolves both stored byte formats to RGB; a direct
+        # PIL decode would read the legacy channel-reversed JPEGs as BGR.
+        return Image.fromarray(decode_image_bit(encoded))
     except Exception as error:
         raise ValueError(f"{source}: could not decode JPEG") from error
 

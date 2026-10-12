@@ -355,6 +355,7 @@ class JointInferenceEngine(BaseInferenceEngine):
                 "proprio": proprio,
                 "cfg_scale": self._cfg_scale,
                 "cfg_merge": self._cfg_merge,
+                "denoise_loop": conditions.get("denoise_loop"),
             }
         )
         result = self.architecture.generate(**generate_kwargs)

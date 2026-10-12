@@ -121,7 +121,9 @@ Point the selected G05 training config to these assets using the config keys exp
 
 ## Data Processing
 
-This adapter does not provide a standalone data converter. Use the official RoboDojo data download and conversion pipeline for simulator data. The policy reads the RoboDojo LeRobot v3.0 dataset directly.
+This adapter does not provide a standalone data converter. Use the official RoboDojo data download and conversion pipeline for simulator data. The policy reads the RoboDojo **LeRobot v3.0** dataset directly, from the root given by `ROBODOJO_LEROBOT_V30_ROOT`.
+
+The keys are the standard ones of `XPolicyLab/scripts/transform_lerobot_v30_format.py` ([Official LeRobot conversion](../../README.md#official-lerobot-conversion)) — run that script to build a dataset for your own task subset. `G05/configs/data/robodojo.yaml` names them explicitly as `lerobot_key` entries: `observation.images.cam_high` / `cam_left_wrist` / `cam_right_wrist`, plus the flat `observation.state` and `action` vectors sliced by `start_index`. Nothing beyond the official output is required — no `meta/modality.json`, and normalization stats are computed during training.
 
 ## Training
 

@@ -17,7 +17,7 @@ from omegaconf import DictConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SINGLE_ENTRY = PROJECT_ROOT / "experiments" / "robotwin" / "eval_robotwin_single.py"
-EVAL_STEP_LIMIT_FILE = PROJECT_ROOT / "third_party" / "RoboTwin" / "task_config" / "_eval_step_limit.yml"
+EVAL_STEP_LIMIT_RELPATH = Path("task_config") / "_eval_step_limit.yml"
 TERMINATE_TIMEOUT_SEC = 10
 POLL_INTERVAL_SEC = 2
 
@@ -27,6 +27,22 @@ def _resolve_path(path_str: str, *, base: Path) -> Path:
     if not path.is_absolute():
         path = (base / path).resolve()
     return path.resolve()
+
+
+def _resolve_robotwin_root(cfg: DictConfig) -> Path:
+    root_cfg = cfg.EVALUATION.robotwin_root
+    if root_cfg is None or str(root_cfg).strip() == "":
+        raise ValueError(
+            "`EVALUATION.robotwin_root` must point at a RoboTwin checkout. Pass "
+            "EVALUATION.robotwin_root=/path/to/RoboTwin, or set it in "
+            "configs/sim_robotwin.yaml."
+        )
+
+    root = _resolve_path(str(root_cfg), base=PROJECT_ROOT)
+    if not root.exists():
+        raise FileNotFoundError(f"RoboTwin root not found: {root}")
+
+    return root
 
 
 def _resolve_ckpt_tag(ckpt_path: Path) -> str:
@@ -55,6 +71,7 @@ def _is_blocked_override(raw_override: str) -> bool:
         "EVALUATION.task_name",
         "EVALUATION.task_config",
         "EVALUATION.output_dir",
+        "EVALUATION.robotwin_root",
     }:
         return True
     return key.startswith("MULTIRUN.") or key.startswith("hydra.")
@@ -64,13 +81,14 @@ def _collect_worker_overrides() -> list[str]:
     return [ov for ov in HydraConfig.get().overrides.task if not _is_blocked_override(ov)]
 
 
-def _load_all_tasks() -> list[str]:
-    if not EVAL_STEP_LIMIT_FILE.exists():
-        raise FileNotFoundError(f"Task list file not found: {EVAL_STEP_LIMIT_FILE}")
-    with EVAL_STEP_LIMIT_FILE.open("r", encoding="utf-8") as f:
+def _load_all_tasks(robotwin_root: Path) -> list[str]:
+    step_limit_file = robotwin_root / EVAL_STEP_LIMIT_RELPATH
+    if not step_limit_file.exists():
+        raise FileNotFoundError(f"Task list file not found: {step_limit_file}")
+    with step_limit_file.open("r", encoding="utf-8") as f:
         task_map = yaml.safe_load(f)
     if not isinstance(task_map, dict) or len(task_map) == 0:
-        raise ValueError(f"Invalid task map in: {EVAL_STEP_LIMIT_FILE}")
+        raise ValueError(f"Invalid task map in: {step_limit_file}")
     tasks = list(task_map.keys())
     # Keep original order and remove duplicates.
     seen = set()
@@ -142,9 +160,7 @@ def main(cfg: DictConfig):
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
     ckpt_tag = _resolve_ckpt_tag(ckpt_path)
 
-    robotwin_root = _resolve_path(str(cfg.EVALUATION.robotwin_root), base=PROJECT_ROOT)
-    if not robotwin_root.exists():
-        raise FileNotFoundError(f"RoboTwin root not found: {robotwin_root}")
+    robotwin_root = _resolve_robotwin_root(cfg)
 
     num_gpus = int(cfg.MULTIRUN.num_gpus)
     if num_gpus <= 0:
@@ -168,7 +184,7 @@ def main(cfg: DictConfig):
 
     task_name_cfg = cfg.EVALUATION.task_name
     if task_name_cfg is None or str(task_name_cfg).strip() == "":
-        tasks = _load_all_tasks()
+        tasks = _load_all_tasks(robotwin_root)
     else:
         tasks = [str(task_name_cfg)]
 
@@ -203,6 +219,7 @@ def main(cfg: DictConfig):
             f"EVALUATION.task_name={task_name}",
             f"EVALUATION.task_config={task_config}",
             f"EVALUATION.output_dir={str(output_dir)}",
+            f"EVALUATION.robotwin_root={str(robotwin_root)}",
         ]
         cmd.extend(extra_overrides)
         return cmd

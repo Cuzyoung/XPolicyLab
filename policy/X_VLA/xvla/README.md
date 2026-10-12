@@ -72,35 +72,8 @@ bash train.sh
 
 **Attention:** The saved checkpoint directory may only contain 'config.json', 'model.safetensors', 'state.json'. Please copy all the other files in 'X-VLA-Pt' to the target checkpoint directory (don't overwrite 'config.json', 'model.safetensors' and 'state.json' files).
 
-### 1️⃣ Start the X-VLA Server
-
-Run the X-VLA model as an inference server (in a clean environment to avoid dependency conflicts):
-
-```bash
-conda activate X-VLA
-python -m deploy --port 4567 --model_path X-VLA-RMBench # change to your own model_path
-```
-
-### 2️⃣ Run the Client Evaluation
-
-Add the absolute path of your RMBench repository at line 12 of evaluation/RMBench/client.py:
-
-```bash
-robowin_root = Path("/home/admin02/RMBench") # <- Add your path
-```
-
-Fill the **ALL_TASKS** and **TASK_INSTRUCTIONS** in line 46 and 61.
-
-Besides, modify the **task_name** in 'evaluation/RMBench/eval_RMBench.sh' to your target task name (the name should be in **ALL_TASKS** with its language instruction in **TASK_INSTRUCTIONS**).
-
-Launch the RMBench evaluation client to connect to your X-VLA server:
-
-```bash
-# reopen a clean terminal
-
-cd evaluation/RMBench
-
-conda activate RMBench
-
-bash eval_RMBench.sh
-```
+Evaluation runs through XPolicyLab, not through the upstream server/client pair: `policy/X_VLA/eval.sh`
+starts the XPolicyLab policy server around `policy/X_VLA/model.py` and lets the benchmark supply the
+environment client. The upstream `deploy.py` (FastAPI `/act` server) and `evaluation/RMBench/`
+(RoboTwin client) were removed here because both roles are already filled. See
+[../README.md](../README.md) for the keys to set in `deploy.yml`.

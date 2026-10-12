@@ -16,7 +16,7 @@ conda activate <policy_env>  # e.g. aha-wam
 
 ## Data Processing
 
-No top-level `process_data.sh`. Training consumes the prepared RoboDojo LeRobot v2.1 video dataset directly (see Training below); for custom conversion follow the upstream README under `AHAWAM/`.
+No top-level `process_data.sh`. Training consumes the prepared RoboDojo LeRobot v2.1 video dataset directly (see Training below), in the standard keys of `XPolicyLab/scripts/transform_lerobot_v21_format.py` ([Official LeRobot conversion](../../README.md#official-lerobot-conversion)) — run that script to build a dataset for your own task subset or resolution. For anything beyond it, follow the upstream README under `AHAWAM/`.
 
 ## Model Assets
 

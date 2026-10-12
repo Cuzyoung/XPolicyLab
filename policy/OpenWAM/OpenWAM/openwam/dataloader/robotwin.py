@@ -13,14 +13,24 @@ import glob
 import json
 import os
 import random
+import sys
 import time
+from pathlib import Path
 from typing import Any, Optional
 
-import cv2
 import h5py
 import numpy as np
 import torch
 from PIL import Image
+
+# Stored image bits decode only through XPolicyLab's decode_image_bit, which
+# resolves both stored byte formats to RGB. The checkout root (made importable
+# by its XPolicyLab.py shim) sits five levels above this file.
+_XPOLICYLAB_ROOT = Path(__file__).resolve().parents[5]
+if str(_XPOLICYLAB_ROOT) not in sys.path:
+    sys.path.insert(0, str(_XPOLICYLAB_ROOT))
+
+from XPolicyLab.utils.process_data import decode_image_bit
 
 from openwam.dataloader.bases import BaseDataset
 from openwam.dataloader.transforms.multiview import (
@@ -622,16 +632,13 @@ class RoboTwinDataset(BaseDataset):
         return len(self._window_index)
 
     def _decode_jpeg(self, jpeg_bytes) -> Image.Image:
-        """Decode JPEG bytes from HDF5 to a PIL RGB image.
+        """Decode stored image bits from HDF5 to a PIL RGB image.
 
-        RoboTwin encodes frames by passing RGB arrays directly to
-        ``cv2.imencode`` (which expects BGR), so R and B channels are
-        swapped inside the JPEG. Using ``cv2.imdecode`` reverses this
-        swap, giving back the original RGB order — no further
-        conversion needed.
+        ``decode_image_bit`` reads the embedded format marker and returns RGB
+        for both stored byte formats — legacy channel-reversed JPEGs and
+        marked standard RGB JPEGs — so no channel handling happens here.
         """
-        arr = cv2.imdecode(np.frombuffer(bytes(jpeg_bytes), np.uint8), cv2.IMREAD_COLOR)
-        return Image.fromarray(arr)
+        return Image.fromarray(decode_image_bit(bytes(jpeg_bytes)))
 
     def _read_camera_frames(self, f, camera_key: str, start: int, end: int):
         """Read and decode JPEG frames from an observation camera.

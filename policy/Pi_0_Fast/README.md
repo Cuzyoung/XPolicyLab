@@ -18,7 +18,7 @@ source openpi/.venv/bin/activate  # OpenPI is uv-managed; there is no policy con
 
 ## Data Processing
 
-Converts RoboDojo demonstrations into the LeRobot repo consumed by training. The optional `expert_data_num` caps the number of episodes (leave unset to use all); the optional `raw_task_dir` is a source task dir under `data/<bench_name>/` to read raw demos from (defaults to `ckpt_name`) — use it to build a subset run from an existing task's data.
+Converts RoboDojo demonstrations into the LeRobot repo consumed by training. The dataset uses the official keys — `observation.state`, `action`, `observation.images.cam_high` / `cam_left_wrist` / `cam_right_wrist` ([official LeRobot conversion](../../README.md#official-lerobot-conversion)); the bundled script exists because conversion must run inside openpi's own pinned LeRobot environment, which sets the dataset version. The optional `expert_data_num` caps the number of episodes (leave unset to use all); the optional `raw_task_dir` is a source task dir under `data/<bench_name>/` to read raw demos from (defaults to `ckpt_name`) — use it to build a subset run from an existing task's data.
 
 ```bash
 cd XPolicyLab/policy/Pi_0_Fast

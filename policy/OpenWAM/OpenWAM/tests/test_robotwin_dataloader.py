@@ -1,15 +1,24 @@
 """Tests for RoboTwin dataloader: joint mode, EEF mode, multi-variant, normalization."""
 
-import io
 import os
+import sys
 import tempfile
 import threading
 import time
+from pathlib import Path
 
 import h5py
 import numpy as np
-from PIL import Image
 from scipy.spatial.transform import Rotation
+
+# Fixtures store image bits the way the production corpus does — through
+# encode_image_bit, so the reader's decode_image_bit gets marked standard RGB
+# buffers rather than unmarked JPEGs it would treat as legacy channel-reversed.
+_XPOLICYLAB_ROOT = Path(__file__).resolve().parents[4]
+if str(_XPOLICYLAB_ROOT) not in sys.path:
+    sys.path.insert(0, str(_XPOLICYLAB_ROOT))
+
+from XPolicyLab.utils.process_data import encode_image_bit
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -17,12 +26,10 @@ from scipy.spatial.transform import Rotation
 
 
 def _encode_jpeg(height=16, width=16, seed=0):
-    """Create a tiny JPEG-encoded byte string (like RoboTwin HDF5 stores)."""
+    """Create a tiny encoded image bit string (like RoboTwin HDF5 stores)."""
     rng = np.random.default_rng(seed)
-    img = Image.fromarray(rng.integers(0, 256, (height, width, 3), dtype=np.uint8))
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG")
-    return np.frombuffer(buf.getvalue(), dtype=np.uint8)
+    img = rng.integers(0, 256, (height, width, 3), dtype=np.uint8)
+    return np.frombuffer(encode_image_bit(img), dtype=np.uint8)
 
 
 def _create_mock_episode(path, T=20, action_dim=14, seed=0):

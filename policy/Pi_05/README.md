@@ -18,7 +18,7 @@ source openpi/.venv/bin/activate  # OpenPI is uv-managed; there is no policy con
 
 ## Data Processing
 
-Converts RoboDojo demonstrations into the LeRobot repo consumed by training. The optional `expert_data_num` caps episodes for data conversion only (it is not part of checkpoint naming); the optional `raw_task_dirs` is a source task directory or comma-separated task list under `data/<bench_name>/` (defaults to `ckpt_name`). `raw_task_dirs` may also be passed directly as the 5th argument to write a differently named dataset from all of a task's demos, e.g. `bash process_data.sh RoboDojo stack_bowls_ablation arx_x5 joint stack_bowls`.
+Converts RoboDojo demonstrations into the LeRobot repo consumed by training. The dataset uses the official keys — `observation.state`, `action`, `observation.images.cam_high` / `cam_left_wrist` / `cam_right_wrist` ([official LeRobot conversion](../../README.md#official-lerobot-conversion)); the bundled script exists because conversion must run inside openpi's own pinned LeRobot environment, which sets the dataset version. The optional `expert_data_num` caps episodes for data conversion only (it is not part of checkpoint naming); the optional `raw_task_dirs` is a source task directory or comma-separated task list under `data/<bench_name>/` (defaults to `ckpt_name`). `raw_task_dirs` may also be passed directly as the 5th argument to write a differently named dataset from all of a task's demos, e.g. `bash process_data.sh RoboDojo stack_bowls_ablation arx_x5 joint stack_bowls`.
 
 ```bash
 cd XPolicyLab/policy/Pi_05
@@ -87,7 +87,10 @@ Environment variables used by the adapter scripts:
 
 ## Inference Sampling Capabilities
 
-The adapter exposes six explicit WebSocket sampling modes:
+The adapter implements the following WebSocket sampling modes. The handshake reports
+only modes available for the loaded backend: PyTorch exposes `default`; JAX exposes
+`default`, `rtc`, `aac` and `paint`, plus `autohorizon` with at least three denoising
+steps. Per-request parameter validation still applies.
 
 | Mode | Adapter method | OpenPI path |
 |---|---|---|
@@ -96,7 +99,6 @@ The adapter exposes six explicit WebSocket sampling modes:
 | `aac` | `get_action_aac` | one prefix/KV-cache pass followed by an `N`-sample denoising batch |
 | `paint` | `get_action_paint` | paper Algorithm 1: naive forward, backward Euler, prefix noise repaint, final forward |
 | `autohorizon` | `get_action_autohorizon` | third-step action self-attention plus the pinned official bidirectional soft-pointer |
-| `dvac` | `get_action_dvac` | final-step clean-estimate variance and the paper's rolling adaptive prefix rule |
 
 AAC accepts `{"mode": "aac", "num_samples": N}` for exactly one observation and returns `N`
 native action chunks. It is JAX-only and cannot be combined with RTC conditioning. The adapter does
@@ -109,13 +111,6 @@ normalizes the raw robot-unit prefix with the same official input transform as m
 runs `3N` velocity evaluations without gradients. The public PAINT repository currently contains
 documentation rather than source code, so this path is an explicit paper reproduction of
 arXiv:2606.19774, not an upstream-code claim.
-
-DVAC accepts `{"mode": "dvac", "tail_steps": 5, "alpha": 2.0,
-"rolling_window_size": 5, "min_execution_steps": 1, "max_execution_steps": H}`. It reuses the
-existing JAX Euler velocity evaluations, computes Equation 4 over the valid normalized action
-dimensions, and keeps the rolling threshold state in the Pi05 adapter. No author repository was
-located, so this path is an explicit paper reproduction of arXiv:2606.03847v1 rather than an
-official-code port.
 
 ## Tianji pass-ball zero-pose deployment
 
@@ -161,7 +156,7 @@ XPolicyLab/policy/Pi_05/openpi/.venv/bin/python \
 
 The export directory name, step and
 normalization SHA256 must match the selected recipe. See
-`docs/deployment/pi05-tianji-taccap.md` in the parent ManiMux workspace for paired recipes,
+`.agents/skills/manimux-inference/references/deployment/pi05-tianji-taccap.md` in the parent ManiMux workspace for paired recipes,
 station binding, artifact checking and full service commands.
 
 ## Tianji pack-plate wrist-only checkpoint
@@ -206,7 +201,7 @@ XPolicyLab/policy/Pi_05/openpi/.venv/bin/python \
 The exported README does not specify the training-time TCP axis conversion.
 The deployment currently shares the tool-axis transform used for the pass-ball
 Tianji data. Confirm it against the pack-plate training source before physical
-execution. See `docs/deployment/pi05-tianji-pack-plate.md` in the parent workspace.
+execution. See `.agents/skills/manimux-inference/references/deployment/pi05-tianji-pack-plate.md` in the parent workspace.
 
 ## Tianji pack-plate inter-hand-relative checkpoints
 
@@ -225,5 +220,5 @@ sampler remain shared. Existing zero-pose recipes keep their previous transforms
 Each recipe pins its own checkpoint-local normalization artifact. The deployment
 uses the existing `PackPlateZeroPoseModel` class and server dispatch; its historical
 class name does not choose the state representation. See
-[the independent experiment runbook](../../../docs/deployment/pi05-tianji-pack-plate-inter-hand-relative.md)
+[the independent experiment runbook](../../../.agents/skills/manimux-inference/references/deployment/pi05-tianji-pack-plate-inter-hand-relative.md)
 for geometry provenance, frozen settings, launch commands and validation status.
