@@ -111,3 +111,114 @@ normalizes the raw robot-unit prefix with the same official input transform as m
 runs `3N` velocity evaluations without gradients. The public PAINT repository currently contains
 documentation rather than source code, so this path is an explicit paper reproduction of
 arXiv:2606.19774, not an upstream-code claim.
+
+## Tianji pass-ball zero-pose deployment
+
+This opt-in, deployment-only profile supports `env_cfg_type: tianji_dual` and `action_type: ee`.
+Select `observation_profile: tianji_taccap_pi05_zero_pose`; existing ALOHA/YAM profiles are
+unchanged. `model.py` constructs the dedicated `PassBallZeroPoseModel(ModelTemplate)` for
+this profile, using the same shared XPolicyLab server and checkpoint/dimension helpers.
+
+Source: Physical Intelligence OpenPI, https://github.com/Physical-Intelligence/openpi,
+training revision `215abfb217dbac7d5f1273282331b9b1866c0479`. The local pass-ball reproduction
+comes from the submitted source archive of run
+`pi05-passball-zero-pose-h32-b16-60k-20260923-192017`; it has no separate upstream repository
+URL. `pass_ball_pose.py` and `pass_ball_state.py` retain the submitted numeric transforms
+and their source SHA256 comments. `pass_ball_model.py` reconstructs its inference transforms
+without importing the private training project or referring to training-machine paths.
+OpenPI remains in the existing vendored `openpi/` directory with its license intact.
+
+This profile's data conversion and training entry points are **not integrated** into the
+standard `process_data.sh` / `train.sh`; those existing commands still serve their original
+profiles. The downloaded training archive is provenance, not a runtime dependency.
+
+Required deployment keys: `model_state_encoding: zero_pose`,
+`train_config_name: pi05_pass_ball_hifi_umi_lora_zero_pose`, `action_horizon: 32`,
+`output_format: xpolicylab`, `action_semantics: absolute_per_arm_base_xyz_wxyz`,
+`checkpoint_num`, `checkpoint_variant`, `checkpoint_source`, `model_path`,
+`norm_stats_path`, `norm_stats_sha256`, `norm_stats_source`, `repo_id`, `num_steps`.
+The model is LoRA Pi05 with 20 native dimensions padded to 32. The native order is
+right/left with Rot6D first-two-row rotations and continuous normalized openings.
+Model pose slots are zeroed after quantile normalization; real request TCPs remain
+outside the model as the shared anchor for all 32 targets. The tool-axis change is
+inverted before returning standard absolute per-arm-base `xyz + wxyz` action dictionaries.
+Two wrist RGB images are active; the synthetic black base view has a false image mask.
+Only default sampling is supported for this profile.
+
+Run one hardware-free, synthetic-image forward from the parent workspace:
+
+```bash
+XLA_PYTHON_CLIENT_PREALLOCATE=false \
+XPolicyLab/policy/Pi_05/openpi/.venv/bin/python \
+  -m XPolicyLab.policy.Pi_05.offline_pass_ball \
+  --config <absolute-zero-pose-recipe.yaml> --checkpoint <export>/checkpoints/20000
+```
+
+The export directory name, step and
+normalization SHA256 must match the selected recipe. See
+`.agents/skills/manimux-inference/references/deployment/pi05-tianji-taccap.md` in the parent ManiMux workspace for paired recipes,
+station binding, artifact checking and full service commands.
+
+## Tianji pack-plate wrist-only checkpoint
+
+This is a separate deployment profile, `tianji_taccap_pi05_pack_plate`, selected only
+by the pack-plate recipe. It uses the verified `checkpoint-59999` export under
+`pi05-pack-plate-wrist-only-final-59999` and its own
+`assets/pack-plate-taccap-h32-zero-pose/norm_stats.json`. The LeRobot task string
+is `plate`. Two wrist RGB images are active; the synthetic base image is masked.
+The 20-D native order, zero-pose state, current-TCP-relative 32-step actions and
+absolute normalized grippers use the Tianji transform helpers above. The local
+`train_config_name` is a deployment reconstruction; the export does not contain
+the submitted training configuration. Data conversion and training entry points
+for this specific checkpoint are not included.
+
+The `pi05-pack-plate-full-zero-state-pack-instruction-final-59999` export uses
+the same deployment transforms with full-model weights. Its recipe explicitly
+selects `paligemma_variant: gemma_2b` and `action_expert_variant: gemma_300m`;
+it has no LoRA parameter leaves. Its normalization asset is
+`pack-plate-taccap-h32-zero-pose-pack-instruction`. The old wrist-only export
+continues to use `gemma_2b_lora` and `gemma_300m_lora` by default.
+
+This pack-plate profile supports default and RTC sampling. The RTC condition
+arrives as left/right absolute TCP poses and normalized openings from ManiMux;
+it is converted to the model's right/left 20-D absolute layout, then the
+existing input transform makes every conditioned pose relative to the current
+observation before normalization and Pi-guided JAX sampling. Zero-weight rows
+use the observation anchor as a valid pose. The pass-ball profile remains
+default-only; PAINT is not advertised for pack-plate.
+
+Static artifact inspection uses `manimux.servers.pi05 --check` with the paired
+experiment and an isolated station. A synthetic GPU forward, when the GPU is idle:
+
+```bash
+XLA_PYTHON_CLIENT_PREALLOCATE=false \
+XPolicyLab/policy/Pi_05/openpi/.venv/bin/python \
+  -m XPolicyLab.policy.Pi_05.offline_pack_plate \
+  --config manimux/configs/policy/pi05/tianji/pack_plate/wrist-only-step59999.yaml \
+  --checkpoint <export>/checkpoint-59999
+```
+
+The exported README does not specify the training-time TCP axis conversion.
+The deployment currently shares the tool-axis transform used for the pass-ball
+Tianji data. Confirm it against the pack-plate training source before physical
+execution. See `.agents/skills/manimux-inference/references/deployment/pi05-tianji-pack-plate.md` in the parent workspace.
+
+## Tianji pack-plate inter-hand-relative checkpoints
+
+The tracker-fixed export adds independently selectable step 20000 (best validation)
+and step 59999 (final) **LoRA** recipes. They select `model_state_encoding:
+inter_hand_relative` and provide `state_base_to_common` as left/right rigid 4x4
+transforms in metres. The transforms are part of the reported backend identity.
+
+`pack_plate_state.InterHandRelativeState` converts the per-arm TCPs into a common
+frame and encodes each hand in the other hand's training tool frame. It runs after
+`PassBallInputs` has formed relative RTC targets and before state normalization.
+Unlike zero-pose recipes, this variant preserves normalized pose values during
+tokenization. Original per-arm observation anchors, action decoding and the RTC
+sampler remain shared. Existing zero-pose recipes keep their previous transforms.
+
+Each recipe pins its own checkpoint-local normalization artifact. The deployment
+uses the existing `PackPlateZeroPoseModel` class and server dispatch; its historical
+class name does not choose the state representation. See
+[the independent experiment runbook](../../../.agents/skills/manimux-inference/references/deployment/pi05-tianji-pack-plate-inter-hand-relative.md)
+for geometry provenance, frozen settings, launch commands and validation status.

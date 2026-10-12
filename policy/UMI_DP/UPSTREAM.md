@@ -28,3 +28,17 @@ Reproduction changes are limited to:
 Upstream random crop, random rotation and color jitter remain active at inference.
 Training has not been rerun as part of this integration. Checkpoints and datasets
 remain external artifacts and must not be committed.
+
+## Trained-prefix RTC
+
+`train_time_rtc_policy.py` and `train_time_rtc_unet.py` retain separate subclasses
+for CalibWrist's prefix-trained checkpoints. Their constructor, binary local-mask
+conditioning, masked loss and corrected up-path feature injection follow
+CalibWrist revision `7b7bef0030baf5ee111c693c220837c98fb8e286`. The original
+policy sampler, normalizer API and UNet construction are reused; legacy classes
+remain unchanged. Checkpoint state keys are preserved and loaded strictly.
+
+The model adapter selects these classes only for embedded `policy.rtc.enabled`.
+`TrainTimeRtcSampler` passes unnormalized relative actions as `fixed_action_prefix`;
+it never installs `RtcGuidance`. The training pipeline and dataset were not
+reimported or rerun for this inference integration.

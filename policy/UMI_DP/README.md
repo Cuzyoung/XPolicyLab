@@ -119,12 +119,22 @@ claimed by the debug loop.
 - `observation_tolerance_s`: default .04, enforced for two distinct observations
   at the checkpoint's sampling interval (100ms for existing artifacts).
 - `rtc_guidance`: `pigdm` or `soft_inpaint`; both use the checkpoint's own
-  normalizer and DDIM scheduler. Only default/RTC capabilities are advertised.
+  normalizer and DDIM scheduler for legacy checkpoints. Prefix-trained checkpoints
+  do not create this wrapper and report `rtc_guidance: null`.
+- Embedded `policy.rtc.enabled: true` selects the separate CalibWrist trained-prefix
+  classes. These advertise `default` and `train_time_rtc`, not guided `rtc`.
+  The new sampling request carries integer `prefix_steps`, a horizon-sized absolute
+  dual-TCP `action_condition`, and binary `condition_weights` with exactly that many
+  leading ones. A zero prefix supplies neither condition nor weights. The model
+  rebases into the current observation frame and calls `fixed_action_prefix`;
+  normalization and per-denoising-step clamping remain inside the policy.
+  Dynamic prefix lengths need not equal the training support; runtime metadata
+  exposes `trained_prefix_lengths` for comparison.
 - `expected_artifacts`: optional exact key/value identity checked at load time.
   Runtime metadata includes checkpoint/config SHA256, EMA/model key, horizon,
   action dt, first action offset, observation period and image normalization.
 
-Horizon and dt come from the embedded `shape_meta`; H16 and H64 are supported.
+Horizon and dt come from the embedded `shape_meta`; H16, H32 and H64 are supported.
 With LeRobot's next-native-frame action export, the first target occurs at
 `1/source_fps` after observation, then targets are separated by
 `action.down_sample_steps/source_fps`. A 100ms action dt can therefore have a

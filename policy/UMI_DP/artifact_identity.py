@@ -89,9 +89,25 @@ def load_artifact(model_cfg):
     cfg.policy.obs_encoder.pretrained = False
     if not str(cfg.policy._target_).endswith(".DiffusionUnetTimmPolicy"):
         raise ValueError("Unsupported UMI policy class")
+    trained_rtc = bool(OmegaConf.select(cfg, "policy.rtc.enabled", default=False))
+    trained_prefix_lengths = []
+    if trained_rtc:
+        if not cfg.policy.inpaint_fixed_action_prefix:
+            raise ValueError("Trained RTC requires inpaint_fixed_action_prefix=True")
+        cfg.policy._target_ = (
+            NAMESPACE + "policy.train_time_rtc_policy.TrainTimeRtcDiffusionUnetTimmPolicy"
+        )
+        delay = int(cfg.policy.rtc.simulated_delay)
+        weights = OmegaConf.select(cfg, "policy.rtc.delay_weights", default=None)
+        trained_prefix_lengths = list(range(delay)) if weights is None else [
+            index for index, weight in enumerate(weights) if weight > 0
+        ]
+    elif "rtc" in cfg.policy:
+        # Legacy policies forward unknown kwargs to scheduler.step.
+        del cfg.policy["rtc"]
     if not str(cfg.policy.noise_scheduler._target_).endswith(".DDIMScheduler"):
         raise ValueError("UMI_DP requires the checkpoint DDIM sampler")
-    if cfg.policy.noise_scheduler.prediction_type != "epsilon":
+    if not trained_rtc and cfg.policy.noise_scheduler.prediction_type != "epsilon":
         raise ValueError("UMI_DP RTC requires epsilon prediction")
     report = {
         "policy_family": "umi_dp",
@@ -114,7 +130,9 @@ def load_artifact(model_cfg):
         "rgb_normalize": rgb_normalize,
         "inference_augmentation": "checkpoint",
         "action_semantics": SEMANTICS,
-        "rtc_guidance": model_cfg.get("rtc_guidance", "pigdm"),
+        "rtc_guidance": None if trained_rtc else model_cfg.get("rtc_guidance", "pigdm"),
+        "train_time_rtc": trained_rtc,
+        "trained_prefix_lengths": trained_prefix_lengths,
     }
     for name, expected in (model_cfg.get("expected_artifacts") or {}).items():
         if report.get(name) != expected:
