@@ -33,9 +33,15 @@ class Model(ModelTemplate):
         self.tolerance_s = float(model_cfg.get("observation_tolerance_s", 0.04))
         if not 0 < self.tolerance_s < self._metadata["observation_period_s"]:
             raise ValueError("Observation tolerance must be positive and smaller than the period")
-        from .rtc_guidance import RtcGuidance
+        self.guidance = self.prefix_sampler = None
+        if self._metadata["train_time_rtc"]:
+            from .train_time_rtc import TrainTimeRtcSampler
 
-        self.guidance = RtcGuidance(self.policy, mode=self._metadata["rtc_guidance"])
+            self.prefix_sampler = TrainTimeRtcSampler(self.policy)
+        else:
+            from .rtc_guidance import RtcGuidance
+
+            self.guidance = RtcGuidance(self.policy, mode=self._metadata["rtc_guidance"])
         seed = model_cfg.get("seed")
         if seed is not None:
             torch.manual_seed(int(seed))
@@ -43,7 +49,7 @@ class Model(ModelTemplate):
         self.reset()
 
     def sampling_modes(self):
-        return ["default", "rtc"]
+        return ["default", "train_time_rtc" if self.prefix_sampler is not None else "rtc"]
 
     def runtime_metadata(self):
         return dict(self._metadata)
@@ -85,7 +91,13 @@ class Model(ModelTemplate):
         if sampling is None:
             with torch.inference_mode():
                 output = self.policy.predict_action(batch)["action"][0].cpu().numpy()
+        elif sampling.get("mode") == "train_time_rtc":
+            if self.prefix_sampler is None:
+                raise ValueError("Checkpoint does not support train_time_rtc")
+            output = self.prefix_sampler.predict(batch, reference, sampling)[0].cpu().numpy()
         else:
+            if self.guidance is None:
+                raise ValueError("Prefix-trained checkpoints do not support RTC guidance")
             weights = np.asarray(sampling["condition_weights"], dtype=np.float32)
             if (
                 weights.shape != (self.horizon,)
@@ -112,6 +124,11 @@ class Model(ModelTemplate):
     def get_action_rtc(self, sampling):
         if len(self._order) != 1 or sampling.get("mode") != "rtc":
             raise ValueError("RTC requires one observation and mode=rtc")
+        return self._predict(self._order[0], sampling)
+
+    def get_action_train_time_rtc(self, sampling):
+        if len(self._order) != 1 or sampling.get("mode") != "train_time_rtc":
+            raise ValueError("Train-time RTC requires one observation and mode=train_time_rtc")
         return self._predict(self._order[0], sampling)
 
     def get_action_batch(self, env_idx_list=None):

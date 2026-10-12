@@ -498,6 +498,8 @@ class PolicyServer:
                 sampling_modes = ["default"]
                 if callable(getattr(self.model, "get_action_rtc", None)):
                     sampling_modes.append("rtc")
+                if callable(getattr(self.model, "get_action_train_time_rtc", None)):
+                    sampling_modes.append("train_time_rtc")
                 if callable(getattr(self.model, "get_action_aac", None)):
                     sampling_modes.append("aac")
                 if callable(getattr(self.model, "get_action_paint", None)):
@@ -648,7 +650,7 @@ class PolicyServer:
             raise WsError(ErrorCode.INVALID_FRAME, "infer sampling must be a map")
         sampling = dict(sampling)
         mode = sampling.get("mode", "default")
-        if mode not in {"default", "rtc", "aac", "paint", "autohorizon", "dvac"}:
+        if mode not in {"default", "rtc", "train_time_rtc", "aac", "paint", "autohorizon", "dvac"}:
             raise WsError(ErrorCode.INVALID_FRAME, f"unsupported sampling mode: {mode!r}")
 
         try:
@@ -670,6 +672,7 @@ class PolicyServer:
                     {
                         "default": "get_action",
                         "rtc": "get_action_rtc",
+                        "train_time_rtc": "get_action_train_time_rtc",
                         "aac": "get_action_aac",
                         "paint": "get_action_paint",
                         "autohorizon": "get_action_autohorizon",

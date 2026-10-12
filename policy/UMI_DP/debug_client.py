@@ -52,7 +52,8 @@ def run(server, seed=0, encoded=False):
     ) as client:
         metadata = client.call("runtime_metadata")
         assert metadata["policy_family"] == "umi_dp"
-        assert set(client.call("sampling_modes")) == {"default", "rtc"}
+        mode = "train_time_rtc" if metadata.get("train_time_rtc") else "rtc"
+        assert set(client.call("sampling_modes")) == {"default", mode}
         obs = synthetic_observation(metadata["observation_period_s"], seed)
         if encoded:
             for camera in obs["vision"].values():
@@ -60,7 +61,7 @@ def run(server, seed=0, encoded=False):
         client.call("reset")
         actions = client.infer(obs)
         check_actions(actions, metadata["action_horizon"])
-        # Model hooks and protocol payload exercise a real guided UNet forward.
+        # Exercise the checkpoint's advertised sampler through the public wire API.
         condition = np.array(
             [
                 np.r_[
@@ -72,15 +73,17 @@ def run(server, seed=0, encoded=False):
                 for step in actions
             ]
         )
-        weights = np.linspace(1, 0, len(actions), dtype=np.float32)
+        sampling = {"mode": mode, "action_condition": condition}
+        if mode == "train_time_rtc":
+            count = min(5, len(actions) - 1)
+            sampling.update(prefix_steps=count, condition_weights=(np.arange(len(actions)) < count))
+        else:
+            sampling.update(
+                condition_weights=np.linspace(1, 0, len(actions), dtype=np.float32), beta=5.0
+            )
         actions = client.infer(
             obs,
-            sampling={
-                "mode": "rtc",
-                "action_condition": condition,
-                "condition_weights": weights,
-                "beta": 5.0,
-            },
+            sampling=sampling,
         )
         check_actions(actions, metadata["action_horizon"])
         batch = [copy.deepcopy(obs), copy.deepcopy(obs)]
@@ -95,7 +98,7 @@ def run(server, seed=0, encoded=False):
         check_actions(client.call("get_action"), metadata["action_horizon"])
         print(
             f"UMI_DP shared server passed: H={metadata['action_horizon']}, "
-            f"encoded={encoded}, default/rtc/batch/reset",
+            f"encoded={encoded}, default/{mode}/batch/reset",
             flush=True,
         )
 
