@@ -747,7 +747,8 @@ class Model(ModelTemplate):
         rtc_context = contextlib.nullcontext()
         mode = None if sampling is None else sampling.get("mode", "rtc")
         if mode in {"paint", "autohorizon"}:
-            from XPolicyLab.utils.flow_sampling import PaintSampler, AutoHorizonSampler, validate_prefix
+            from XPolicyLab.utils.flow_sampling import PaintSampler, AutoHorizonSampler
+            from XPolicyLab.utils.sampling_contracts import validate_prefix
 
             self._sampling_metadata = None
             if mode == "paint":
@@ -775,28 +776,8 @@ class Model(ModelTemplate):
                     return actions
             rtc_context = self.model.inference_sampler(sampler)
         elif sampling is not None:
-            required = {"action_condition", "condition_weights", "beta"}
-            missing = sorted(required - set(sampling))
-            if missing:
-                raise ValueError(f"RTC sampling is missing fields: {missing}")
-            condition = np.asarray(sampling["action_condition"], dtype=np.float32)
-            weights = np.asarray(sampling["condition_weights"], dtype=np.float32)
-            if condition.shape != self.action_shape:
-                raise ValueError(
-                    f"action_condition must have shape {self.action_shape}, got {condition.shape}"
-                )
-            if weights.shape != (self.action_shape[0],):
-                raise ValueError(
-                    f"condition_weights must have shape {(self.action_shape[0],)}, "
-                    f"got {weights.shape}"
-                )
-            if not np.isfinite(condition).all() or not np.isfinite(weights).all():
-                raise ValueError("RTC sampling arrays must be finite")
-            if np.any((weights < 0.0) | (weights > 1.0)):
-                raise ValueError("condition_weights must be in [0, 1]")
-            beta = float(sampling["beta"])
-            if not np.isfinite(beta) or beta <= 0:
-                raise ValueError("RTC beta must be finite and positive")
+            from XPolicyLab.utils.sampling_contracts import validate_rtc
+            condition, weights, beta = validate_rtc(sampling, *self.action_shape)
             normalized = torch.from_numpy(condition).to(self.device)
             normalized = (normalized - self.mean) / (self.std + self._action_eps)
             normalized = normalized * self.action_mask
@@ -970,7 +951,7 @@ class Model(ModelTemplate):
         return modes
 
     def get_action_aac(self, sampling):
-        from XPolicyLab.utils.flow_sampling import validate_samples
+        from XPolicyLab.utils.sampling_contracts import validate_samples
         count = validate_samples(sampling)
         if len(self._encoded_obs_list) != 1:
             raise ValueError("AAC requires exactly one observation")

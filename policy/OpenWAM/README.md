@@ -108,3 +108,37 @@ bash eval.sh RoboDojo stack_bowls New_OpenWAM_RoboDojo_SFT_60k arx_x5 ee 0 0 0 \
 | `OPENWAM_ALLOW_DUMMY_POLICY` | Debug-only: skip checkpoint load and return hold-position chunks. |
 
 `eval_batch: true` stacks every running env into one `engine.generate_batch` forward. `model.py` re-forces `dit_cache` / `compile` / `decode_video` off and `inference_mode=sync`. `device: cuda` loads Wan, UMT5-XXL, and ActionDiT on GPU, matching official OpenWAM deploy.
+
+### Conditioned sampling and DiT cache
+
+`dit_cache_enabled` is the master switch. `dit_cache_modes` selects the model
+sampling modes that may reuse predictions; omitted means `[default]`, `[]` means
+none, and `[rtc]` enables RTC-only caching. Runtime Serial/Async both use `default`.
+AAC candidates also use the default generator, each with its own reset cache.
+
+```yaml
+compile_enabled: false
+dit_cache_enabled: true
+dit_cache_modes: [default, rtc]
+```
+
+RTC requires an eager, single-stream, full-horizon backend with CFG scale 1.
+A recomputed step runs the joint forward and RTC VJP, then caches video velocity
+and **corrected** action velocity. A hit reuses both without a forward or VJP;
+current schedule deltas still advance both latents. Native cosine tests, threshold
+and maximum consecutive skips are unchanged. Cache state is reset per generation.
+This is an approximate RTC variant, not numerical equivalence to uncached RTC.
+PAINT and AutoHorizon run uncached even if the master switch is on; adding them to
+`dit_cache_modes` fails. Compiled RTC is rejected. True batch mode disables both
+compilation and cache as before.
+
+`sampling_stats` in single-stream YAM responses carries cache status and counters;
+RTC also returns `rtc` with model/guidance evaluations and cache hits. These are
+Python counters, not per-step timing probes. Native cache similarity checks retain
+their existing scalar synchronization. Real-checkpoint speed and task quality must
+be measured separately; synthetic CPU checks do not establish them.
+
+Shared request validation lives in `utils/sampling_contracts.py` without Torch/JAX
+imports. `utils/flow_sampling.py::rtc_correction` owns only the Torch clean-estimate
+VJP. Normalization, time/sign/scale conventions, schedulers and native JAX hooks
+stay with each model.

@@ -59,34 +59,20 @@ class RtcSampler(EulerSampler):
                 sample = x.detach().requires_grad_(True)
                 v = velocity(sample, t)
                 clean = sample + (1 - t) * v
-                error = ((target - clean) * weights).detach()
-                correction = torch.autograd.grad(clean, sample, grad_outputs=error)[0]
+                correction = rtc_correction(clean, sample, target, weights)
                 scale = beta if t == 0 else min(beta, (t * t + (1 - t) ** 2) / (t * (1 - t)))
                 x = (sample + (v + scale * correction) / self.num_steps).detach()
         return x
 
 
-def validate_samples(sampling):
-    if set(sampling) - {"mode", "num_samples"}:
-        raise ValueError("AAC only accepts num_samples")
-    count = sampling.get("num_samples", 20)
-    if isinstance(count, bool) or not isinstance(count, int) or count < 2:
-        raise ValueError("AAC num_samples must be an integer greater than one")
-    return count
+def rtc_correction(clean, sample, target, weights):
+    """Single-step clean-estimate VJP; callers own time/sign/scale conventions.
 
-
-def validate_prefix(sampling, horizon, width):
-    import numpy as np
-
-    if set(sampling) - {"mode", "action_prefix", "delay_steps"}:
-        raise ValueError("PAINT only accepts action_prefix and delay_steps")
-    delay = sampling.get("delay_steps")
-    if isinstance(delay, bool) or not isinstance(delay, int) or not 0 < delay < horizon:
-        raise ValueError("PAINT delay_steps must be an integer in (0, horizon)")
-    prefix = np.asarray(sampling.get("action_prefix"), dtype=np.float32)
-    if prefix.shape != (delay, width) or not np.isfinite(prefix).all():
-        raise ValueError(f"PAINT prefix must be finite with shape {(delay, width)}")
-    return prefix, delay
+    No validation, device transfer or scalar extraction in this hot path.
+    The caller must enable autograd and construct clean from sample.
+    """
+    error = ((target - clean) * weights).detach()
+    return torch.autograd.grad(clean, sample, grad_outputs=error)[0]
 
 
 def action_attention(query, key, *, horizon, mask=None):

@@ -312,6 +312,13 @@ class JointInferenceEngine(BaseInferenceEngine):
             offset=linear_offset,
         )
 
+        # The adapter selects per request; default preserves upstream behavior.
+        # Never swap engine._dit_cache: reset and selection are local to this call.
+        use_dit_cache = conditions.get("use_dit_cache", True)
+        if not isinstance(use_dit_cache, bool):
+            raise ValueError("use_dit_cache must be a boolean")
+        dit_cache = self._dit_cache if use_dit_cache else None
+
         # Reset dit cache for each generation
         if self._dit_cache is not None:
             self._dit_cache.reset()
@@ -347,7 +354,7 @@ class JointInferenceEngine(BaseInferenceEngine):
                 "input_video_latents": conditions.get("input_video_latents", None),
                 "num_inference_steps": denoise_steps,
                 "shift": shift,
-                "dit_cache": self._dit_cache,
+                "dit_cache": dit_cache,
                 "decode_video": self._decode_video,
                 "profile": self._profile,
                 "vace_cache": self._vace_cache,
@@ -360,9 +367,12 @@ class JointInferenceEngine(BaseInferenceEngine):
         )
         result = self.architecture.generate(**generate_kwargs)
 
-        # Attach optimization stats if profiling
-        if self._profile and self._dit_cache is not None:
-            result["dit_cache_stats"] = self._dit_cache.stats
+        # Python counters only: do not add device synchronization for telemetry.
+        result["dit_cache_stats"] = {"enabled": dit_cache is not None}
+        if dit_cache is not None:
+            result["dit_cache_stats"].update(
+                dit_cache.stats, max_consecutive_skips=dit_cache.max_consecutive_skips
+            )
 
         return result
 

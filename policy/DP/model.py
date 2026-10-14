@@ -167,7 +167,7 @@ class Model(ModelTemplate):
         return self._decode_actions(actions[0])
 
     def get_action_aac(self, sampling):
-        from XPolicyLab.utils.flow_sampling import validate_samples
+        from XPolicyLab.utils.sampling_contracts import validate_samples
         count = validate_samples(sampling)
         if not self._latest_env_idx_list or len(self._latest_env_idx_list) != 1:
             raise ValueError("AAC requires exactly one observation")

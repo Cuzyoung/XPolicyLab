@@ -73,10 +73,23 @@ def _is_none_like(value: Any) -> bool:
     return isinstance(value, str) and value.strip().lower() in {"", "none", "null"}
 
 
+def _parse_dit_cache_modes(model_cfg):
+    """Resolve the allowlist once, before loading weights or serving requests."""
+    modes = model_cfg.get("dit_cache_modes", ["default"])
+    if not isinstance(modes, (list, tuple)) or any(
+        not isinstance(mode, str) or mode not in {"default", "rtc"} for mode in modes
+    ):
+        raise ValueError("dit_cache_modes must be a list containing only default and/or rtc")
+    if len(set(modes)) != len(modes):
+        raise ValueError("dit_cache_modes must not contain duplicate modes")
+    return tuple(modes)
+
+
 def _configure_deploy_runtime(deploy_cfg, model_cfg: Mapping[str, Any]) -> bool:
     """Apply XPolicy mode constraints and return whether true batching is enabled."""
     from omegaconf import OmegaConf
 
+    cache_modes = _parse_dit_cache_modes(model_cfg)
     eval_batch = _is_true(model_cfg.get("eval_batch", False))
     if eval_batch:
         OmegaConf.update(deploy_cfg, "optimization.dit_cache.enabled", False, merge=False)
@@ -96,6 +109,12 @@ def _configure_deploy_runtime(deploy_cfg, model_cfg: Mapping[str, Any]) -> bool:
                 _is_true(model_cfg["compile_enabled"]),
                 merge=False,
             )
+    if (
+        "rtc" in cache_modes
+        and OmegaConf.select(deploy_cfg, "optimization.dit_cache.enabled")
+        and OmegaConf.select(deploy_cfg, "optimization.compile.enabled")
+    ):
+        raise ValueError("RTC DiT caching requires compile_enabled: false")
     OmegaConf.update(deploy_cfg, "optimization.decode_video", False, merge=False)
     OmegaConf.update(deploy_cfg, "inference.inference_mode", "sync", merge=False)
     return eval_batch
@@ -279,6 +298,9 @@ def _to_pil(value: Any, ctx: str):
 class Model(ModelTemplate):
     def __init__(self, model_cfg):
         self.model_cfg = dict(model_cfg)
+        self._dit_cache_modes = _parse_dit_cache_modes(self.model_cfg)
+        self._compile_enabled = _is_true(self.model_cfg.get("compile_enabled", True))
+        self._last_sampling_stats = {}
         self._metadata = validate_deployment(self.model_cfg)
         self.eval_batch = _is_true(self.model_cfg.get("eval_batch", False))
 
@@ -367,6 +389,7 @@ class Model(ModelTemplate):
 
         deploy_cfg = _load_deploy_yaml(deploy_config)
         self.eval_batch = _configure_deploy_runtime(deploy_cfg, self.model_cfg)
+        self._compile_enabled = bool(OmegaConf.select(deploy_cfg, "optimization.compile.enabled"))
 
         print(f"[OpenWAM] loading checkpoint from {ckpt_dir} on {device} ...")
         server = build_server_from_config(deploy_cfg, ckpt_dir, device=device)
@@ -395,6 +418,7 @@ class Model(ModelTemplate):
             "video_num_frames": OmegaConf.select(server.cfg, "inference.video_num_frames"),
             "replan_steps": self.replan_steps or "full chunk",
             "dit_cache": OmegaConf.select(server.cfg, "optimization.dit_cache.enabled"),
+            "dit_cache_modes": list(self._dit_cache_modes),
             "compile": OmegaConf.select(server.cfg, "optimization.compile.enabled"),
         }
         print(f"[OpenWAM] initialized | {resolved}")
@@ -555,7 +579,8 @@ class Model(ModelTemplate):
         env_idx = self._order[0] if self._order else 0
         actions = self.get_action_batch([env_idx])[0]
         if self.observation_profile == "yam_base":
-            return {"actions": actions, "action_semantics": "absolute_per_arm_base_xyz_wxyz"}
+            return {"actions": actions, "action_semantics": "absolute_per_arm_base_xyz_wxyz",
+                    "sampling_stats": dict(self._last_sampling_stats)}
         return actions
 
     def _generate_single(self, payload: dict) -> list[dict]:
@@ -563,7 +588,8 @@ class Model(ModelTemplate):
         # Explicit matrix seed settings also apply to its default-sampler baselines.
         if "inference_seed" in self.model_cfg:
             conditions["seed"] = self._next_sampling_seed()
-        result = self._engine.generate(conditions)
+        result = self._generate(conditions)
+        self._last_sampling_stats = result["dit_cache_stats"]
         actions = result["actions"]
         if hasattr(actions, "cpu"):
             actions = actions.detach().cpu().numpy()
@@ -632,6 +658,9 @@ class Model(ModelTemplate):
         self._batch = {}
         self._order = []
         self._sampling_rng = np.random.default_rng(int(self.model_cfg.get("inference_seed", 0)))
+        self._last_sampling_stats = {}
+        if self._engine is not None and self._engine._dit_cache is not None:
+            self._engine._dit_cache.reset()
 
     def sampling_modes(self):
         if self.allow_dummy_policy or self._engine is None or self.observation_profile != "yam_base":
@@ -639,8 +668,8 @@ class Model(ModelTemplate):
         if self.replan_steps != int(self._engine.cfg.inference.num_frames) - 1:
             return ["default"]
         modes = ["default", "aac"]
-        # Differentiable RTC and attention capture must not reuse stale DiT results.
-        if self.model_cfg.get("compile_enabled", True) or self._engine._dit_cache is not None:
+        # Each request selects its cache explicitly; PAINT/attention never reuse it.
+        if self._compile_enabled or self.eval_batch:
             return modes
         import inspect
         arch = self._engine.architecture
@@ -652,6 +681,12 @@ class Model(ModelTemplate):
         if getattr(arch, "mot_driver", None) is not None and int(self._engine.cfg.inference.denoise_steps) >= 3:
             modes.append("autohorizon")
         return modes
+
+    def _generate(self, conditions, mode="default"):
+        """Route cache per request without mutating the shared engine's cache."""
+        return self._engine.generate({
+            **conditions, "use_dit_cache": mode in self._dit_cache_modes,
+        })
 
     def _next_sampling_seed(self):
         if not hasattr(self, "_sampling_rng"):
@@ -677,19 +712,19 @@ class Model(ModelTemplate):
         return raw
 
     def get_action_aac(self, sampling):
-        from XPolicyLab.utils.flow_sampling import validate_samples
+        from XPolicyLab.utils.sampling_contracts import validate_samples
         count = validate_samples(sampling)
         if "aac" not in self.sampling_modes():
             raise ValueError("AAC is unavailable for the loaded OpenWAM backend")
         # Independent seeds are essential: engine.generate otherwise defaults to 42.
-        return {"actions": [self._decode_sampling_result(self._engine.generate(self._sampling_conditions()))
+        return {"actions": [self._decode_sampling_result(self._generate(self._sampling_conditions()))
                             for _ in range(count)]}
 
     def _sample_conditioned(self, sampling, mode):
         from .sampling import JointFlowSampler, normalize_action
-        from XPolicyLab.utils.flow_sampling import validate_prefix
+        from XPolicyLab.utils.sampling_contracts import validate_prefix, validate_rtc
         if mode not in self.sampling_modes():
-            raise ValueError(f"OpenWAM {mode} needs an eager compatible backend with DiT cache disabled")
+            raise ValueError(f"OpenWAM {mode} needs an eager, single-stream, full-horizon backend with CFG scale 1")
         arch = self._engine.architecture
         horizon = int(self._engine.cfg.inference.num_frames)-1
         target = weights = delay = None
@@ -700,20 +735,16 @@ class Model(ModelTemplate):
             raw[:delay] = prefix
             target = normalize_action(arch, raw)
         elif mode == "rtc":
-            if set(sampling) != {"mode", "action_condition", "condition_weights", "beta"}:
-                raise ValueError("RTC requires action_condition, condition_weights and beta")
-            raw = np.asarray(sampling["action_condition"], dtype=np.float32)
-            if raw.shape != (horizon, 20) or not np.isfinite(raw).all():
-                raise ValueError("OpenWAM RTC condition must be finite raw EEF20 [H,20]")
+            raw, weights, beta = validate_rtc(sampling, horizon, 20)
             target = normalize_action(arch, raw)
-            weights, beta = sampling["condition_weights"], float(sampling["beta"])
         elif set(sampling) != {"mode"}:
             raise ValueError("AutoHorizon accepts no overrides")
         loop = JointFlowSampler(arch, mode, target=target, weights=weights, delay=delay, beta=beta)
-        result = self._engine.generate({**self._sampling_conditions(), "denoise_loop": loop})
+        result = self._generate({**self._sampling_conditions(), "denoise_loop": loop}, mode)
         raw = self._decode_sampling_result(result)
-        if mode != "rtc":
-            raw[mode] = loop.metadata
+        raw[mode] = loop.metadata
+        if mode == "rtc":
+            raw["sampling_stats"] = dict(loop.metadata)
         return raw
 
     def get_action_rtc(self, sampling):
@@ -729,5 +760,6 @@ class Model(ModelTemplate):
         return {**self._metadata, "replan_steps": self.replan_steps,
                 "conditioned_sampler": "joint_flow_v1",
                 "sampling_seed": int(self.model_cfg.get("inference_seed", 0)),
-                "compile_enabled": self.model_cfg.get("compile_enabled", True),
+                "compile_enabled": self._compile_enabled,
+                "dit_cache_modes": list(self._dit_cache_modes),
                 "dit_cache_enabled": self._engine is not None and self._engine._dit_cache is not None}

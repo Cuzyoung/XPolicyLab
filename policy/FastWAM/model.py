@@ -226,7 +226,7 @@ class Model(ModelTemplate):
         return int(self._sampling_rng.integers(0, 2**31 - 1))
 
     def get_action_aac(self, sampling):
-        from XPolicyLab.utils.flow_sampling import validate_samples
+        from XPolicyLab.utils.sampling_contracts import validate_samples
 
         self._require_sampling("aac")
         count = validate_samples(sampling)
@@ -236,7 +236,7 @@ class Model(ModelTemplate):
 
     def _sample_conditioned(self, sampling, mode):
         from .sampling import ActionFlowSampler, normalize_actions
-        from XPolicyLab.utils.flow_sampling import validate_prefix
+        from XPolicyLab.utils.sampling_contracts import validate_prefix, validate_rtc
 
         self._require_sampling(mode)
         horizon = self.action_horizon
@@ -249,13 +249,8 @@ class Model(ModelTemplate):
             raw[:delay] = prefix
             target = normalize_actions(self.model, raw)
         elif mode == "rtc":
-            if set(sampling) != {"mode", "action_condition", "condition_weights", "beta"}:
-                raise ValueError("RTC requires action_condition, condition_weights and beta")
-            raw = np.asarray(sampling["action_condition"], dtype=np.float32)
-            if raw.shape != (horizon, width) or not np.isfinite(raw).all():
-                raise ValueError(f"FastWAM RTC condition must be finite raw joint actions [{horizon},{width}]")
+            raw, weights, beta = validate_rtc(sampling, horizon, width)
             target = normalize_actions(self.model, raw)
-            weights, beta = sampling["condition_weights"], float(sampling["beta"])
         elif set(sampling) != {"mode"}:
             raise ValueError("AutoHorizon accepts no overrides")
         sampler = ActionFlowSampler(mode, target=target, weights=weights, beta=beta, delay=delay)

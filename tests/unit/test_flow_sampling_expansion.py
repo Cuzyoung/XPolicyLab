@@ -4,7 +4,8 @@ import pytest
 import torch
 
 from XPolicyLab.utils.flow_sampling import (EulerSampler, PaintSampler, RtcSampler,
-    AutoHorizonSampler, action_attention, validate_samples, validate_prefix)
+    AutoHorizonSampler, action_attention)
+from XPolicyLab.utils.sampling_contracts import validate_samples, validate_prefix
 from XPolicyLab.policy.OpenWAM.sampling import JointFlowSampler, normalize_action
 from XPolicyLab.policy.DP.rtc import guided_prediction
 
@@ -173,7 +174,7 @@ def test_lingbot_capabilities_do_not_claim_cropped_or_compiled_attention():
 
 def test_openwam_specialized_seeds_are_independent_and_reset_reproducible():
     from XPolicyLab.policy.OpenWAM.model import Model
-    model=object.__new__(Model);model.model_cfg={'inference_seed':12};model._conditions=lambda obs:dict(obs)
+    model=object.__new__(Model);model._engine=None;model.model_cfg={'inference_seed':12};model._conditions=lambda obs:dict(obs)
     def run():
         model.reset();model._order=[0];model._batch={0:{'proprio':'same'}}
         return [model._sampling_conditions() for _ in range(5)]
@@ -186,7 +187,7 @@ def test_openwam_capabilities_match_cache_cfg_and_full_horizon():
     from XPolicyLab.policy.OpenWAM.model import Model
     model=object.__new__(Model)
     model.allow_dummy_policy=False;model.observation_profile='yam_base'
-    model.model_cfg={'compile_enabled':False};model.replan_steps=4
+    model.model_cfg={'compile_enabled':False};model._compile_enabled=False;model.eval_batch=False;model.replan_steps=4
     model._engine=SimpleNamespace(_dit_cache=None,_cfg_scale=1.,
         architecture=SimpleNamespace(generate=lambda denoise_loop=None:None,mot_driver=object()),
         cfg=SimpleNamespace(inference=SimpleNamespace(num_frames=5,denoise_steps=5)))
@@ -194,6 +195,8 @@ def test_openwam_capabilities_match_cache_cfg_and_full_horizon():
     model._engine._cfg_scale=2.
     assert model.sampling_modes()==['default','aac']
     model._engine._cfg_scale=1.;model._engine._dit_cache=object()
+    assert set(model.sampling_modes())=={'default','rtc','paint','aac','autohorizon'}
+    model._compile_enabled=True
     assert model.sampling_modes()==['default','aac']
     model.replan_steps=2
     assert model.sampling_modes()==['default']

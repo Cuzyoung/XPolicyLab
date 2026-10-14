@@ -11,7 +11,7 @@ import math
 import numpy as np
 import torch
 
-from XPolicyLab.utils.flow_sampling import ActionAttentionCapture
+from XPolicyLab.utils.flow_sampling import ActionAttentionCapture, rtc_correction
 
 
 def normalize_actions(policy, actions):
@@ -68,8 +68,7 @@ class ActionFlowSampler:
                     if guided:
                         sigma = time / float(scheduler.num_train_timesteps)
                         clean = sample - sigma * v
-                        error = ((target - clean) * weights).detach()
-                        correction = torch.autograd.grad(clean, sample, grad_outputs=error)[0]
+                        correction = rtc_correction(clean, sample, target, weights)
                         t = 1 - sigma
                         scale = ((t * t + sigma * sigma) / (t * sigma).clamp_min(1e-12)).clamp_max(self.beta)
                         v = v - scale * correction

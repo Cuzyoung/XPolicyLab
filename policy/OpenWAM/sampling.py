@@ -11,7 +11,7 @@ import math
 import numpy as np
 import torch
 
-from XPolicyLab.utils.flow_sampling import ActionAttentionCapture
+from XPolicyLab.utils.flow_sampling import ActionAttentionCapture, rtc_correction
 
 
 def normalize_action(architecture, actions):
@@ -49,6 +49,12 @@ class JointFlowSampler:
         inactive_action_dims=None,
     ):
         arch = self.arch
+        if dit_cache is not None:
+            if self.mode != "rtc":
+                raise ValueError("Only RTC supports DiT caching in conditioned OpenWAM sampling")
+            # Also enforce isolation for direct sampler callers (engine resets too).
+            dit_cache.reset()
+        model_evaluations = guidance_evaluations = cache_hits = 0
         if cfg_scale_f != 1.0:
             raise ValueError("Conditioned OpenWAM sampling currently requires cfg_scale=1")
         if len(schedule) < 2 or schedule[-1] != (0.0, 0.0):
@@ -91,6 +97,7 @@ class JointFlowSampler:
         nfa = float(arch.action_scheduler.num_train_timesteps)
 
         def integrate(initial, grid, *, guided=False, capture_third=False):
+            nonlocal model_evaluations, guidance_evaluations, cache_hits
             x = initial.clone()
             for i, ((tv, ta), (tv_next, ta_next)) in enumerate(zip(grid, grid[1:])):
                 sv, sa = float(tv) / nfv, float(ta) / nfa
@@ -100,22 +107,38 @@ class JointFlowSampler:
                 attention_context = (
                     capture.attach([arch.mot_driver]) if capture_third and i == 2 else nullcontext()
                 )
-                with attention_context, torch.set_grad_enabled(guided):
-                    sample = x.detach().requires_grad_(guided)
-                    vvideo, vaction = arch.forward(sample, at, **inputs, timestep=vt)
-                    if vaction is None:
-                        raise RuntimeError("OpenWAM did not produce action velocity")
-                    if guided:
-                        clean = sample - sa * vaction
-                        error = ((target - clean) * weights).detach()
-                        correction = torch.autograd.grad(clean, sample, grad_outputs=error)[0]
-                        time = 1 - sa
-                        scale = (
-                            self.beta
-                            if time <= 0
-                            else min(self.beta, (time * time + sa * sa) / max(time * sa, 1e-12))
-                        )
-                        vaction = vaction - scale * correction
+                # Match the native video-stepping cache gate. Action-only grid
+                # steps are recomputed, and never alter the video cache history.
+                video_stepping = tv != tv_next
+                reuse = (
+                    dit_cache is not None and video_stepping
+                    and not dit_cache.should_recompute(sv, require_action=True)
+                )
+                if reuse:
+                    vvideo, vaction = dit_cache.get_cached(), dit_cache.get_cached_action()
+                    cache_hits += 1
+                else:
+                    with attention_context, torch.set_grad_enabled(guided):
+                        sample = x.detach().requires_grad_(guided)
+                        vvideo, vaction = arch.forward(sample, at, **inputs, timestep=vt)
+                        model_evaluations += 1
+                        if vaction is None:
+                            raise RuntimeError("OpenWAM did not produce action velocity")
+                        if guided:
+                            clean = sample - sa * vaction
+                            correction = rtc_correction(clean, sample, target, weights)
+                            time = 1 - sa
+                            scale = (
+                                self.beta
+                                if time <= 0
+                                else min(self.beta, (time * time + sa * sa) / max(time * sa, 1e-12))
+                            )
+                            vaction = vaction - scale * correction
+                            guidance_evaluations += 1
+                    if dit_cache is not None and video_stepping:
+                        # Store corrected action velocity; the native similarity
+                        # test sees the same prediction used by the integrator.
+                        dit_cache.update(vvideo, sv, vaction)
                 x = (x + dsa * vaction.detach()).detach()
                 if inactive_action_dims is not None:
                     x[..., inactive_action_dims] = inactive_noise[..., inactive_action_dims] * (
@@ -146,6 +169,20 @@ class JointFlowSampler:
         result = integrate(
             noise, schedule, guided=self.mode == "rtc", capture_third=self.mode == "autohorizon"
         )
+        if self.mode == "rtc":
+            self.metadata = {
+                "num_steps": len(schedule) - 1,
+                "model_evaluations": model_evaluations,
+                "guidance_evaluations": guidance_evaluations,
+                "cache_hits": cache_hits,
+                "dit_cache_enabled": dit_cache is not None,
+            }
+            if dit_cache is not None:
+                self.metadata["dit_cache"] = {
+                    **dit_cache.stats,
+                    "max_consecutive_skips": dit_cache.max_consecutive_skips,
+                    "action_prediction": "rtc_corrected",
+                }
         if self.mode == "autohorizon":
             self.metadata = capture.metadata()
         return result

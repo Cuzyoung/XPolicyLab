@@ -4,7 +4,6 @@
 #!/usr/bin/python3
 """
 import dataclasses
-import math
 import sys
 from importlib import metadata as package_metadata
 from pathlib import Path
@@ -338,32 +337,10 @@ class Model(ModelTemplate):
         return action_list[0]
 
     def get_action_rtc(self, sampling: dict[str, Any]):
-        required = {"action_condition", "condition_weights", "beta"}
-        missing = sorted(required - set(sampling))
-        if missing:
-            raise ValueError(f"RTC sampling is missing fields: {missing}")
-
-        condition = np.array(
-            sampling["action_condition"], dtype=np.float32, copy=True
+        from XPolicyLab.utils.sampling_contracts import validate_rtc
+        condition, weights, beta = validate_rtc(
+            sampling, self.action_horizon, self.robot_action_dim or self.action_dim, copy=True
         )
-        weights = np.array(
-            sampling["condition_weights"], dtype=np.float32, copy=True
-        )
-        beta = float(sampling["beta"])
-        expected_action_dim = self.robot_action_dim or self.action_dim
-        if condition.shape != (self.action_horizon, expected_action_dim):
-            raise ValueError(
-                "action_condition must have shape "
-                f"{(self.action_horizon, expected_action_dim)}, got {condition.shape}"
-            )
-        if weights.shape != (self.action_horizon,):
-            raise ValueError(
-                f"condition_weights must have shape {(self.action_horizon,)}, got {weights.shape}"
-            )
-        if not np.isfinite(condition).all() or not np.isfinite(weights).all():
-            raise ValueError("RTC sampling arrays must be finite")
-        if not math.isfinite(beta) or beta <= 0:
-            raise ValueError(f"RTC beta must be finite and positive, got {beta}")
 
         return self.get_action(
             action_condition=condition,
