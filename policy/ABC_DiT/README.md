@@ -2,7 +2,7 @@
 
 **Contributor:** ManiMux maintainers | **Paper:** [Scalable Behavior Cloning with Open Data, Training, and Evaluation](https://abc.bot/abc.pdf) | **arXiv:** Not available | **Original code:** [amazon-far/abc](https://github.com/amazon-far/abc)
 
-`ABC_DiT` serves the official ABC-DiT policy (DINOv3 ViT-B/16 vision, CLIP ViT-B/32 task text, DiT-XL rectified-flow action head, 2.02B parameters) for a bimanual YAM: three RGB cameras plus 14-D joint state in, a 30-step chunk of absolute joint positions out. It supports default sampling, the official ABC RTC — training-time action-prefix conditioning served through the `paint` sampling mode (`get_action_paint`) — and Physical Intelligence inference-time RTC (`get_action_rtc`). The inference source is vendored unmodified under `upstream/` (provenance in [upstream/UPSTREAM.md](upstream/UPSTREAM.md)).
+`ABC_DiT` serves the official ABC-DiT policy (DINOv3 ViT-B/16 vision, CLIP ViT-B/32 task text, DiT-XL rectified-flow action head, 2.02B parameters) for a bimanual YAM: three RGB cameras plus 14-D joint state in, a 30-step chunk of absolute joint positions out. It supports default sampling, the official ABC RTC — training-time action-prefix conditioning served through the `train_time_rtc` sampling mode (`get_action_train_time_rtc`) — and Physical Intelligence inference-time RTC (`get_action_rtc`). The inference source is vendored unmodified under `upstream/` (provenance in [upstream/UPSTREAM.md](upstream/UPSTREAM.md)).
 
 Shared conventions — argument meanings, checkpoint naming, split-machine deployment, `EVAL_ENV_TYPE` — are documented in the [XPolicyLab README](../../README.md). Official results: [RoboDojo LeaderBoard](https://robodojo-benchmark.com/LeaderBoard).
 
@@ -45,7 +45,7 @@ EVAL_ENV_TYPE=debug bash eval.sh <bench_name> <task_name> <ckpt_path> yam_dual j
 | `camera_map` | ABC camera key → observation camera name; keys must be exactly `top`, `left`, `right` (scene, left wrist, right wrist) |
 | `prompt` | non-empty: fixed instruction for every request; empty: use the observation's `instruction` |
 | `num_steps` | Euler flow steps (default 10) |
-| `rtc_prefix_length` | hard prefix rows for `get_action_paint` (official 4; must be below the checkpoint's `max_action_prefix`) |
+| `rtc_prefix_length` | model-conditioning rows for `get_action_train_time_rtc` (official 4; must be below the checkpoint's `max_action_prefix`) |
 | `inference_seed` | seeds the initial-noise sequence; `reset()` restarts it |
 | `fast_inference` | bf16 weights + `torch.compile` + CUDA graph; also precompiles the RTC path at startup |
 | `allow_tf32` | TF32 matmuls when `fast_inference` is off |
@@ -61,5 +61,5 @@ PYTHONPATH=<workspace>:<workspace>/XPolicyLab <policy_venv>/bin/python -m pytest
 
 ## Notes
 
-- `get_action_paint(action_prefix (d, 14), delay_steps d)`: `action_prefix` holds the `d` actions that run while the request is in flight, row 0 at the observation. The last `p = rtc_prefix_length` rows condition upstream `sample_actions_rtc`; the reply is `action_prefix[:d-p]` followed by the new chunk, cut to 30 rows, so rows `[0, d)` repeat the prefix and new actions start at row `d` — the same switch point as upstream `_RTCManager` with `lead = d`.
+- `get_action_train_time_rtc(prefix_steps d, action_condition (30, 14), condition_weights (30,))`: requires a contiguous binary mask for the first `d` rows. These rows are the runtime's fixed lead. The last `p = min(rtc_prefix_length, d)` rows condition upstream `sample_actions_rtc`; the reply prepends the earlier `d-p` rows, cuts to 30 rows, and exactly preserves the first `d` actions. Thus model prefix 4 and runtime lead 7 keep the upstream switch point. With `d=0`, omit condition/weights and use the ordinary sampler. Metadata is returned under `train_time_rtc`; ABC does not advertise or implement PAINT inversion.
 - `fast_inference` integrates the flow in bf16, which quantizes outputs to about 0.008 rad; the official deploy command runs fp32.

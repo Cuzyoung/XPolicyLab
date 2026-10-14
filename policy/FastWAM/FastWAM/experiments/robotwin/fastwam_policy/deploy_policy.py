@@ -155,6 +155,7 @@ class WorldActionRobotWinPolicy:
         tiled: bool,
         timing_enabled: bool,
         num_video_frames: int,
+        training_video_size=None,
     ) -> None:
         model_cfg_copy = OmegaConf.create(OmegaConf.to_container(model_cfg, resolve=True))
         model_cfg_copy.load_text_encoder = True
@@ -178,6 +179,7 @@ class WorldActionRobotWinPolicy:
         self.tiled = bool(tiled)
         self.timing_enabled = bool(timing_enabled)
         self._num_video_frames = int(num_video_frames)
+        self.training_video_size = training_video_size
 
         self.pending_actions: deque[np.ndarray] = deque()
         self.episode_count = 0
@@ -219,6 +221,12 @@ class WorldActionRobotWinPolicy:
         return denorm.numpy()
 
     def _build_robotwin_image_tensor(self, observation: Dict[str, Any]) -> torch.Tensor:
+        if self.training_video_size is not None:
+            from XPolicyLab.policy.FastWAM.preprocessing import prepare_robotwin_image
+
+            return prepare_robotwin_image(
+                observation, self.processor, self.training_video_size
+            ).to(device=self.model.device, dtype=self.model.torch_dtype)
         obs_data = observation["observation"]
         head = _resize_rgb(obs_data["head_camera"]["rgb"], (320, 256))
         left = _resize_rgb(obs_data["left_camera"]["rgb"], (160, 128))
@@ -233,7 +241,10 @@ class WorldActionRobotWinPolicy:
         image_tensor = image_tensor * (2.0 / 255.0) - 1.0
         return image_tensor
 
-    def _infer_action_chunk(self, observation: Dict[str, Any], instruction: str) -> np.ndarray:
+    def _infer_action_chunk(
+        self, observation: Dict[str, Any], instruction: str, *, denoise_loop=None,
+        sampling_seed: Optional[int] = None,
+    ) -> np.ndarray:
         image_tensor = self._build_robotwin_image_tensor(observation)
         state_vector = np.asarray(observation["joint_action"]["vector"], dtype=np.float32)
         proprio = self._normalize_state(state_vector)
@@ -248,12 +259,14 @@ class WorldActionRobotWinPolicy:
             "text_cfg_scale": self.text_cfg_scale,
             "num_inference_steps": self.num_inference_steps,
             "sigma_shift": self.sigma_shift,
-            "seed": self.seed,
+            "seed": self.seed if sampling_seed is None else sampling_seed,
             "rand_device": self.rand_device,
             "tiled": self.tiled,
         }
         if "num_video_frames" in inspect.signature(self.model.infer_action).parameters:
             infer_kwargs["num_video_frames"] = int(self._num_video_frames)
+        if denoise_loop is not None:
+            infer_kwargs["denoise_loop"] = denoise_loop
         infer_t0 = time.perf_counter() if self.timing_enabled else 0.0
         with torch.no_grad():
             pred = self.model.infer_action(**infer_kwargs)
@@ -324,6 +337,12 @@ def get_model(usr_args: Dict[str, Any]):
         sim_cfg_name=sim_cfg_name,
         sim_task=sim_task,
     )
+    if not _is_none_like(usr_args.get("training_config_path")):
+        from XPolicyLab.policy.FastWAM.deployment_config import use_training_config
+
+        cfg = use_training_config(cfg, usr_args["training_config_path"])
+        if cfg.data.train.concat_multi_camera != "robotwin":
+            raise ValueError("Saved deployment config must use the robotwin camera layout.")
 
     checkpoint_path = usr_args.get("ckpt_setting")
     if _is_none_like(checkpoint_path):
@@ -387,6 +406,8 @@ def get_model(usr_args: Dict[str, Any]):
         tiled=tiled,
         timing_enabled=timing_enabled,
         num_video_frames=(int(cfg.data.train.num_frames) - 1) // int(cfg.data.train.action_video_freq_ratio) + 1,
+        training_video_size=(cfg.data.train.video_size
+                             if not _is_none_like(usr_args.get("training_config_path")) else None),
     )
     return policy
 

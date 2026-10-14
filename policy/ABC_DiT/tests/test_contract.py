@@ -110,20 +110,35 @@ def test_rtc_validates_and_returns_a_chunk(tiny_checkpoint):
 
 
 @needs_clip
-def test_paint_uses_abc_prefix_conditioning(tiny_checkpoint):
+def test_train_time_rtc_uses_abc_prefix_conditioning(tiny_checkpoint):
     model = Model(config(tiny_checkpoint))
     model.update_obs(observation())
     prefix = np.random.default_rng(2).normal(size=(7, 14)).astype(np.float32)
     prefix[:, [6, 13]] = 0.5
-    result = model.get_action_paint({"action_prefix": prefix, "delay_steps": 7})
+    condition = np.zeros((30, 14), np.float32)
+    condition[:7] = prefix
+    sampling = {"prefix_steps": 7, "action_condition": condition,
+                "condition_weights": (np.arange(30) < 7).astype(float)}
+    result = model.get_action_train_time_rtc(sampling)
     actions = np.stack([np.concatenate([a["left_arm_joint_state"], a["left_ee_joint_state"],
                                         a["right_arm_joint_state"], a["right_ee_joint_state"]])
                         for a in result["actions"]])
     assert actions.shape == (30, 14)
     assert np.allclose(actions[:7], prefix)
-    assert result["paint"]["prefix_length"] == 4 and result["paint"]["method"] == "abc_action_prefix"
-    with pytest.raises(ValueError, match="action_prefix"):
-        model.get_action_paint({"action_prefix": prefix[:3], "delay_steps": 7})
+    assert result["train_time_rtc"]["model_prefix_steps"] == 4
+    assert result["train_time_rtc"]["prefix_steps"] == 7
+    assert not hasattr(model, "get_action_paint")
+    with pytest.raises(ValueError, match="action_condition"):
+        model.get_action_train_time_rtc({**sampling, "action_condition": prefix[:3]})
+    with pytest.raises(ValueError, match="binary prefix"):
+        model.get_action_train_time_rtc({**sampling, "condition_weights": np.linspace(1, 0, 30)})
+    model.reset()
+    model.update_obs(observation())
+    ordinary = model.get_action()
+    model.reset()
+    model.update_obs(observation())
+    zero = model.get_action_train_time_rtc({"prefix_steps": 0})
+    assert all(np.array_equal(a[k], b[k]) for a, b in zip(ordinary, zero) for k in a)
 
 
 @needs_clip

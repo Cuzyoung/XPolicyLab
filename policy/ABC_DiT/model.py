@@ -249,7 +249,7 @@ class Model(ModelTemplate):
         zeros = np.zeros((m.chunk_length, m.action_dim), np.float32)
         graph.capture(warmup_obs, zeros, 8)
         self._fast_graph = graph
-        # Official ABC RTC (get_action_paint) at the configured prefix length, as upstream warmup_rtc.
+        # Train-time RTC at the configured model prefix length, as upstream warmup_rtc.
         prefix_graph = FastRTCInferenceGraph(self, self.rtc_prefix_length)
         prefix_graph.capture(warmup_obs, zeros, zeros, replay_warmups=8)
         self._fast_prefix_graph = prefix_graph
@@ -408,41 +408,45 @@ class Model(ModelTemplate):
             raise ValueError(f"RTC beta must be finite and positive, got {beta}")
         return self._decode(self._infer(condition, weights, beta))
 
-    def get_action_paint(self, sampling: dict[str, Any]):
-        """Official ABC RTC (training-time action-prefix conditioning) on the PAINT schedule.
+    def get_action_train_time_rtc(self, sampling: dict[str, Any]):
+        """Hard-prefix continuation on the generic train-time RTC wire contract.
 
-        ManiMux sends the ``d`` rows that execute while this request is in flight,
-        with row 0 at the observation. Upstream ``_RTCManager`` conditions the new
-        chunk's rows [0, p) on the last ``p`` of those rows and switches to its row
-        ``p``. Returning ``prefix[:d - p]`` followed by that chunk keeps row 0 at the
-        observation: rows [0, d) replay the old actions and the new ones start at ``d``.
+        ``prefix_steps`` counts all committed rows that must remain unchanged.
+        The model conditions on their last ``rtc_prefix_length`` rows, preserving
+        upstream _RTCManager's lead/prefix distinction. Prepending the earlier
+        rows keeps the returned horizon anchored to the request observation.
         """
-        required = {"action_prefix", "delay_steps"}
-        missing = sorted(required - set(sampling))
-        if missing:
-            raise ValueError(f"PAINT sampling is missing fields: {missing}")
         m = self.model_config
-        delay = int(sampling["delay_steps"])
-        prefix = np.array(sampling["action_prefix"], dtype=np.float32, copy=True)
-        if not 0 < delay < m.chunk_length:
-            raise ValueError(f"delay_steps must satisfy 0 < d < {m.chunk_length}, got {delay}")
-        if prefix.shape != (delay, m.action_dim) or not np.isfinite(prefix).all():
+        count = sampling.get("prefix_steps")
+        if type(count) is not int or not 0 <= count < m.chunk_length:
+            raise ValueError("prefix_steps must be an integer in [0, action_horizon)")
+        condition = sampling.get("action_condition")
+        weights = sampling.get("condition_weights")
+        if count == 0:
+            if condition is not None or weights is not None:
+                raise ValueError("An empty prefix must not supply a condition or weights")
+            return self.get_action()
+        expected = np.arange(m.chunk_length) < count
+        if weights is None or not np.array_equal(np.asarray(weights), expected):
+            raise ValueError("train_time_rtc requires a contiguous binary prefix mask")
+        condition = np.array(condition, dtype=np.float32, copy=True)
+        if condition.shape != (m.chunk_length, m.action_dim) or not np.isfinite(condition).all():
             raise ValueError(
-                f"action_prefix must be finite with shape {(delay, m.action_dim)}, got {prefix.shape}"
+                f"action_condition must be finite with shape {(m.chunk_length, m.action_dim)}"
             )
-        p = min(self.rtc_prefix_length, delay)
-        chunk = self._infer(action_prefix=prefix[delay - p :])
-        actions = np.concatenate([prefix[: delay - p], chunk])[: m.chunk_length]
-        actions[:delay] = prefix
+        prefix = condition[:count]
+        p = min(self.rtc_prefix_length, count)
+        chunk = self._infer(action_prefix=prefix[count - p :])
+        actions = np.concatenate([prefix[: count - p], chunk])[: m.chunk_length]
+        actions[:count] = prefix
         return {
             "actions": self._decode(actions),
-            "paint": {
-                "delay_steps": delay,
+            "train_time_rtc": {
+                "prefix_steps": count,
                 "num_steps": self.num_steps,
                 "model_evaluations": self.num_steps,
-                "inversion": "none",
                 "method": "abc_action_prefix",
-                "prefix_length": p,
+                "model_prefix_steps": p,
             },
         }
 
