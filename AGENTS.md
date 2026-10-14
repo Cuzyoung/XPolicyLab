@@ -88,8 +88,10 @@ Legacy training scripts using `utils/get_action_dim.sh` still read this reposito
 Preserve their behavior when editing existing training paths and document which
 layout source a particular entry point consumes.
 
-- **Importable root** in `policy/<POLICY>/model.py` follows the existing package setup;
-  keep model imports independent of ManiMux and its hardware dependencies.
+- **Importable root** in `policy/<POLICY>/model.py` is the parent of the checkout:
+  `Path(__file__).resolve().parent.parents[2]`, which is the same directory as
+  `Path(__file__).resolve().parents[3]`. Keep model imports independent of ManiMux
+  and its hardware dependencies.
 - **Checkpoints** resolve through `XPolicyLab.utils.checkpoint_resolver`, never by
   re-deriving checkpoint directory names in individual model adapters.
 

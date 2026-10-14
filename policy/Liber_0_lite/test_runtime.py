@@ -11,7 +11,7 @@ import pytest
 import torch
 from torchvision.transforms import Resize, functional as TF
 
-runtime = importlib.import_module('XPolicyLab.policy.liber_0_lite.liber0')
+runtime = importlib.import_module('XPolicyLab.policy.Liber_0_lite.liber0')
 preprocessing = importlib.import_module(runtime.__name__ + '.preprocessing')
 scheduler = importlib.import_module(runtime.__name__ + '.scheduler')
 backbone = importlib.import_module(runtime.__name__ + '.backbone')
@@ -91,7 +91,7 @@ def test_padding_mask_preserves_unpadded_attention():
 @pytest.mark.parametrize('corrupt', [False, True])
 def test_download_manifest_and_pinned_assets(monkeypatch, tmp_path, corrupt):
     import huggingface_hub
-    download = importlib.import_module('XPolicyLab.policy.liber_0_lite.download_checkpoint')
+    download = importlib.import_module('XPolicyLab.policy.Liber_0_lite.download_checkpoint')
     calls = []
 
     def snapshot(**kwargs):

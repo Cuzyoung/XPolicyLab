@@ -69,7 +69,7 @@ The legacy training helper `utils/get_action_dim.sh` separately reads
 registration; explicit model-serving configurations do not. Do not introduce another
 fixed-path registry in a new adapter.
 
-Two more shared entry points, so adapters do not re-derive them: the importable root in `policy/<POLICY>/model.py` is `Path(__file__).resolve().parents[2]` (the parent of this checkout — `parents[1]` or `parents[3]` is a bug), and checkpoint directories resolve through `XPolicyLab.utils.checkpoint_resolver` (`resolve_checkpoint_root`, or `build_run_dir_name` / `candidate_checkpoint_roots` when the adapter adds its own naming layer).
+Two more shared entry points, so adapters do not re-derive them: the importable root in `policy/<POLICY>/model.py` is the parent of this checkout, `Path(__file__).resolve().parent.parents[2]` (equivalently `Path(__file__).resolve().parents[3]`; counted from the policy directory, `parents[1]` or `parents[3]` is a bug), and checkpoint directories resolve through `XPolicyLab.utils.checkpoint_resolver` (`resolve_checkpoint_root`, or `build_run_dir_name` / `candidate_checkpoint_roots` when the adapter adds its own naming layer).
 
 `model.py` never decodes images. The policy server decodes every observation it forwards, so `obs["vision"][<camera>]["color"]` is always a plain image array. This holds for `update_obs` / `update_obs_batch` and for any custom RPC a policy exposes that carries an observation, so an adapter with its own deploy loop still must not decode.
 
