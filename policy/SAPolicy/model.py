@@ -129,7 +129,12 @@ def _load_spatial_align(model_cfg: Mapping[str, Any]) -> Any:
 
     model_cfg = resolve_assets(model_cfg)
     root = ensure_sapolicy_on_path(model_cfg.get("sapolicy_root") or DEFAULT_SAPOLICY_ROOT)
-    return get_model(
+    # CLIP-task checkpoints: the table path recorded at training time is cluster-local, and the
+    # checkpoint stores its eval default vector (sim bottles); task_cond_name selects another task.
+    table = model_cfg.get("task_cond_table")
+    if table:
+        model_cfg["resolved_cfg"].model.pipeline.action_cfg.task_cond_table = str(table)
+    backend = get_model(
         {
             "sapolicy_cfg": model_cfg["cfg_file"],
             "resolved_cfg": model_cfg["resolved_cfg"],
@@ -145,6 +150,15 @@ def _load_spatial_align(model_cfg: Mapping[str, Any]) -> Any:
             "tcp_forward_offset_m": float(model_cfg.get("tcp_forward_offset_m", 0.0)),
         }
     )
+    name = model_cfg.get("task_cond_name")
+    if name:
+        import torch
+
+        tbl = torch.load(str(table), map_location="cpu", weights_only=False)
+        pipeline = backend.policy.pipeline
+        vec = tbl["vecs"][tbl["task_names"].index(str(name))].float()
+        pipeline.task_default_vec.copy_(vec.to(pipeline.task_default_vec.device))
+    return backend
 
 
 class Model(ModelTemplate):
