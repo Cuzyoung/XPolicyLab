@@ -141,14 +141,15 @@ class ActionAttentionCapture:
                 owner._action_attention_capture = None
 
     def metadata(self):
-        from XPolicyLab.utils.autohorizon_official import UPSTREAM_COMMIT, bidir_soft_pointer
+        from XPolicyLab.utils.autohorizon_official import UPSTREAM_COMMIT
+        from XPolicyLab.utils.autohorizon_selection import select_horizon
 
         if not self.maps:
             raise RuntimeError("AutoHorizon sampler did not capture action attention")
         matrix = torch.stack(self.maps).mean(0)
         if matrix.shape != (self.horizon, self.horizon) or not torch.isfinite(matrix).all():
             raise ValueError("AutoHorizon received invalid action attention")
-        selected, diag = bidir_soft_pointer(matrix)
+        selected, diag = select_horizon(matrix)
         return {
             "execution_steps": int(selected),
             "denoising_step": 3,

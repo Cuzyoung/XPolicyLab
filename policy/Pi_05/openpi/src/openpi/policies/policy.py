@@ -261,7 +261,11 @@ class Policy(BasePolicy):
                 **sample_kwargs,
             )
             attention_tensor = torch.from_numpy(np.asarray(attention, dtype=np.float32))
-            execution_steps, diagnostics = bidir_soft_pointer(attention_tensor)
+            from XPolicyLab.utils.autohorizon_selection import select_horizon
+
+            execution_steps, diagnostics = select_horizon(
+                attention_tensor, selector=bidir_soft_pointer
+            )
             autohorizon_metadata = {
                 "execution_steps": int(execution_steps.item()),
                 "attention_step": 3,
