@@ -129,12 +129,12 @@ def test_invalid_cache_modes(value):
         _parse_dit_cache_modes({'dit_cache_modes':value})
 
 
-def test_config_default_and_compile_guard():
+def test_config_default_and_compiled_rtc_allowed():
     assert _parse_dit_cache_modes({})==('default',)
     assert _parse_dit_cache_modes({'dit_cache_modes':[]})==()
     cfg=OmegaConf.create({'optimization':{'compile':{'enabled':True},'dit_cache':{'enabled':True}}})
-    with pytest.raises(ValueError,match='compile_enabled'):
-        _configure_deploy_runtime(cfg,{'dit_cache_modes':['rtc']})
+    _configure_deploy_runtime(cfg,{'dit_cache_modes':['rtc']})
+    assert cfg.optimization.dit_cache.enabled and cfg.optimization.compile.enabled
     _configure_deploy_runtime(cfg,{'dit_cache_modes':['rtc'],'compile_enabled':False})
     assert cfg.optimization.dit_cache.enabled and not cfg.optimization.compile.enabled
     _configure_deploy_runtime(cfg,{'dit_cache_modes':['rtc'],'eval_batch':True})
@@ -187,7 +187,8 @@ def test_validation_is_cpu_only_and_preserves_writable_copy():
         validate_rtc({**request,'condition_weights':np.full(8,2)},8,2)
 
 
-def test_adapter_ws_rtc_response_and_mode_switching():
+@pytest.mark.parametrize('compiled', [False, True])
+def test_adapter_ws_rtc_response_and_mode_switching(compiled):
     import asyncio
     from client_server.ws.model_server import PolicyServer
     from client_server.ws.protocol.messages import MessageType
@@ -195,7 +196,7 @@ def test_adapter_ws_rtc_response_and_mode_switching():
     arch=Arch(factor=0);arch.normalizer=None
     model=object.__new__(Model)
     model.model_cfg={'inference_seed':0};model.allow_dummy_policy=False
-    model._metadata={};model._compile_enabled=False;model.eval_batch=False
+    model._metadata={};model._compile_enabled=compiled;model.eval_batch=False
     model._dit_cache_modes=('default','rtc');model._last_sampling_stats={}
     model.observation_profile='yam_base';model.replan_steps=8
     cache=DiTVelocityCache()
@@ -222,3 +223,125 @@ def test_adapter_ws_rtc_response_and_mode_switching():
         return reply
     reply=asyncio.run(run())
     assert reply.payload['sampling_stats']['cache_hits']==6
+
+
+class CompilableArch(Arch):
+    """Frozen nonlinear joint predictor; compile the network, not the sampler."""
+
+    def __init__(self, backend=None):
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.eye(2) * .1, requires_grad=False)
+        self.predict = self._predict
+        if backend is not None:
+            self.predict = torch.compile(self._predict, backend=backend, fullgraph=True)
+
+    def _predict(self, x, video):
+        return video * .01 + 1, torch.tanh(x @ self.weight) * .1 + 1
+
+    def forward(self, x, at, **kw):
+        self.calls += 1
+        return self.predict(x, kw['latents'])
+
+
+@pytest.mark.parametrize('backend', ['aot_eager', 'inductor'])
+@pytest.mark.parametrize('cached', [False, True])
+def test_compiled_rtc_forward_vjp_cache_and_default_mode_switch(backend, cached):
+    """Real CPU compilation/autograd, including inference -> grad -> inference.
+
+    This deliberately does not claim GPU kernel/CUDA graph or real-weight coverage.
+    """
+    from XPolicyLab.utils.flow_sampling import rtc_correction
+
+    eager, compiled = CompilableArch(), CompilableArch(backend)
+    noise = torch.arange(16, dtype=torch.float32).reshape(1, 8, 2) / 100
+    target, weights = torch.full_like(noise, 3.), torch.ones_like(noise)
+    corrections = []
+    for arch in (eager, compiled):
+        sample = noise.clone().requires_grad_(True)
+        _, velocity = arch.forward(sample, None, **inputs())
+        correction = rtc_correction(sample - .8 * velocity, sample, target, weights)
+        # A detached network would leave only the identity gradient from sample.
+        identity_only = (target - (sample - .8 * velocity)).detach()
+        assert not torch.allclose(correction, identity_only)
+        corrections.append(correction)
+        assert arch.weight.grad is None
+    torch.testing.assert_close(*corrections, rtol=1e-5, atol=1e-6)
+
+    caches = [DiTVelocityCache() if cached else None for _ in range(2)]
+    first_rtc = None
+    for mode in ('default', 'rtc', 'default', 'rtc'):
+        outputs, videos, metadata = [], [], []
+        for arch, cache in zip((eager, compiled), caches):
+            shared = inputs()
+            if cache is not None:
+                cache.reset()  # engine.generate's request isolation contract
+            with torch.no_grad():
+                if mode == 'rtc':
+                    loop = JointFlowSampler(arch, mode, target=target[0].numpy(),
+                                           weights=np.ones(8), beta=.1)
+                    output = loop(grid(), shared, noise, dit_cache=cache)
+                    metadata.append(loop.metadata)
+                    assert loop.metadata['guidance_evaluations'] > 0
+                    if cached:
+                        assert loop.metadata['cache_hits'] > 0
+                        assert cache.get_cached_action().grad_fn is None
+                else:
+                    output = BaseWAMArchitecture._run_joint_denoising(
+                        arch, grid(), shared, noise.clone(), dit_cache=cache,
+                        cfg_scale_f=1., cfg_merge=False, inactive_action_dims=None)
+            outputs.append(output)
+            videos.append(shared['latents'])
+            assert arch.weight.grad is None
+        torch.testing.assert_close(*outputs, rtol=1e-5, atol=1e-6)
+        torch.testing.assert_close(*videos, rtol=1e-5, atol=1e-6)
+        if mode == 'rtc':
+            assert metadata[0] == metadata[1]
+            if first_rtc is None:
+                first_rtc = outputs[1].clone()
+            else:
+                torch.testing.assert_close(first_rtc, outputs[1], rtol=0, atol=0)
+
+
+def test_compiled_rtc_capability_preserves_other_restrictions():
+    model = object.__new__(Model)
+    model.allow_dummy_policy = False
+    model.observation_profile = 'yam_base'
+    model._compile_enabled = True
+    model.eval_batch = False
+    model.replan_steps = 8
+    model._engine = SimpleNamespace(
+        architecture=SimpleNamespace(generate=lambda denoise_loop=None: None, mot_driver=object()),
+        _cfg_scale=1., cfg=SimpleNamespace(inference=SimpleNamespace(num_frames=9, denoise_steps=10)))
+    assert model.sampling_modes() == ['default', 'aac', 'rtc']
+    model._compile_enabled = False
+    assert model.sampling_modes() == ['default', 'aac', 'rtc', 'paint', 'autohorizon']
+    model._compile_enabled = True
+    model.eval_batch = True
+    assert 'rtc' not in model.sampling_modes()
+    model.eval_batch = False
+    model._engine._cfg_scale = 2.
+    assert 'rtc' not in model.sampling_modes()
+    model._engine._cfg_scale = 1.
+    model.replan_steps = 4
+    assert model.sampling_modes() == ['default']
+
+
+def test_graph_step_mark_precedes_forward_and_vjp(monkeypatch):
+    events = []
+    monkeypatch.setattr(torch.compiler, 'cudagraph_mark_step_begin', lambda: events.append('mark'))
+    arch = Arch(factor=0)
+    forward, grad = arch.forward, torch.autograd.grad
+
+    def traced_forward(*args, **kwargs):
+        events.append('forward')
+        return forward(*args, **kwargs)
+
+    def traced_grad(*args, **kwargs):
+        events.append('vjp')
+        return grad(*args, **kwargs)
+
+    arch.forward = traced_forward
+    monkeypatch.setattr(torch.autograd, 'grad', traced_grad)
+    loop = JointFlowSampler(arch, 'rtc', target=np.full((8, 2), 3.), weights=np.ones(8), beta=.1)
+    loop(grid(), inputs(), torch.zeros(1, 8, 2), dit_cache=DiTVelocityCache())
+    assert events == ['mark', 'forward', 'vjp'] * 4

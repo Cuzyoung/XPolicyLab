@@ -161,12 +161,15 @@ def test_lingbot_aac_samples_same_observation_without_updating_it():
     assert model._observations==[observation]
 
 
-def test_lingbot_capabilities_do_not_claim_cropped_or_compiled_attention():
+def test_lingbot_compiled_attention_requires_functional_predictor_and_full_horizon():
     from XPolicyLab.policy.LingBot_VLA2.model import Model
     model=object.__new__(Model);model.action_horizon=4;model.model_cfg={'use_compile':False}
-    model.model=SimpleNamespace(vla=SimpleNamespace(model=SimpleNamespace(config=SimpleNamespace(num_steps=5,n_action_steps=4))))
-    assert set(model.sampling_modes())=={'default','rtc','paint','aac','autohorizon'}
+    model.model=SimpleNamespace(vla=SimpleNamespace(model=SimpleNamespace(config=SimpleNamespace(num_steps=5,n_action_steps=4),get_predict_velocity_fn=lambda:None)))
+    assert set(model.sampling_modes())=={'default','paint','aac','autohorizon'}
+    assert not hasattr(model, 'get_action_rtc')
     model.model_cfg['use_compile']=True
+    assert 'autohorizon' in model.sampling_modes()
+    del model.model.vla.model.get_predict_velocity_fn
     assert 'autohorizon' not in model.sampling_modes()
     model.action_horizon=2
     assert model.sampling_modes()==['default','aac']
@@ -197,6 +200,6 @@ def test_openwam_capabilities_match_cache_cfg_and_full_horizon():
     model._engine._cfg_scale=1.;model._engine._dit_cache=object()
     assert set(model.sampling_modes())=={'default','rtc','paint','aac','autohorizon'}
     model._compile_enabled=True
-    assert model.sampling_modes()==['default','aac']
+    assert model.sampling_modes()==['default','aac','rtc']
     model.replan_steps=2
     assert model.sampling_modes()==['default']

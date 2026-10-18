@@ -141,11 +141,10 @@ the three matching metadata files are read from that run directory.
 - The XPolicy adapter preserves the checkpoint's native action semantics.
   ManiMux uses `lingbot_vla2_yam` to convert anchor-relative arm actions to
   canonical absolute joints while leaving grippers absolute.
-- `rtc.py` is an XPolicy sampler extension and is not part of the upstream
-  LingBot-VLA2 release; it must be evaluated separately from normal inference.
-  It supports both absolute-joint and YAM anchor-relative checkpoints. RTC
-  receives absolute joint conditions, subtracts the current observation anchor
-  before normalization for relative checkpoints, and returns native relative
-  arm actions with absolute grippers. ManiMux adds that anchor exactly once.
+- RTC was withdrawn on 2026-10-18. The conditioned sampler did not meet the
+  H=50, K=32, 30 Hz real-time budget; do not advertise or select RTC for LingBot.
+  Existing recordings are historical implementation evidence, not a validated RTC baseline.
+- `sampling.py` retains shared normalization and prefix preparation for PAINT and
+  AutoHorizon. Normal inference continues to use the original sampler.
 - Training, simulator task success and real-robot success require separate
   evidence. A successful debug loop validates wiring, not policy quality.

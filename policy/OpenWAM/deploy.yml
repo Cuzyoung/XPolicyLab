@@ -34,7 +34,7 @@ openwam_deploy_config: null
 device: cuda
 compile_enabled: true
 dit_cache_enabled: true
-# Allowlist of sampling modes: default and/or rtc. RTC requires compile_enabled: false.
+# Allowlist of sampling modes: default and/or rtc. RTC supports either compile setting.
 # Omitted => [default]; [] disables reuse for every request. PAINT/AutoHorizon are unsupported.
 dit_cache_modes: [default]
 

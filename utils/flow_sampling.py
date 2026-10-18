@@ -102,15 +102,19 @@ class AutoHorizonSampler(EulerSampler):
     """Unmodified Euler actions; official selection from the third evaluation."""
 
     @torch.no_grad()
-    def sample(self, velocity, noise, *, attention_owners):
+    def sample(self, velocity, noise, *, attention_owners=(), velocity_with_attention=None):
         if self.num_steps < 3 or noise.shape[-2] < 2:
             raise ValueError("AutoHorizon requires at least 3 steps and 2 action tokens")
         capture = ActionAttentionCapture(noise.shape[-2])
         x = noise.clone()
         for i in range(self.num_steps):
             if i == 2:
-                with capture.attach(attention_owners):
-                    v = velocity(x, i / self.num_steps)
+                if velocity_with_attention is None:
+                    with capture.attach(attention_owners):
+                        v = velocity(x, i / self.num_steps)
+                else:
+                    v, matrix = velocity_with_attention(x, i / self.num_steps)
+                    capture.maps.append(matrix)
             else:
                 v = velocity(x, i / self.num_steps)
             x = x + v / self.num_steps

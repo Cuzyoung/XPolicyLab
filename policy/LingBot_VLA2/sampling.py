@@ -1,14 +1,7 @@
-"""Sampler-level PI-guided RTC for the official LingBot-VLA2 flow model.
-
-The upstream sampler exposes the prefix cache and ``predict_velocity`` pieces
-needed by RTC but has no conditioning API. This module owns the integration
-without monkeypatching upstream classes: it runs the same Euler flow loop and
-applies VJP guidance at every denoising step.
-"""
+"""Shared normalized flow-sampling bridge for LingBot PAINT and AutoHorizon."""
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -16,64 +9,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-RTC_MODE = "pi_guided_v1"
-
-
-def guidance_scale(time: torch.Tensor, beta: float) -> torch.Tensor:
-    """Return the bounded PI RTC guidance schedule for one flow time."""
-
-    if not math.isfinite(beta) or beta <= 0:
-        raise ValueError(f"RTC beta must be finite and positive, got {beta}")
-    tau = 1.0 - time
-    denominator = torch.clamp(time * tau, min=torch.finfo(time.dtype).eps)
-    raw_scale = (time.square() + tau.square()) / denominator
-    return torch.minimum(torch.as_tensor(beta, device=time.device, dtype=time.dtype), raw_scale)
-
-
-def guided_velocity(
-    predict_velocity: Callable[[torch.Tensor], torch.Tensor],
-    x_t: torch.Tensor,
-    time: torch.Tensor,
-    action_condition: torch.Tensor,
-    condition_weights: torch.Tensor,
-    beta: float,
-) -> torch.Tensor:
-    """Apply clean-action VJP guidance to one denoising step."""
-
-    if action_condition.shape != x_t.shape:
-        raise ValueError(
-            f"RTC action_condition must have shape {tuple(x_t.shape)}, "
-            f"got {tuple(action_condition.shape)}"
-        )
-    if condition_weights.shape != x_t.shape:
-        raise ValueError(
-            f"RTC condition_weights must have shape {tuple(x_t.shape)}, "
-            f"got {tuple(condition_weights.shape)}"
-        )
-    if not torch.isfinite(action_condition).all() or not torch.isfinite(
-        condition_weights
-    ).all():
-        raise ValueError("RTC conditioning tensors must be finite")
-    if torch.any(condition_weights < 0) or torch.any(condition_weights > 1):
-        raise ValueError("RTC condition_weights must be in [0, 1]")
-
-    with torch.enable_grad():
-        sample = x_t.detach().requires_grad_(True)
-        velocity = predict_velocity(sample)
-        clean = sample - time * velocity
-        weighted_error = (action_condition - clean) * condition_weights
-        guidance = torch.autograd.grad(
-            clean,
-            sample,
-            grad_outputs=weighted_error,
-            create_graph=False,
-            retain_graph=False,
-        )[0]
-    return velocity.detach() - guidance_scale(time, beta) * guidance.detach()
-
-
 @torch.no_grad()
-def sample_actions_rtc(
+def sample_actions_flow(
     flow_model: Any,
     images: torch.Tensor,
     img_masks: torch.Tensor,
@@ -83,13 +20,12 @@ def sample_actions_rtc(
     *,
     action_condition: torch.Tensor | None,
     condition_weights: torch.Tensor | None,
-    beta: float,
     noise: torch.Tensor | None = None,
     image_grid_thw: torch.Tensor | None = None,
     _make_masks: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
     sampler=None,
 ) -> torch.Tensor:
-    """Run LingBot's native flow loop with RTC guidance on every step."""
+    """Prepare the shared visual prefix and invoke a required flow sampler."""
 
     if _make_masks is None:
         from lingbotvla.models.vla.lingbot_vla.utils import make_att_2d_masks
@@ -107,15 +43,14 @@ def sample_actions_rtc(
     if noise is None:
         noise = torch.randn(actions_shape, device=device, dtype=dtype)
     if noise.shape != actions_shape:
-        raise ValueError(f"RTC noise must have shape {actions_shape}, got {tuple(noise.shape)}")
+        raise ValueError(f"Flow sampling noise must have shape {actions_shape}, got {tuple(noise.shape)}")
 
     target = None if action_condition is None else action_condition.to(device=device, dtype=dtype)
     weights = None if condition_weights is None else condition_weights.to(device=device, dtype=dtype)
-    if sampler is None and (target is None or weights is None or target.shape != actions_shape or weights.shape != actions_shape):
-        raise ValueError(
-            "RTC normalized condition and weights must match model action shape "
-            f"{actions_shape}"
-        )
+    if sampler is None:
+        raise ValueError("A PAINT or AutoHorizon flow sampler is required")
+    if target is not None and (weights is None or target.shape != actions_shape or weights.shape != actions_shape):
+        raise ValueError(f"Normalized condition and weights must match {actions_shape}")
 
     (
         prefix_embs,
@@ -144,37 +79,22 @@ def sample_actions_rtc(
         deepstack_visual_embeds=deepstack_visual_embeds,
     )
 
-    if sampler is not None:
-        def velocity(sample, clean_time):
-            time = torch.full((batch_size,), 1.0 - clean_time, device=device, dtype=dtype)
-            return -flow_model.predict_velocity(
-                state, prefix_pad_masks, past_key_values, sample, time,
-                prefix_position_ids=prefix_position_ids)
-        return sampler(velocity, noise, target, weights)
+    select_predictor = getattr(flow_model, "get_predict_velocity_fn", None)
+    if select_predictor is None and getattr(flow_model, "_use_compile_predict_velocity", False):
+        raise RuntimeError("Compiled LingBot sampling requires get_predict_velocity_fn")
+    predict = select_predictor() if select_predictor else flow_model.predict_velocity
 
-    dt = torch.tensor(-1.0 / flow_model.config.num_steps, dtype=dtype, device=device)
-    x_t = noise
-    time = torch.tensor(1.0, dtype=dtype, device=device)
-    while time >= -dt / 2:
-        expanded_time = time.expand(batch_size)
-
-        def predict(
-            sample: torch.Tensor,
-            expanded_time: torch.Tensor = expanded_time,
-        ) -> torch.Tensor:
-            return flow_model.predict_velocity(
-                state,
-                prefix_pad_masks,
-                past_key_values,
-                sample,
-                expanded_time,
-                prefix_position_ids=prefix_position_ids,
-            )
-
-        velocity = guided_velocity(predict, x_t, time, target, weights, beta)
-        x_t = x_t + dt * velocity
-        time = time + dt
-    return x_t
+    def velocity(sample, clean_time, *, return_attention=False):
+        time = torch.full((batch_size,), 1.0 - clean_time, device=device, dtype=dtype)
+        options = {"prefix_position_ids": prefix_position_ids}
+        if return_attention:
+            options["return_action_attention"] = True
+        result = predict(state, prefix_pad_masks, past_key_values, sample, time, **options)
+        if return_attention:
+            value, attention = result
+            return -value, attention
+        return -result
+    return sampler(velocity, noise, target, weights)
 
 
 def encode_raw_condition(
@@ -187,14 +107,14 @@ def encode_raw_condition(
     arm_dims = list(robot_info["arm_dim"])
     effector_dims = list(robot_info["ee_dim"])
     if len(arm_dims) != 2 or len(effector_dims) != 2:
-        raise ValueError("LingBot RTC requires exactly two arms")
+        raise ValueError("LingBot flow sampling requires exactly two arms")
     left_arm_end = arm_dims[0]
     left_effector_end = left_arm_end + effector_dims[0]
     right_arm_end = left_effector_end + arm_dims[1]
     action_dim = right_arm_end + effector_dims[1]
     if condition.ndim != 2 or condition.shape[1] != action_dim:
         raise ValueError(
-            f"RTC raw condition must be (H, {action_dim}), got {condition.shape}"
+            f"Flow sampling raw condition must be (H, {action_dim}), got {condition.shape}"
         )
     return {
         "action.arm.position": np.concatenate(
@@ -228,17 +148,17 @@ def normalize_condition(
         relative_type = feature_transform.action_relative_type.get(action_feature)
         if relative_type != "vector":
             raise NotImplementedError(
-                f"RTC only supports vector-relative joint conditions, got {relative_type!r}"
+                f"Flow sampling only supports vector-relative joint conditions, got {relative_type!r}"
             )
         state_feature = action_feature.replace("action.", "observation.state.")
         if action_feature not in converted or state_feature not in current_state:
             raise ValueError(
-                f"RTC relative condition requires {action_feature} and {state_feature}"
+                f"Flow sampling relative condition requires {action_feature} and {state_feature}"
             )
         anchor = torch.as_tensor(current_state[state_feature], dtype=torch.float32)
         if anchor.ndim != 1 or anchor.shape[-1] != converted[action_feature].shape[-1]:
             raise ValueError(
-                f"RTC anchor {state_feature} has incompatible shape {tuple(anchor.shape)}"
+                f"Flow sampling anchor {state_feature} has incompatible shape {tuple(anchor.shape)}"
             )
         converted[action_feature] = converted[action_feature] - anchor.unsqueeze(0)
     normalized = feature_transform.normalizer.normalize(converted)
@@ -252,7 +172,7 @@ def normalize_condition(
             values = normalized[key].to(torch.float32)
             pad = max_dim - values.shape[-1]
             if pad < 0:
-                raise ValueError(f"RTC feature {key} exceeds configured max dim {max_dim}")
+                raise ValueError(f"Flow sampling feature {key} exceeds configured max dim {max_dim}")
             chunks.append(F.pad(values, (0, pad)))
             masks.append(F.pad(torch.ones(values.shape[-1]), (0, pad)))
         else:
@@ -264,19 +184,19 @@ def normalize_condition(
     tail_pad = max_action_dim - target.shape[-1]
     if tail_pad < 0:
         raise ValueError(
-            f"RTC packed condition exceeds model max_action_dim {max_action_dim}"
+            f"Flow sampling packed condition exceeds model max_action_dim {max_action_dim}"
         )
     target = F.pad(target, (0, tail_pad))
     action_mask = F.pad(action_mask, (0, tail_pad))
     weights = torch.as_tensor(condition_weights, dtype=torch.float32)
     if weights.shape != (horizon,):
-        raise ValueError(f"RTC condition_weights must have shape {(horizon,)}, got {weights.shape}")
+        raise ValueError(f"Flow sampling condition_weights must have shape {(horizon,)}, got {weights.shape}")
     padded_weights = weights[:, None] * action_mask[None, :]
     return target, padded_weights
 
 
-class LingBotRtcBridge:
-    """Run sampler-level RTC through an initialized official server instance."""
+class LingBotFlowBridge:
+    """Run PAINT/AutoHorizon through an initialized official server instance."""
 
     def __init__(
         self, server: Any, robot_info: Mapping[str, Any], *, return_relative: bool = False,
@@ -295,7 +215,7 @@ class LingBotRtcBridge:
             }
         packed = np.asarray(observation["observation.state"], dtype=np.float32)
         if packed.ndim != 1:
-            raise ValueError("RTC observation.state must be a single packed state vector")
+            raise ValueError("Flow sampling observation.state must be a single packed state vector")
         features = encode_raw_condition(packed[None, :], self.robot_info)
         return {key.replace("action.", "observation.state."): value[0]
                 for key, value in features.items()}
@@ -314,7 +234,6 @@ class LingBotRtcBridge:
         observation: Mapping[str, Any],
         action_condition: np.ndarray | None,
         condition_weights: np.ndarray | None,
-        beta: float,
         *, sampler=None,
     ) -> dict[str, np.ndarray]:
         target = weights = None
@@ -349,7 +268,7 @@ class LingBotRtcBridge:
         if grid is not None:
             grid = grid.to(device="cuda", dtype=torch.long)
 
-        actions = sample_actions_rtc(
+        actions = sample_actions_flow(
             self.server.vla.model,
             images.to(device="cuda", dtype=dtype),
             img_masks.to(device="cuda"),
@@ -358,7 +277,6 @@ class LingBotRtcBridge:
             state.to(device="cuda", dtype=dtype),
             action_condition=None if target is None else target.unsqueeze(0),
             condition_weights=None if weights is None else weights.unsqueeze(0),
-            beta=beta,
             image_grid_thw=grid,
             sampler=sampler,
         )

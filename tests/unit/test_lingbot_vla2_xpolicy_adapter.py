@@ -86,3 +86,34 @@ def test_training_converter_splits_packed_yam_order() -> None:
     arms, effectors = split_yam_vector(packed)
     assert arms[0].tolist() == [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12]
     assert effectors[0].tolist() == [6, 13]
+
+
+def test_hello_reports_loaded_compile_mode_and_rejects_other_mode():
+    """Exercise the real HELLO builder and ManiMux identity comparator, without weights."""
+    import asyncio
+    from types import SimpleNamespace
+    from client_server.ws.model_server import PolicyServer, PolicyServerConfig
+    from client_server.ws.protocol.messages import MessageType
+    from client_server.ws.protocol.schemas import Frame
+    from manimux.policies.capabilities import metadata_mismatches
+
+    for enabled in (True, False):
+        adapter = object.__new__(model.Model)
+        adapter.model_cfg = {"use_compile": not enabled}
+        adapter.action_horizon = 50
+        adapter.action_semantics = model.RELATIVE_ACTION_SEMANTICS
+        adapter.deployment = dict.fromkeys(
+            ("checkpoint_path", "training_config_path", "robot_config_path", "norm_stats_path", "qwen3vl_path"), "fixture"
+        )
+        adapter.deployment["native_hz"] = 30.0
+        adapter.model = SimpleNamespace(use_compile=enabled, vla=SimpleNamespace(
+            model=SimpleNamespace(config=SimpleNamespace(num_steps=10, n_action_steps=50))))
+        server = PolicyServer(adapter, PolicyServerConfig(model_metadata={"use_compile": not enabled}))
+        reply = asyncio.run(server.process_frame(Frame(
+            message_type=MessageType.HELLO, request_id="hello", evaluation_id="offline", payload={})))
+        actual = {"server": reply.payload["server"], "model": reply.payload["model_metadata"]}
+        assert actual["model"]["use_compile"] is enabled
+        assert not metadata_mismatches({"model": {"use_compile": enabled}}, actual)
+        assert metadata_mismatches({"model": {"use_compile": not enabled}}, actual)
+        del actual["model"]["use_compile"]
+        assert "is missing" in metadata_mismatches({"model": {"use_compile": enabled}}, actual)[0]

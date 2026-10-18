@@ -117,20 +117,33 @@ none, and `[rtc]` enables RTC-only caching. Runtime Serial/Async both use `defau
 AAC candidates also use the default generator, each with its own reset cache.
 
 ```yaml
-compile_enabled: false
+compile_enabled: true
 dit_cache_enabled: true
 dit_cache_modes: [default, rtc]
 ```
 
-RTC requires an eager, single-stream, full-horizon backend with CFG scale 1.
+RTC requires a single-stream, full-horizon backend with CFG scale 1; compilation
+is permitted. The native network compile path can serve both ordinary inference
+and RTC. RTC's cache decision and VJP stay outside the compiled network region;
+autograd differentiates through its compiled forward. Model parameters are not
+updated. Each recomputed forward and its VJP share one CUDA-graph step boundary.
 A recomputed step runs the joint forward and RTC VJP, then caches video velocity
 and **corrected** action velocity. A hit reuses both without a forward or VJP;
 current schedule deltas still advance both latents. Native cosine tests, threshold
 and maximum consecutive skips are unchanged. Cache state is reset per generation.
 This is an approximate RTC variant, not numerical equivalence to uncached RTC.
 PAINT and AutoHorizon run uncached even if the master switch is on; adding them to
-`dit_cache_modes` fails. Compiled RTC is rejected. True batch mode disables both
-compilation and cache as before.
+`dit_cache_modes` fails. PAINT and AutoHorizon still require compilation disabled:
+their inversion/attention-capture paths have not been validated with compilation.
+True batch mode disables both compilation and cache as before.
+
+CPU regression tests use real `torch.compile` with `aot_eager` and `inductor` on a
+frozen nonlinear predictor. They compare forward gradients, cached/uncached RTC
+actions and video latents against eager, and switch ordinary/RTC requests without
+cache leakage. These tests do not establish real-checkpoint CUDA compatibility,
+CUDA-graph behavior, memory usage, latency or robot task success. The configuration
+flag requests compilation; upstream may fall back to eager and reports that in
+its logs. It is not evidence that every network region actually compiled.
 
 `sampling_stats` in single-stream YAM responses carries cache status and counters;
 RTC also returns `rtc` with model/guidance evaluations and cache hits. These are

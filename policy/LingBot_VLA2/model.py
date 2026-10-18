@@ -231,7 +231,7 @@ def validate_deployment(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
         "robot_config": robot_config_path,
         "norm_stats": norm_stats_path,
         "qwen3vl_config": qwen3vl_path / "config.json",
-        "rtc_integration": POLICY_DIR / "rtc.py",
+        "flow_integration": POLICY_DIR / "sampling.py",
     }
     missing = [name for name, path in required.items() if not path.is_file()]
     if missing:
@@ -471,7 +471,6 @@ def validate_deployment(model_cfg: Mapping[str, Any]) -> dict[str, Any]:
         "action_semantics": action_semantics,
         "action_horizon": action_horizon,
         "native_hz": native_hz,
-        "rtc_capability": "pi_guided_v1_sampler",
         "errors": errors,
     }
 
@@ -606,9 +605,9 @@ class Model(ModelTemplate):
         self._observations: list[dict[str, Any]] | None = None
         self._latest_env_idx_list = [0]
         self.model = self._load_official_server()
-        from .rtc import LingBotRtcBridge
+        from .sampling import LingBotFlowBridge
 
-        self._rtc_bridge = LingBotRtcBridge(
+        self._flow_bridge = LingBotFlowBridge(
             self.model, self.robot_info,
             return_relative=self.action_semantics == RELATIVE_ACTION_SEMANTICS,
         )
@@ -665,19 +664,6 @@ class Model(ModelTemplate):
     def get_action(self, **_: Any) -> object:
         return self.get_action_batch([self._latest_env_idx_list[0]])[0]
 
-    def get_action_rtc(self, sampling: Mapping[str, Any]) -> object:
-        if self._observations is None or len(self._observations) != 1:
-            raise RuntimeError("RTC requires exactly one update_obs observation")
-        from XPolicyLab.utils.sampling_contracts import validate_rtc
-        condition, weights, beta = validate_rtc(sampling, self.action_horizon, self.action_dim)
-        result = self._rtc_bridge.infer(
-            self._observations[0], condition, weights, beta
-        )
-        decoded = decode_actions(result, self.robot_info)
-        if self.action_semantics == ABSOLUTE_ACTION_SEMANTICS:
-            return decoded
-        return {"actions": decoded, "action_semantics": RELATIVE_ACTION_SEMANTICS}
-
     def _infer_one(self, observation: Mapping[str, Any]) -> object:
         if self.action_semantics == ABSOLUTE_ACTION_SEMANTICS:
             return decode_actions(self.model.infer(observation), self.robot_info)
@@ -720,14 +706,15 @@ class Model(ModelTemplate):
             "action_horizon": self.action_horizon,
             "native_hz": self.deployment["native_hz"],
             "action_semantics": self.action_semantics,
+            "use_compile": bool(self.model.use_compile),
         }
 
     def sampling_modes(self) -> list[str]:
         modes = ["default", "aac"]
         flow = self.model.vla.model
         if self.action_horizon == flow.config.n_action_steps:
-            modes.extend(["rtc", "paint"])
-            if flow.config.num_steps >= 3 and not self.model_cfg.get("use_compile", False):
+            modes.append("paint")
+            if flow.config.num_steps >= 3 and hasattr(flow, "get_predict_velocity_fn"):
                 modes.append("autohorizon")
         return modes
 
@@ -766,10 +753,11 @@ class Model(ModelTemplate):
                 raise ValueError("AutoHorizon accepts no overrides")
             def sampler(velocity, noise, target, weights):
                 actions, selected = AutoHorizonSampler(flow.config.num_steps).sample(
-                    velocity, noise, attention_owners=[flow.qwenvl_with_expert])
+                    velocity, noise, velocity_with_attention=
+                    lambda x, t: velocity(x, t, return_attention=True))
                 metadata.update(selected)
                 return actions
-        result = self._rtc_bridge.infer(self._observations[0], target, weights, 5.0, sampler=sampler)
+        result = self._flow_bridge.infer(self._observations[0], target, weights, sampler=sampler)
         result = {"actions": decode_actions(result, self.robot_info), mode: metadata}
         if self.action_semantics == RELATIVE_ACTION_SEMANTICS:
             result["action_semantics"] = RELATIVE_ACTION_SEMANTICS
