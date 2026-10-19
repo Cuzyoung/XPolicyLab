@@ -144,7 +144,19 @@ the three matching metadata files are read from that run directory.
 - RTC was withdrawn on 2026-10-18. The conditioned sampler did not meet the
   H=50, K=32, 30 Hz real-time budget; do not advertise or select RTC for LingBot.
   Existing recordings are historical implementation evidence, not a validated RTC baseline.
-- `sampling.py` retains shared normalization and prefix preparation for PAINT and
-  AutoHorizon. Normal inference continues to use the original sampler.
+- `sampling.py` owns shared normalization and prefix preparation for PAINT and
+  AutoHorizon. With `use_compile: true`, prefix preparation and the native
+  velocity predictor have independently cached compiled entries. Python owns
+  the small sampling-control loop; the large model forward remains compiled.
+  Full sampler-loop compilation was rejected after excessive cold/repeated
+  overhead in real-weight tests. Both algorithms remain inference-only and use
+  the native action expert; RTC is not reintroduced.
+- AutoHorizon receives action attention as an explicit tensor from the third
+  velocity evaluation. Horizon selection and response metadata run outside the
+  compiled region; no temporary attention hook mutates the compiled module.
+  The pinned selector and its thresholds are unchanged. Ordinary inference
+  continues to use the native sampler. Compilation is lazy: warm every selected
+  mode and measure steady-state latency, recompilation and numerical differences
+  before treating a deployment as ready.
 - Training, simulator task success and real-robot success require separate
   evidence. A successful debug loop validates wiring, not policy quality.

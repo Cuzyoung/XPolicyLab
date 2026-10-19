@@ -102,19 +102,34 @@ class AutoHorizonSampler(EulerSampler):
     """Unmodified Euler actions; official selection from the third evaluation."""
 
     @torch.no_grad()
+    def sample_with_attention(self, velocity, noise, *, velocity_with_attention):
+        """Pure tensor region; selection and Python metadata stay outside compile."""
+        if self.num_steps < 3 or noise.shape[-2] < 2:
+            raise ValueError("AutoHorizon requires at least 3 steps and 2 action tokens")
+        x = noise.clone()
+        matrix = None
+        for i in range(self.num_steps):
+            if i == 2:
+                v, matrix = velocity_with_attention(x, i / self.num_steps)
+            else:
+                v = velocity(x, i / self.num_steps)
+            x = x + v / self.num_steps
+        return x, matrix
+
+    @torch.no_grad()
     def sample(self, velocity, noise, *, attention_owners=(), velocity_with_attention=None):
+        if velocity_with_attention is not None:
+            actions, matrix = self.sample_with_attention(
+                velocity, noise, velocity_with_attention=velocity_with_attention)
+            return actions, attention_metadata(matrix, noise.shape[-2])
         if self.num_steps < 3 or noise.shape[-2] < 2:
             raise ValueError("AutoHorizon requires at least 3 steps and 2 action tokens")
         capture = ActionAttentionCapture(noise.shape[-2])
         x = noise.clone()
         for i in range(self.num_steps):
             if i == 2:
-                if velocity_with_attention is None:
-                    with capture.attach(attention_owners):
-                        v = velocity(x, i / self.num_steps)
-                else:
-                    v, matrix = velocity_with_attention(x, i / self.num_steps)
-                    capture.maps.append(matrix)
+                with capture.attach(attention_owners):
+                    v = velocity(x, i / self.num_steps)
             else:
                 v = velocity(x, i / self.num_steps)
             x = x + v / self.num_steps
@@ -145,20 +160,24 @@ class ActionAttentionCapture:
                 owner._action_attention_capture = None
 
     def metadata(self):
-        from XPolicyLab.utils.autohorizon_official import UPSTREAM_COMMIT
-        from XPolicyLab.utils.autohorizon_selection import select_horizon
-
         if not self.maps:
             raise RuntimeError("AutoHorizon sampler did not capture action attention")
         matrix = torch.stack(self.maps).mean(0)
-        if matrix.shape != (self.horizon, self.horizon) or not torch.isfinite(matrix).all():
-            raise ValueError("AutoHorizon received invalid action attention")
-        selected, diag = select_horizon(matrix)
-        return {
-            "execution_steps": int(selected),
-            "denoising_step": 3,
-            "method": "bidir_soft_pointer",
-            "upstream_commit": UPSTREAM_COMMIT,
-            "N_forward": diag["N_forward"],
-            "N_backward": diag["N_backward"],
-        }
+        return attention_metadata(matrix, self.horizon)
+
+
+def attention_metadata(matrix, horizon):
+    """Select a horizon from a returned attention tensor outside compiled code."""
+    from XPolicyLab.utils.autohorizon_official import UPSTREAM_COMMIT
+    from XPolicyLab.utils.autohorizon_selection import select_horizon
+    if matrix.shape != (horizon, horizon) or not torch.isfinite(matrix).all():
+        raise ValueError("AutoHorizon received invalid action attention")
+    selected, diag = select_horizon(matrix)
+    return {
+        "execution_steps": int(selected),
+        "denoising_step": 3,
+        "method": "bidir_soft_pointer",
+        "upstream_commit": UPSTREAM_COMMIT,
+        "N_forward": diag["N_forward"],
+        "N_backward": diag["N_backward"],
+    }

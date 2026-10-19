@@ -728,7 +728,7 @@ class Model(ModelTemplate):
         return {"actions": candidates}
 
     def _sample_flow(self, sampling, mode):
-        from XPolicyLab.utils.flow_sampling import PaintSampler, AutoHorizonSampler
+        from XPolicyLab.utils.flow_sampling import PaintSampler, AutoHorizonSampler, attention_metadata
         from XPolicyLab.utils.sampling_contracts import validate_prefix
         if self._observations is None or len(self._observations) != 1:
             raise ValueError(f"{mode} requires exactly one observation")
@@ -752,12 +752,13 @@ class Model(ModelTemplate):
             if set(sampling) != {"mode"}:
                 raise ValueError("AutoHorizon accepts no overrides")
             def sampler(velocity, noise, target, weights):
-                actions, selected = AutoHorizonSampler(flow.config.num_steps).sample(
+                return AutoHorizonSampler(flow.config.num_steps).sample_with_attention(
                     velocity, noise, velocity_with_attention=
                     lambda x, t: velocity(x, t, return_attention=True))
-                metadata.update(selected)
-                return actions
         result = self._flow_bridge.infer(self._observations[0], target, weights, sampler=sampler)
+        if mode == "autohorizon":
+            result, attention = result
+            metadata.update(attention_metadata(attention, self.action_horizon))
         result = {"actions": decode_actions(result, self.robot_info), mode: metadata}
         if self.action_semantics == RELATIVE_ACTION_SEMANTICS:
             result["action_semantics"] = RELATIVE_ACTION_SEMANTICS

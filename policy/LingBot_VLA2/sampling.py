@@ -9,6 +9,50 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+def _prepare_prefix(flow_model, images, img_masks, lang_tokens, lang_masks,
+                    image_grid_thw, make_masks):
+    (
+        prefix_embs,
+        prefix_pad_masks,
+        prefix_att_masks,
+        prefix_position_ids,
+        visual_pos_masks,
+        deepstack_visual_embeds,
+    ) = flow_model.embed_prefix(
+        images,
+        img_masks,
+        lang_tokens,
+        lang_masks,
+        image_grid_thw=image_grid_thw,
+    )
+    prefix_att_2d_masks = make_masks(prefix_pad_masks, prefix_att_masks)
+    _, past_key_values, _ = flow_model.qwenvl_with_expert.forward(
+        attention_mask=prefix_att_2d_masks,
+        position_ids=prefix_position_ids,
+        vlm_position_ids=prefix_position_ids,
+        past_key_values=None,
+        inputs_embeds=[prefix_embs, None],
+        use_cache=flow_model.config.use_cache,
+        fill_kv_cache=True,
+        visual_pos_masks=visual_pos_masks,
+        deepstack_visual_embeds=deepstack_visual_embeds,
+    )
+
+    return prefix_pad_masks, past_key_values, prefix_position_ids
+
+
+def get_prefix_fn(flow_model):
+    """Cache the tensor-heavy prefix independently from Python sampling control."""
+    if not getattr(flow_model, "_use_compile_predict_velocity", False):
+        return _prepare_prefix
+    fn = getattr(flow_model, "_compiled_sampling_prefix", None)
+    if fn is None:
+        fn = torch.compile(_prepare_prefix, fullgraph=False, dynamic=False,
+                           options={"triton.cudagraphs": False})
+        flow_model._compiled_sampling_prefix = fn
+    return fn
+
+
 @torch.no_grad()
 def sample_actions_flow(
     flow_model: Any,
@@ -52,40 +96,18 @@ def sample_actions_flow(
     if target is not None and (weights is None or target.shape != actions_shape or weights.shape != actions_shape):
         raise ValueError(f"Normalized condition and weights must match {actions_shape}")
 
-    (
-        prefix_embs,
-        prefix_pad_masks,
-        prefix_att_masks,
-        prefix_position_ids,
-        visual_pos_masks,
-        deepstack_visual_embeds,
-    ) = flow_model.embed_prefix(
-        images,
-        img_masks,
-        lang_tokens,
-        lang_masks,
-        image_grid_thw=image_grid_thw,
-    )
-    prefix_att_2d_masks = _make_masks(prefix_pad_masks, prefix_att_masks)
-    _, past_key_values, _ = flow_model.qwenvl_with_expert.forward(
-        attention_mask=prefix_att_2d_masks,
-        position_ids=prefix_position_ids,
-        vlm_position_ids=prefix_position_ids,
-        past_key_values=None,
-        inputs_embeds=[prefix_embs, None],
-        use_cache=flow_model.config.use_cache,
-        fill_kv_cache=True,
-        visual_pos_masks=visual_pos_masks,
-        deepstack_visual_embeds=deepstack_visual_embeds,
-    )
-
     select_predictor = getattr(flow_model, "get_predict_velocity_fn", None)
     if select_predictor is None and getattr(flow_model, "_use_compile_predict_velocity", False):
         raise RuntimeError("Compiled LingBot sampling requires get_predict_velocity_fn")
     predict = select_predictor() if select_predictor else flow_model.predict_velocity
 
+    prefix_pad_masks, past_key_values, prefix_position_ids = get_prefix_fn(flow_model)(
+        flow_model, images, img_masks, lang_tokens, lang_masks, image_grid_thw, _make_masks)
+
     def velocity(sample, clean_time, *, return_attention=False):
-        time = torch.full((batch_size,), 1.0 - clean_time, device=device, dtype=dtype)
+        time = ((1.0 - clean_time).to(dtype=dtype).expand(batch_size)
+                if isinstance(clean_time, torch.Tensor)
+                else torch.full((batch_size,), 1.0 - clean_time, device=device, dtype=dtype))
         options = {"prefix_position_ids": prefix_position_ids}
         if return_attention:
             options["return_action_attention"] = True
@@ -235,7 +257,7 @@ class LingBotFlowBridge:
         action_condition: np.ndarray | None,
         condition_weights: np.ndarray | None,
         *, sampler=None,
-    ) -> dict[str, np.ndarray]:
+    ) -> dict[str, np.ndarray] | tuple[dict[str, np.ndarray], torch.Tensor]:
         target = weights = None
         if action_condition is not None:
             raw_actions = encode_raw_condition(action_condition, self.robot_info)
@@ -280,6 +302,9 @@ class LingBotFlowBridge:
             image_grid_thw=grid,
             sampler=sampler,
         )
+        attention = None
+        if isinstance(actions, tuple):
+            actions, attention = actions
         transformed["actions"] = actions[0].to(dtype=torch.float32, device="cpu")
         if self.server.use_bf16:
             transformed["state"] = transformed["state"].to(torch.float32)
@@ -293,4 +318,4 @@ class LingBotFlowBridge:
             output[key] = np.asarray(result[key], dtype=np.float32)
             if self.server.use_length > 0:
                 output[key] = output[key][: self.server.use_length]
-        return output
+        return (output, attention) if attention is not None else output
