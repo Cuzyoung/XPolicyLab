@@ -1,0 +1,25 @@
+policy_name: OpenWAM_Legato
+protocol: ws
+host: localhost
+port: null
+bench_name: null
+task_name: null
+ckpt_name: null
+env_cfg_type: null
+seed: 42
+action_type: ee
+gpu_id: null
+eval_batch: false
+observation_profile: arx_x5_sim
+openwam_root: null
+ckpt_dir: null
+openwam_deploy_config: null
+device: cuda
+# These optimizations are not yet validated with the continuation sampler.
+compile_enabled: false
+dit_cache_enabled: false
+dit_cache_modes: []
+replan_steps: null
+default_instruction: follow the instruction
+allow_dummy_policy: false
+inference_seed: 0

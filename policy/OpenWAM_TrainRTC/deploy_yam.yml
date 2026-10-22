@@ -1,0 +1,27 @@
+# Set ckpt_dir to this method's trained checkpoint before serving.
+policy_name: OpenWAM_TrainRTC
+protocol: ws
+host: 127.0.0.1
+port: 8500
+bench_name: RoboDojo_real
+task_name: yam_latest_300ep
+ckpt_name: null
+ckpt_dir: null
+env_cfg_type: yam_dual
+seed: 42
+action_type: ee
+gpu_id: null
+eval_batch: false
+robot_action_dim_info: {arm_dim: [6, 6], ee_dim: [1, 1]}
+num_envs: 1
+observation_profile: yam_base
+openwam_root: null
+openwam_deploy_config: null
+device: cuda
+compile_enabled: false
+dit_cache_enabled: false
+dit_cache_modes: []
+replan_steps: 32
+allow_dummy_policy: false
+default_instruction: follow the instruction
+inference_seed: 0

@@ -1,0 +1,12 @@
+# @package _global_
+model:
+  architecture:
+    continuation:
+      method: none
+      prefix_min_steps: 0
+      prefix_max_steps: 6
+      prefix_distribution: exponential_decay
+      schedule: step
+      ramp_steps: 0
+      reference: official_code
+      num_denoise_steps: 10

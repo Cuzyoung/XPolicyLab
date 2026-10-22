@@ -1,0 +1,75 @@
+{
+  "checked_at": "2026-10-18T11:43:24.016820+00:00",
+  "scope": "local independent continuation training and inference; remote pending authentication",
+  "pytest": {
+    "passed": 129,
+    "failed": 0,
+    "files": [
+      "tests/test_continuation_training.py",
+      "tests/test_action_backbone_smoke.py",
+      "tests/model/test_compute_action_loss.py",
+      "tests/test_finetune_config_override.py",
+      "tests/test_continuation_sampling.py",
+      "tests/test_action_normalization.py"
+    ]
+  },
+  "native_hydra_entrypoint": "scripts/train.py --cfg job --resolve",
+  "disabled_mode_parity": {
+    "loss": 5.101278305053711,
+    "weights_and_gradients": "027b434d480116e090e8037cc676f22b039e0d876cdacdebe13f5d972a6da206"
+  },
+  "original_source_unchanged": true,
+  "baseline_file_count": 511,
+  "tested_compute": "CPU small real ActionDiT; mock video backbone; actual loss, AdamW and checkpoint loader",
+  "not_tested": [
+    "full-size GPU model",
+    "production dataset training",
+    "distributed DeepSpeed training",
+    "remote source/job",
+    "physical robot inference"
+  ],
+  "inference_coverage": [
+    "public-code Euler reference",
+    "zero and nonzero prefix",
+    "native generate callback",
+    "strict training-to-deploy checkpoint loader including meta construction",
+    "XPolicyLab shared server dispatch",
+    "action versus state normalization and unified scatter"
+  ],
+  "cuda_action_smoke": {
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "checks": [
+      {
+        "variant": "joint_cross_attn",
+        "method": "train_time_rtc",
+        "dtype": "bf16",
+        "loss": 1.8220844268798828,
+        "coverage": "full action forward/backward"
+      },
+      {
+        "variant": "joint_cross_attn",
+        "method": "legato",
+        "dtype": "bf16",
+        "loss": 22.038841247558594,
+        "coverage": "full action forward/backward"
+      },
+      {
+        "variant": "joint_self_attn",
+        "method": "train_time_rtc",
+        "dtype": "bf16",
+        "loss": 1.3356457948684692,
+        "coverage": "action preparation and attention projections/backward"
+      },
+      {
+        "variant": "joint_self_attn",
+        "method": "legato",
+        "dtype": "bf16",
+        "loss": 1.3431167602539062,
+        "coverage": "action preparation and attention projections/backward"
+      }
+    ],
+    "scope": "small action model only; not full OpenWAM training",
+    "source_tested": "OpenWAM_TrainRTC/OpenWAM (shared changed files checked identical below)"
+  },
+  "manimux_main_loop_modified": false
+}

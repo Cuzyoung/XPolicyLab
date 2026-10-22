@@ -1,0 +1,23 @@
+policy_name: Pi_05_TrainRTC
+protocol: ws
+host: 0.0.0.0
+port: 8000
+num_envs: 1
+robot_action_dim_info:
+  arm_dim: [6, 6]
+  ee_dim: [1, 1]
+action_type: joint
+observation_profile: yam_native
+train_config_name: pi05_yam_train_time_rtc
+repo_id: yam_latest_20261012_300ep_joint_ee_v1
+task_name: put_the_coin_into_the_bin2
+model_path: null
+num_steps: 10
+inference_seed: 0
+bench_name: yam
+ckpt_name: null
+env_cfg_type: yam_dual
+seed: 0
+gpu_id: 0
+eval_batch: false
+policy_uv_env_path: openpi
