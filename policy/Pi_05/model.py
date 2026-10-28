@@ -17,6 +17,7 @@ from openpi.training import config as _config
 from XPolicyLab.model_template import ModelTemplate
 from XPolicyLab.utils.checkpoint_resolver import candidate_checkpoint_roots
 from XPolicyLab.utils.process_data import (
+    get_batch_size,
     get_robot_action_dim_info,
     pack_robot_state,
     unpack_robot_state,
@@ -124,6 +125,14 @@ def _resolve_train_config(model_cfg: dict[str, Any]):
 
 class Model(ModelTemplate):
     def __new__(cls, model_cfg: dict[str, Any] | None = None):
+        if model_cfg is not None:
+            trace_enabled = model_cfg.get("return_denoise_trace", False)
+            if type(trace_enabled) is not bool:
+                raise ValueError("return_denoise_trace must be a boolean")
+            if trace_enabled and model_cfg.get("observation_profile") not in {
+                None, "aloha", "yam_native"
+            }:
+                raise ValueError("denoise trace supports only ALOHA/YAM native joint profiles")
         # Explicit opt-in keeps all existing ALOHA/YAM configurations unchanged.
         if (
             model_cfg is not None
@@ -142,6 +151,7 @@ class Model(ModelTemplate):
         return super().__new__(cls)
 
     def __init__(self, model_cfg: dict[str, Any]):
+        self.return_denoise_trace = model_cfg.get("return_denoise_trace", False)
         self.task_name = model_cfg["task_name"]
         self.inference_seed = model_cfg.get("inference_seed", 0)
         if (
@@ -187,11 +197,31 @@ class Model(ModelTemplate):
             raise ValueError("DROID joint-position deployment requires joint mode and a 7+1 layout")
         self.action_horizon = int(self._train_config.model.action_horizon)
         self.action_dim = int(self._train_config.model.action_dim)
+        if self.return_denoise_trace:
+            if (
+                not self._train_config.model.pi05
+                or type(self._train_config.data).__name__
+                not in {"LeRobotAlohaDataConfig", "LeRobotYamDataConfig"}
+                or self.action_type != "joint"
+                or "robot_action_dim_info" not in model_cfg
+                or self.robot_action_dim_info != {"arm_dim": [6, 6], "ee_dim": [1, 1]}
+                or self.action_dim < self.robot_action_dim
+            ):
+                raise ValueError(
+                    "denoise trace requires Pi05 ALOHA/YAM native joint data and explicit "
+                    "robot_action_dim_info={arm_dim: [6, 6], ee_dim: [1, 1]}"
+                )
+            if get_batch_size(model_cfg) != 1:
+                raise ValueError("denoise trace requires num_envs=1")
+            if type(model_cfg.get("num_steps", 10)) is not int:
+                raise ValueError("denoise trace num_steps must be a positive integer")
         self.num_steps = int(model_cfg.get("num_steps", 10))
         if self.num_steps <= 0:
             raise ValueError(f"num_steps must be positive, got {self.num_steps}")
 
         self.policy = self.get_model(model_cfg=model_cfg)
+        if self.return_denoise_trace and self.policy._is_pytorch_model:
+            raise ValueError("denoise trace supports only the JAX backend")
         self.policy.reset_rng(self.inference_seed)
         self.model = self.policy
 
@@ -219,6 +249,8 @@ class Model(ModelTemplate):
 
     def sampling_modes(self) -> list[str]:
         """Advertise hooks supported by the loaded backend and denoising budget."""
+        if getattr(self, "return_denoise_trace", False):
+            return ["default"]
         if self.observation_profile == "droid_jointpos" or self.policy._is_pytorch_model:
             return ["default"]
         modes = ["default", "rtc", "aac", "paint"]
@@ -303,7 +335,7 @@ class Model(ModelTemplate):
         execution["rng"] = (
             "policy_owned_torch_generator" if is_pytorch else "policy_owned_jax_key"
         ) if backend is not None else None
-        return {
+        metadata = {
             "policy_family": "pi05",
             "task_name": self.task_name,
             "action_type": self.action_type,
@@ -319,11 +351,27 @@ class Model(ModelTemplate):
             "observation_profile": self.observation_profile,
             "execution": execution,
         }
+        if getattr(self, "return_denoise_trace", False):
+            metadata["denoise_trace"] = {
+                "enabled": True,
+                "schema_version": 1,
+                "field": "v",
+                "axes": ["denoising_step", "action_step", "model_action"],
+                "coordinate_space": "normalized_model",
+                "velocity_kind": "raw_network_velocity",
+                "model_action_dim": self.action_dim,
+                "valid_action_indices": list(range(self.robot_action_dim)),
+                "dtype": "float32",
+                "supported_modes": ["default"],
+            }
+        return metadata
 
     def update_obs(self, obs):
         self.update_obs_batch([obs])
 
     def update_obs_batch(self, obs_list):
+        if getattr(self, "return_denoise_trace", False) and len(obs_list) != 1:
+            raise ValueError("denoise trace requires exactly one observation")
         self._latest_env_idx_list = [
             obs.get("env_idx", index) for index, obs in enumerate(obs_list)
         ]
@@ -493,18 +541,46 @@ class Model(ModelTemplate):
         return {"actions": decoded, "autohorizon": metadata}
 
     def get_action_batch(self, env_idx_list=None, **kwargs):
+        if "return_denoise_trace" in kwargs:
+            raise ValueError("return_denoise_trace is a deployment option, not a request option")
         if self.observation_profile == "droid_jointpos" and set(kwargs) - {"num_steps", "noise"}:
             raise ValueError("DROID deployment currently supports default sampling only")
         if self.observation_window is None:
             raise AssertionError("update_obs or update_obs_batch first!")
 
         env_idx_list = env_idx_list or self._latest_env_idx_list
-        # actions = self.policy.infer(self.observation_window, **kwargs)["actions"]
+        trace_enabled = getattr(self, "return_denoise_trace", False)
+        if trace_enabled:
+            if len(env_idx_list) != 1 or len(self._latest_env_idx_list) != 1:
+                raise ValueError("denoise trace requires exactly one observation")
+            if set(kwargs) - {"num_steps", "noise"}:
+                raise ValueError("denoise trace supports default single-sample inference only")
+            kwargs.setdefault("num_steps", self.num_steps)
+            if type(kwargs["num_steps"]) is not int or kwargs["num_steps"] <= 0:
+                raise ValueError("denoise trace num_steps must be a positive integer")
+            kwargs["return_denoise_trace"] = True
         action_list = []
 
         for batch_index, _ in enumerate(env_idx_list):
             single_observation = slice_stacked_obs(self.observation_window, batch_index)
-            actions = self.policy.infer(single_observation, **kwargs)["actions"]
+            result = self.policy.infer(single_observation, **kwargs)
+            actions = result["actions"]
+            if trace_enabled:
+                trace = result.get("denoise_trace")
+                if not isinstance(trace, dict) or "v" not in trace:
+                    raise ValueError("denoise_trace.v is missing from Pi05 inference output")
+                velocity = np.asarray(trace["v"], dtype=np.float32)
+                expected = (kwargs["num_steps"], self.action_horizon, self.action_dim)
+                if velocity.shape != expected or not np.isfinite(velocity).all():
+                    raise ValueError(
+                        f"denoise_trace.v must be finite with shape {expected}, got {velocity.shape}"
+                    )
+                actions = np.asarray(actions)
+                expected_actions = (self.action_horizon, self.robot_action_dim)
+                if actions.shape != expected_actions or not np.isfinite(actions).all():
+                    raise ValueError(
+                        f"trace actions must be finite with shape {expected_actions}, got {actions.shape}"
+                    )
             if self.observation_profile == "droid_jointpos":
                 actions = np.asarray(actions).copy()
                 if actions.shape != (self.action_horizon, 8) or not np.isfinite(actions).all():
@@ -525,6 +601,11 @@ class Model(ModelTemplate):
                         source_type="obs",
                     )
                 )
+            if trace_enabled:
+                action_list[-1] = {
+                    "actions": action_list[-1],
+                    "denoise_trace": {"v": velocity},
+                }
 
         return action_list
 
