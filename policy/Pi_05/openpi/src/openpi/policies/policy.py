@@ -60,6 +60,7 @@ class Policy(BasePolicy):
         self._is_pytorch_model = is_pytorch
         self._pytorch_device = pytorch_device
         self._torch_generator: torch.Generator | None = None
+        self._sample_actions_trace = None
 
         if self._is_pytorch_model:
             self._model = self._model.to(pytorch_device)
@@ -109,7 +110,28 @@ class Policy(BasePolicy):
         paint_action_condition: np.ndarray | None = None,
         paint_delay_steps: int | None = None,
         autohorizon: bool = False,
+        return_denoise_trace: bool = False,
     ) -> dict:  # type: ignore[misc]
+        if not isinstance(return_denoise_trace, bool):
+            raise ValueError("return_denoise_trace must be a bool")
+        trace_num_steps = None
+        if return_denoise_trace:
+            if self._is_pytorch_model or not getattr(self._model, "pi05", False):
+                raise NotImplementedError("denoising traces are only implemented for JAX Pi05")
+            if num_samples != 1:
+                raise ValueError("denoising traces require one action sample")
+            if (
+                action_condition is not None
+                or condition_weights is not None
+                or paint_action_condition is not None
+                or paint_delay_steps is not None
+                or autohorizon
+                or set(self._sample_kwargs) - {"num_steps", "noise"}
+            ):
+                raise ValueError("denoising traces only support default sampling")
+            trace_num_steps = num_steps if num_steps is not None else self._sample_kwargs.get("num_steps", 10)
+            if isinstance(trace_num_steps, bool) or not isinstance(trace_num_steps, int) or trace_num_steps <= 0:
+                raise ValueError("denoising traces require a positive integer num_steps")
         if num_steps is not None and num_steps <= 0:
             raise ValueError(f"num_steps must be positive, got {num_steps}")
         if num_samples <= 0:
@@ -170,6 +192,18 @@ class Policy(BasePolicy):
             first_image = next(iter(inputs["image"].values()))
             is_batched = np.asarray(first_image).ndim > 3
 
+        if return_denoise_trace:
+            state_shape = np.asarray(inputs["state"]).shape
+            if len(state_shape) not in (1, 2) or (is_batched and state_shape[0] != 1):
+                raise ValueError("denoising traces require one observation")
+            if self._sample_actions_trace is None:
+                # Trace length changes the output shape. Create its static-step
+                # wrapper only when requested, without changing default startup.
+                self._sample_actions_trace = nnx_utils.module_jit(
+                    self._model.sample_actions,
+                    static_argnames=("num_steps", "return_attention", "return_denoise_trace"),
+                )
+
         if not self._is_pytorch_model:
             if not is_batched:
                 inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
@@ -190,6 +224,8 @@ class Policy(BasePolicy):
         sample_kwargs = dict(self._sample_kwargs)
         if num_steps is not None:
             sample_kwargs["num_steps"] = int(num_steps)
+        if return_denoise_trace:
+            sample_kwargs["num_steps"] = trace_num_steps
         if num_samples > 1:
             sample_kwargs["num_samples"] = int(num_samples)
         if noise is not None:
@@ -253,7 +289,15 @@ class Policy(BasePolicy):
         if num_samples > 1:
             output_state = jnp.repeat(output_state, num_samples, axis=0)
         autohorizon_metadata = None
-        if autohorizon:
+        velocity_trace = None
+        if return_denoise_trace:
+            actions, velocity_trace = self._sample_actions_trace(
+                sample_rng_or_pytorch_device,
+                observation,
+                return_denoise_trace=True,
+                **sample_kwargs,
+            )
+        elif autohorizon:
             actions, attention = sample_actions(
                 sample_rng_or_pytorch_device,
                 observation,
@@ -297,6 +341,10 @@ class Policy(BasePolicy):
             outputs = jax.tree.map(np.asarray, outputs)
 
         outputs = self._output_transform(outputs)
+        if return_denoise_trace:
+            # Only actions pass through the profile's output transforms. Trace
+            # coordinates and all model dimensions stay exactly as sampled.
+            outputs["denoise_trace"] = {"v": np.asarray(velocity_trace[0], dtype=np.float32)}
         outputs["policy_timing"] = {
             "infer_ms": model_time * 1000,
         }
