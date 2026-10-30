@@ -55,9 +55,9 @@ video noise/target, loss weights and optimizer loop retain their existing code.
 Native action loss reduction and scheduler weights are preserved. RTC combines
 its prefix mask with existing padding masks; it does not rescale by action dim.
 
-Legato additionally supports `reference=official_code` (PLUS target) and
-`reference=paper_v2` (MINUS target); these are different experiments, never an
-implicit fallback. Conditioning input is always `w = 1 - omega`. The output and
+Legato defaults to `reference=official_20261020`, the corrected upstream MINUS
+target. Historical `official_code` retains the old PLUS target and `paper_v2`
+retains MINUS, so saved configurations are never silently reinterpreted. Conditioning input is always `w = 1 - omega`. The output and
 normalizer retain D action dimensions; only action encoder input becomes D+1.
 Base-checkpoint finetuning expands one input weight column with zeros and retains
 all other weights strictly. Same-method checkpoints reload without expansion.
@@ -68,11 +68,12 @@ this action grid; video shift is untouched. For a controlled baseline comparison
 set shift_action=1.0 on the `continuation=none` control too. Nonuniform Legato grids
 are rejected. Step schedules follow public code; `schedule=linear` with positive
 `ramp_steps` is an explicit extension (d full rows, r intermediate rows, then zero).
-The official code and paper use opposite target signs; no claim of equivalence is made.
+The official 2026-10-20 correction aligns the target sign with the paper. The
+existing OpenWAM scheduler weighting, data and optimizer remain native adaptations.
 
 References:
 - Training RTC: https://github.com/Physical-Intelligence/real-time-chunking-kinetix/blob/9296f31d62d5bfeb5779dcb2f9bcf71ca37f448b/src/model.py
-- Legato code: https://github.com/lyfeng001/Legato-kinetix/blob/d302701268aa3a50ec7f07189cc3af3b31014f63/src/model_legato.py
+- Legato code: https://github.com/lyfeng001/Legato-kinetix/blob/5caa03316fd2a7c9d9cd5dd37d7af710a9e25daa/src/model_legato.py
 - Legato paper: https://arxiv.org/html/2602.12978v2 (Algorithm 1 / Eq. 15)
 
 ## Data and training

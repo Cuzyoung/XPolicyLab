@@ -8,7 +8,7 @@ The existing native LeRobot **dataset** dependency is retained.
 ## References and adaptation
 
 - Training-time RTC: [official code](https://github.com/Physical-Intelligence/real-time-chunking-kinetix/blob/9296f31d62d5bfeb5779dcb2f9bcf71ca37f448b/src/model.py).
-- Legato: [official code](https://github.com/lyfeng001/Legato-kinetix/blob/d302701268aa3a50ec7f07189cc3af3b31014f63/src/model_legato.py).
+- Legato: [official code](https://github.com/lyfeng001/Legato-kinetix/blob/5caa03316fd2a7c9d9cd5dd37d7af710a9e25daa/src/model_legato.py).
 
 These reference implementations use a Kinetix MLP Mixer, not this Pi05 model.
 This port retains Pi05 SigLIP/Gemma, preprocessing, joint delta targets,
@@ -19,8 +19,8 @@ RTC replaces a randomly sized prefix by ground truth, gives those action tokens
 `sigma=0` through per-token adaRMS, and trains the remaining suffix. The loss is
 normalized by the number of valid suffix tokens. Legato passes the guided action
 and one extra weight channel to the input projection; it still predicts D action
-coordinates. Its target follows the published implementation's **PLUS** formula:
-`(noise - action) * (1 + omega * num_denoise_steps * sigma)`.
+coordinates. Its target follows the official 2026-10-20 corrected **MINUS** formula:
+`(noise - action) * (1 - omega * num_denoise_steps * sigma)`.
 `omega=1` in the fixed prefix; the appended channel is `w=1-omega`.
 
 Both inference loops update **from the guided state** each Euler step. There is
@@ -36,6 +36,7 @@ All algorithm settings are under `model.continuation`:
 | Field | This run | Meaning |
 |---|---|---|
 | method | legato | Disabled control is `none` |
+| legato_reference | official_20261020 | Pinned corrected target; legacy_plus preserves historical semantics |
 | prefix_min_steps / prefix_max_steps | 0 / 6 | Inclusive range; RTC upstream `simulated_delay=7` |
 | prefix_distribution | bell | Also accepts uniform; bell uses official min-peak Beta(1,4) |
 | num_denoise_steps | 10 | Legato target and inference grid |
@@ -46,7 +47,10 @@ Native beta sampling and native mean loss are explicit Pi05 adaptations, so this
 is **not** an exact reproduction of the upstream Kinetix experiment. For its
 RTC time/reduction, set `time_distribution=uniform` and
 `rtc_loss_reduction=official_token_sum`; all fields support Tyro CLI overrides.
-Legato uses the public-code PLUS target, not the alternate paper-v2 MINUS target.
+`legato_reference=official_20261020` selects the corrected upstream target.
+`legacy_plus` is retained only for explicit historical reproduction. Old checkpoint
+metadata without this field is labeled legacy by the inference adapter; new training
+writes the reference into every checkpoint and cannot resume legacy metadata.
 
 ## Train
 

@@ -163,7 +163,10 @@ class Model(ModelTemplate):
         if metadata.get("schema_version") != 1 or metadata.get("model") != "pi05":
             raise ValueError("Unsupported continuation checkpoint metadata")
         from openpi.models.continuation import ContinuationConfig
-        cfg = ContinuationConfig(**metadata["continuation"])
+        continuation = dict(metadata["continuation"])
+        # Older checkpoint metadata predates the upstream target correction.
+        continuation.setdefault("legato_reference", "legacy_plus")
+        cfg = ContinuationConfig(**continuation)
         if cfg.method != "legato":
             raise ValueError("Checkpoint does not belong to this independent policy")
         if metadata["action_horizon"] != self._train_config.model.action_horizon or metadata["action_dim"] != self._train_config.model.action_dim:

@@ -19,6 +19,7 @@ class ContinuationConfig:
     num_denoise_steps: int = 10
     time_distribution: Literal['native_beta', 'uniform'] = 'native_beta'
     rtc_loss_reduction: Literal['native_mean', 'official_token_sum'] = 'native_mean'
+    legato_reference: Literal['official_20261020', 'legacy_plus'] = 'official_20261020'
 
     def validate(self, horizon, pi05=True):
         if self.method not in {'none', 'train_time_rtc', 'legato'}:
@@ -35,6 +36,8 @@ class ContinuationConfig:
             raise ValueError('Unknown time distribution')
         if self.rtc_loss_reduction not in {'native_mean', 'official_token_sum'}:
             raise ValueError('Unknown RTC loss reduction')
+        if self.legato_reference not in {'official_20261020', 'legacy_plus'}:
+            raise ValueError('Unknown Legato target reference')
 
 
 def sample_prefix(rng, batch_size, horizon, config):
@@ -62,8 +65,9 @@ def training_inputs(actions, noise, sigma, omega, config):
     guided = omega * actions + (1 - omega) * x
     if config.method == 'train_time_rtc':
         return guided, jnp.where(omega[..., 0] > 0, 0., sigma[:, None]), velocity
-    # Published Legato code's PLUS target, after reversing the flow time.
-    target = velocity * (1 + omega * config.num_denoise_steps * s)
+    # Upstream 5caa033 corrects the target sign. Reverse both time and velocity.
+    sign = 1 if config.legato_reference == 'legacy_plus' else -1
+    target = velocity * (1 + sign * omega * config.num_denoise_steps * s)
     return jnp.concatenate([guided, 1 - omega], axis=-1), sigma, target
 
 

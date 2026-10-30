@@ -62,7 +62,7 @@ def test_rtc_input_target_padding_and_gradient(dimensions):
     torch.testing.assert_close(loss, oracle)
 
 
-@pytest.mark.parametrize('reference,sign', [('official_code',1), ('paper_v2',-1)])
+@pytest.mark.parametrize('reference,sign', [('official_20261020',-1), ('official_code',1), ('paper_v2',-1)])
 def test_legato_target_matches_reference_after_time_reversal(reference, sign):
     args = batch(); a, eps, sigma, ts, x, _ = args
     cfg = ContinuationConfig(method='legato', reference=reference, num_denoise_steps=5)

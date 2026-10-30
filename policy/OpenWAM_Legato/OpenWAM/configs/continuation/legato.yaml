@@ -8,7 +8,7 @@ model:
       prefix_distribution: exponential_decay
       schedule: step
       ramp_steps: 0
-      reference: official_code
+      reference: official_20261020
       num_denoise_steps: 10
   action_backbone:
     shift_action: 1.0  # Explicit uniform action grid; video scheduler is unchanged.

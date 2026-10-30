@@ -2,8 +2,9 @@
 
 OpenWAM uses sigma=1 for noise, sigma=0 for data and predicts noise-action.
 The public Legato Kinetix implementation uses the opposite time/velocity
-direction. Its PLUS target becomes (1 + omega*N*sigma)*(noise-action) here.
-The paper-v2 MINUS target is a separately named, opt-in reference.
+direction. Upstream 5caa033 corrects the target to
+(1 - omega*N*sigma)*(noise-action) here. Historical reference names retain
+their original meaning so old saved configurations are not reinterpreted.
 """
 from dataclasses import dataclass
 
@@ -19,7 +20,7 @@ class ContinuationConfig:
     prefix_distribution: str = "exponential_decay"
     schedule: str = "step"
     ramp_steps: int = 0
-    reference: str = "official_code"
+    reference: str = "official_20261020"
     num_denoise_steps: int = 10
 
     @classmethod
@@ -34,8 +35,8 @@ class ContinuationConfig:
             raise ValueError("Require 0 <= prefix_min_steps <= prefix_max_steps (inclusive)")
         if cfg.prefix_distribution not in {"uniform", "exponential_decay"}:
             raise ValueError("prefix_distribution must be uniform or exponential_decay")
-        if cfg.reference not in {"official_code", "paper_v2"}:
-            raise ValueError("reference must be official_code or paper_v2")
+        if cfg.reference not in {"official_20261020", "official_code", "paper_v2"}:
+            raise ValueError("reference must be official_20261020, official_code (legacy PLUS), or paper_v2")
         if cfg.schedule not in {"step", "linear"} or cfg.ramp_steps < 0:
             raise ValueError("schedule must be step or linear; ramp_steps must be nonnegative")
         if cfg.schedule == "step" and cfg.ramp_steps != 0:

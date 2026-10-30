@@ -27,7 +27,7 @@ def test_training_equations_and_loss_gradient(method):
     else:
         # Independent oracle: public code time tau=1-sigma and velocity A-eps.
         tau=1-np.asarray(sigma)[:,None,None]; w=1-np.asarray(omega)
-        expected=-(np.asarray(actions-noise)*(1+(1-w)*10*(1-tau)))
+        expected=-(np.asarray(actions-noise)*(1-(1-w)*10*(1-tau)))
         np.testing.assert_allclose(target,expected,rtol=2e-6)
         np.testing.assert_array_equal(x[...,-1:],w)
     pred=target+jnp.arange(24,dtype=jnp.float32).reshape(2,4,3)/10
