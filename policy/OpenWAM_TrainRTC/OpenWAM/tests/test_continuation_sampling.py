@@ -136,20 +136,21 @@ def test_normalization_uses_action_mapping_not_proprio():
     assert not np.array_equal(result,norm.normalize(raw))
 
 
-def test_real_adapter_and_shared_server_prefix_dispatch():
+@pytest.mark.parametrize("cache_enabled", [False, True])
+def test_real_adapter_and_shared_server_prefix_dispatch(cache_enabled):
     from XPolicyLab.client_server.ws.model_server import PolicyServer
     from XPolicyLab.client_server.ws.protocol.messages import MessageType
     from XPolicyLab.client_server.ws.protocol.schemas import Frame
     from openwam.dataloader.utils import poses
     model=object.__new__(adapter.Model)
-    model.model_cfg={};model.allow_dummy_policy=False;model.observation_profile='yam_base'
+    model.model_cfg={};model._dit_cache_modes=("train_time_rtc",) if cache_enabled else ();model.allow_dummy_policy=False;model.observation_profile='yam_base'
     model.replan_steps=5;model.eval_batch=False;model._calibration=None;model._poses=poses
     model.default_instruction='test';model._format_prompt=lambda x:x
     model._preprocessor=SimpleNamespace(preprocess=lambda x:{**x,'image':x['images']['head_camera']})
     cfg=ContinuationConfig(method=adapter.CONTINUATION_METHOD,prefix_max_steps=3,num_denoise_steps=4)
     arch=SimpleNamespace(continuation=cfg,normalizer=None)
     def generate(conditions):
-        assert conditions['use_dit_cache'] is False
+        assert conditions['use_dit_cache'] is cache_enabled
         loop=conditions['denoise_loop'];assert loop.cfg==cfg and loop.prefix_steps==2
         np.testing.assert_array_equal(loop.target[:2],np.ones((2,20)))
         loop.metadata={'method':cfg.method,'prefix_steps':2}
@@ -209,3 +210,108 @@ def test_deployment_rejects_mismatched_checkpoint_before_weights(tmp_path,method
     OmegaConf.save(OmegaConf.create(cfg),str(tmp_path/'config.yaml'))
     with pytest.raises(ValueError):adapter.validate_deployment({'observation_profile':'arx_x5_sim',
         'env_cfg_type':'arx_x5','ckpt_dir':str(tmp_path)})
+
+
+@pytest.mark.parametrize("prefix", [0, 1, 3])
+def test_trainrtc_cache_preserves_prefix_and_skips_joint_forwards(prefix):
+    from openwam.deploy.optimizations.dit_cache import DiTVelocityCache
+    class StableArch(FakeArch):
+        def forward(self, x, at, **state):
+            self.seen.append((x.clone(), at.clone()))
+            return torch.ones_like(state['latents']), torch.ones_like(x)
+    arch = StableArch('train_time_rtc')
+    cache = DiTVelocityCache(cosine_threshold=.99, max_consecutive_skips=3)
+    noise = torch.ones(1, 5, 2)
+    target = torch.full_like(noise, 4.) if prefix else None
+    expected = ContinuationFlowSampler(StableArch('train_time_rtc'), target=target, prefix_steps=prefix)(grid(), inputs(), noise)
+    loop = ContinuationFlowSampler(arch, target=target, prefix_steps=prefix)
+    for _ in range(2):
+        # Reusing this object must still start with a clean cache for each request.
+        arch.seen.clear()
+        actual = loop(grid(), inputs(), noise, dit_cache=cache)
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        assert loop.metadata['model_evaluations'] == 2
+        assert cache.stats['total_skips'] == 2
+        assert len(arch.seen) == 2
+        if prefix:
+            for x, at in arch.seen:
+                torch.testing.assert_close(x[:, :prefix], target[:, :prefix])
+                assert (at[:, :prefix] == 0).all() and (at[:, prefix:] > 0).all()
+
+
+def test_trainrtc_cache_without_skips_is_exact():
+    from openwam.deploy.optimizations.dit_cache import DiTVelocityCache
+    cache = DiTVelocityCache(max_consecutive_skips=0)
+    noise = torch.arange(10.).reshape(1, 5, 2)
+    target = torch.full_like(noise, 2.)
+    kwargs = dict(target=target, prefix_steps=2)
+    expected = ContinuationFlowSampler(FakeArch('train_time_rtc'), **kwargs)(grid(), inputs(), noise)
+    sampler = ContinuationFlowSampler(FakeArch('train_time_rtc'), **kwargs)
+    actual = sampler(grid(), inputs(), noise, dit_cache=cache)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    assert sampler.metadata['model_evaluations'] == 4
+
+
+def test_trainrtc_cache_allowlist_and_compile_configuration():
+    config = OmegaConf.create({'optimization': {'compile': {'enabled': False}, 'dit_cache': {'enabled': False}}, 'inference': {}})
+    options = {'compile_enabled': True, 'dit_cache_enabled': True, 'dit_cache_modes': ['default', 'train_time_rtc']}
+    adapter._configure_deploy_runtime(config, options)
+    assert config.optimization.compile.enabled and config.optimization.dit_cache.enabled
+    assert adapter._parse_dit_cache_modes(options) == ('default', 'train_time_rtc')
+    with pytest.raises(ValueError):
+        adapter._parse_dit_cache_modes({'dit_cache_modes': ['rtc']})
+
+
+def test_compiled_native_action_helper_supports_trainrtc_per_row_time(monkeypatch):
+    # Exercise the production compilation hook with an actual Dynamo/AOT graph;
+    # CPU validation deliberately does not claim GPU Inductor performance.
+    original = torch.compile
+    compiled = []
+    def compile_cpu(fn, **kwargs):
+        result = original(fn, backend='aot_eager', fullgraph=True)
+        compiled.append(result)
+        return result
+    torch.manual_seed(4)
+    arch = _make_tiny_arch()
+    configure_architecture(arch, {'method': 'train_time_rtc', 'prefix_max_steps': 2})
+    arch.init_training_schedulers(1000)
+    arch.eval()
+    train = _make_fake_loss_inputs(B=1)
+    def state():
+        return {'latents': train['input_latents'].clone(), 'context': torch.zeros(1, 2, 64)}
+    noise = torch.randn(1, 5, 7)
+    target = torch.ones_like(noise)
+    torch.manual_seed(42)  # Mock video backbone draws random context.
+    expected = ContinuationFlowSampler(arch, target=target, prefix_steps=2)(grid(), state(), noise)
+    monkeypatch.setattr(torch, 'compile', compile_cpu)
+    arch.apply_compile_optimizations(OmegaConf.create({'enabled': True}))
+    assert compiled
+    torch.manual_seed(42)
+    actual = ContinuationFlowSampler(arch, target=target, prefix_steps=2)(grid(), state(), noise)
+    torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
+
+
+def test_engine_initializes_trainrtc_cache_and_compile_and_rejects_setup_failure():
+    from openwam.deploy.engine import JointInferenceEngine
+    cfg = OmegaConf.create({'inference': {'denoise_steps': 4},
+        'optimization': {'compile': {'enabled': True},
+                         'dit_cache': {'enabled': True, 'cosine_threshold': .99, 'max_skips': 2}}})
+    calls = []
+    arch = SimpleNamespace(continuation=ContinuationConfig(method='train_time_rtc'),
+                           apply_compile_optimizations=lambda value: calls.append(value.enabled))
+    engine = JointInferenceEngine(cfg, architecture=arch)
+    assert calls == [True] and engine._dit_cache.max_consecutive_skips == 2
+    def fail(_config):
+        raise RuntimeError('compiler setup failed')
+    arch.apply_compile_optimizations = fail
+    with pytest.raises(RuntimeError, match='TrainRTC compile setup failed'):
+        JointInferenceEngine(cfg, architecture=arch)
+
+
+def test_cache_allowlist_does_not_enable_other_sampling_modes():
+    model = object.__new__(adapter.Model)
+    model._dit_cache_modes = ('train_time_rtc',)
+    model._engine = SimpleNamespace(generate=lambda conditions: conditions)
+    assert model._generate({})['use_dit_cache'] is False
+    assert model._generate({}, mode='train_time_rtc')['use_dit_cache'] is True
+    assert model._generate({}, mode='rtc')['use_dit_cache'] is False

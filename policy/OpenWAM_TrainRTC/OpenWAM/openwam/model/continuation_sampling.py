@@ -23,8 +23,10 @@ class ContinuationFlowSampler:
     @torch.no_grad()
     def __call__(self, schedule, inputs, noise, *, dit_cache=None,
                  cfg_scale_f=1.0, cfg_merge=False, inactive_action_dims=None):
-        if dit_cache is not None or cfg_scale_f != 1.0:
-            raise ValueError("Continuation sampling requires cache disabled and CFG scale 1")
+        if cfg_scale_f != 1.0:
+            raise ValueError("Continuation sampling requires CFG scale 1")
+        if dit_cache is not None and self.cfg.method != "train_time_rtc":
+            raise ValueError("DiT cache is supported only for train_time_rtc continuation")
         cfg, arch = self.cfg, self.arch
         batch, horizon, width = noise.shape
         if self.prefix_steps + (cfg.ramp_steps if self.prefix_steps else 0) >= horizon:
@@ -65,6 +67,10 @@ class ContinuationFlowSampler:
             ramp = (self.prefix_steps + cfg.ramp_steps - positions) / (cfg.ramp_steps + 1)
             omega = torch.where(prefix, 1, ramp.clamp(0, 1)).to(noise.dtype)
         omega = omega[..., None].expand(batch, -1, -1)
+        # Each call has its own observation/condition. Never reuse another request's flow.
+        if dit_cache is not None:
+            dit_cache.reset()
+        evaluations = 0
         initial_noise = noise.clone()
         x = noise.clone()
         for (tv,ta), (vn,an) in zip(schedule, grid[1:]):
@@ -78,7 +84,15 @@ class ContinuationFlowSampler:
             else:
                 model_input = torch.cat((guided, 1-omega), dim=-1)
             vt = torch.full((batch,), float(tv), dtype=x.dtype, device=x.device)
-            vv, va = arch.forward(model_input, at, **inputs, timestep=vt)
+            if (dit_cache is not None and vn != sv
+                    and not dit_cache.should_recompute(sv, require_action=True)):
+                vv, va = dit_cache.get_cached(), dit_cache.get_cached_action()
+            else:
+                torch.compiler.cudagraph_mark_step_begin()
+                vv, va = arch.forward(model_input, at, **inputs, timestep=vt)
+                evaluations += 1
+                if dit_cache is not None and vn != sv:
+                    dit_cache.update(vv, sv, va)
             if va is None or va.shape != noise.shape:
                 raise RuntimeError("Continuation model must output D-dimensional action velocity")
             x = guided + (an-sa)*va
@@ -93,6 +107,6 @@ class ContinuationFlowSampler:
                 inputs["latents"] = video
         self.metadata = {"method": cfg.method, "reference": cfg.reference,
                          "prefix_steps": self.prefix_steps, "num_steps": len(grid)-1,
-                         "model_evaluations": len(grid)-1, "schedule": cfg.schedule,
+                         "model_evaluations": evaluations, "schedule": cfg.schedule,
                          "ramp_steps": cfg.ramp_steps, "final_prefix_clamped": False}
         return x

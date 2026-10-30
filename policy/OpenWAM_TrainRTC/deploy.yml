@@ -15,10 +15,10 @@ openwam_root: null
 ckpt_dir: null
 openwam_deploy_config: null
 device: cuda
-# These optimizations are not yet validated with the continuation sampler.
+# Optional accelerations; opt in and measure trajectory quality for your checkpoint.
 compile_enabled: false
 dit_cache_enabled: false
-dit_cache_modes: []
+dit_cache_modes: [default, train_time_rtc]
 replan_steps: null
 default_instruction: follow the instruction
 allow_dummy_policy: false

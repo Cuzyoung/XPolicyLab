@@ -150,3 +150,32 @@ and set `train_time_rtc.fixed_prefix_steps` within the trained range when using
 `delay_estimator: fixed`. Existing OpenWAM YAM FK, condition conversion and IK
 remain unchanged. Deployment recipes still need the new checkpoint identity;
 old baseline expected-artifact hashes cannot be reused.
+
+## Optional TrainRTC inference acceleration
+
+The independent TrainRTC adapter supports native compile helpers and per-request
+DiT velocity caching. Opt in in the model-server recipe:
+
+```yaml
+compile_enabled: true
+dit_cache_enabled: true
+dit_cache_modes: [default, train_time_rtc]
+```
+
+`default` uses the continuation-trained sampler with an empty prefix;
+`train_time_rtc` injects the requested old-action prefix at each denoising step
+and sets its per-row noise time to zero. Neither invokes inference-time RTC
+VJP guidance. The cache reuses both video and action velocities within a single
+request, checks both streams' stability, and resets between observations. Hard
+prefix injection, video first-frame constraints, inactive action dimensions and
+the original scheduler updates remain active even on a cache hit. This is
+approximate sampling: validate task quality and measured latency separately.
+
+The original defaults remain opt-out. Sampling metadata reports actual model
+forward counts and cache skips; runtime metadata reports the compile setting and
+available cache modes. Compile setup alone does not establish that GPU compilation
+or a particular speedup occurred. CPU regression coverage includes native action
+helper compilation through Dynamo/AOT, no-skip equivalence, cached sampling,
+request isolation and protocol dispatch. Real-checkpoint GPU latency and physical
+task success require separate validation. This change does not enable Legato cache
+or classifier-free guidance.

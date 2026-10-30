@@ -56,9 +56,9 @@ def _parse_dit_cache_modes(model_cfg):
     """Resolve the allowlist once, before loading weights or serving requests."""
     modes = model_cfg.get("dit_cache_modes", ["default"])
     if not isinstance(modes, (list, tuple)) or any(
-        not isinstance(mode, str) or mode not in {"default", "rtc"} for mode in modes
+        not isinstance(mode, str) or mode not in {"default", "train_time_rtc"} for mode in modes
     ):
-        raise ValueError("dit_cache_modes must be a list containing only default and/or rtc")
+        raise ValueError("dit_cache_modes must be a list containing only default and/or train_time_rtc")
     if len(set(modes)) != len(modes):
         raise ValueError("dit_cache_modes must not contain duplicate modes")
     return tuple(modes)
@@ -284,11 +284,9 @@ class Model(ModelTemplate):
         self.model_cfg = dict(model_cfg)
         if _is_true(self.model_cfg.get("eval_batch", False)):
             raise ValueError("Continuation adapter serves each observation sequentially; set eval_batch=false")
-        for option in ("compile_enabled", "dit_cache_enabled"):
-            if _is_true(self.model_cfg.get(option, False)):
-                raise ValueError(f"Continuation deployment currently requires {option}=false")
-            self.model_cfg[option] = False
-        self.model_cfg["dit_cache_modes"] = []
+        # Opt in explicitly; the trained sampler shares native compile/cache paths.
+        self.model_cfg.setdefault("compile_enabled", False)
+        self.model_cfg.setdefault("dit_cache_enabled", False)
         self._dit_cache_modes = _parse_dit_cache_modes(self.model_cfg)
         self._compile_enabled = _is_true(self.model_cfg.get("compile_enabled", True))
         self._last_sampling_stats = {}
@@ -662,7 +660,9 @@ class Model(ModelTemplate):
         return ["default", "train_time_rtc"]
 
     def _generate(self, conditions, mode="default"):
-        return self._engine.generate({**conditions, "use_dit_cache": False})
+        return self._engine.generate({
+            **conditions, "use_dit_cache": mode in self._dit_cache_modes,
+        })
 
     def _next_sampling_seed(self):
         if not hasattr(self, "_sampling_rng"):
@@ -679,20 +679,22 @@ class Model(ModelTemplate):
         target, prefix = parse_request(arch, sampling, horizon)
         loop = ContinuationFlowSampler(arch, target=target, prefix_steps=prefix)
         conditions = self._conditions(self._batch[self._order[0]])
-        result = self._generate({**conditions, "seed": self._next_sampling_seed(), "denoise_loop": loop})
+        result = self._generate({**conditions, "seed": self._next_sampling_seed(), "denoise_loop": loop}, mode="train_time_rtc")
         actions = result["actions"]
         if hasattr(actions, "detach"):
             actions = actions.detach().float().cpu().numpy()
         actions = self._wam_policy._project_binary_dims(np.asarray(actions))
         if actions.shape != (horizon, _EEF20_DIM):
             raise ValueError("Continuation must return the complete physical EEF20 chunk")
-        self._last_sampling_stats = dict(loop.metadata)
+        self._last_sampling_stats = {**loop.metadata, "dit_cache": result.get("dit_cache_stats", {})}
         return {"actions": self._eef20_chunk_to_native(actions),
                 "action_semantics": "absolute_per_arm_base_xyz_wxyz",
-                "sampling_stats": dict(loop.metadata)}
+                "sampling_stats": dict(self._last_sampling_stats)}
 
     def runtime_metadata(self):
         return {**self._metadata, "replan_steps": self.replan_steps,
                 "conditioned_sampler": CONTINUATION_METHOD,
                 "sampling_seed": int(self.model_cfg.get("inference_seed", 0)),
-                "compile_enabled": False, "dit_cache_enabled": False}
+                "compile_enabled": self._compile_enabled,
+                "dit_cache_enabled": self._engine is not None and self._engine._dit_cache is not None,
+                "dit_cache_modes": list(self._dit_cache_modes)}

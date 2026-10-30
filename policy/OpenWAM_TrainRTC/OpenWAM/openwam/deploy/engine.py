@@ -114,10 +114,13 @@ class JointInferenceEngine(BaseInferenceEngine):
         continuation = getattr(architecture, "continuation", None)
         if continuation is not None and continuation.method != "none":
             from omegaconf import OmegaConf
-            if OmegaConf.select(cfg, "optimization.dit_cache.enabled", default=False) or self._cfg_scale != 1.0:
-                raise ValueError("Continuation deployment requires DiT cache disabled and CFG scale 1")
-            if OmegaConf.select(cfg, "optimization.compile.enabled", default=False):
-                raise ValueError("Continuation compile is not validated; set compile.enabled=false")
+            if self._cfg_scale != 1.0:
+                raise ValueError("Continuation deployment requires CFG scale 1")
+            if continuation.method != "train_time_rtc" and (
+                OmegaConf.select(cfg, "optimization.dit_cache.enabled", default=False)
+                or OmegaConf.select(cfg, "optimization.compile.enabled", default=False)
+            ):
+                raise ValueError("Only train_time_rtc continuation supports compile/cache")
             if continuation.method == "legato" and int(cfg.inference.denoise_steps) != continuation.num_denoise_steps:
                 raise ValueError("Legato denoise_steps must match the checkpoint continuation config")
         self._init_optimizations()
@@ -210,6 +213,8 @@ class JointInferenceEngine(BaseInferenceEngine):
             try:
                 self.architecture.apply_compile_optimizations(optimization.compile)
             except Exception as e:
+                if getattr(getattr(self.architecture, "continuation", None), "method", None) == "train_time_rtc":
+                    raise RuntimeError("TrainRTC compile setup failed") from e
                 logger.warning("torch.compile optimization failed, continuing without: %s", e)
 
         # VAE decode skip
