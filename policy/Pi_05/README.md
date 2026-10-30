@@ -170,8 +170,10 @@ HELLO's `model_metadata.denoise_trace` is present only when enabled and declares
 `coordinate_space: normalized_model`, `velocity_kind: raw_network_velocity`,
 `model_action_dim`, `valid_action_indices`, `dtype: float32` and
 `supported_modes: [default]`. Clients must preserve the result mapping and check
-this contract before consuming evidence. ManiMux client preservation and AHS
-selection belong to a separate integration change.
+this contract before consuming evidence. [ManiMux #25](https://github.com/SII-LiuLab/manimux/pull/25)
+provides the downstream trace consumer and AHS selector. Its managed deployment
+must pin an XPolicyLab revision containing this output capability; adding the
+configuration flag to an older backend does not supply trace support.
 
 With the flag disabled, the original sampler loop, callable and output type are
 retained. The trace path uses a separate, lazily constructed JIT wrapper with
@@ -192,6 +194,14 @@ using the same checkpoint, normalization, observations and explicit noise.
 Check consecutive seeded requests and reset, independently verify per-step
 velocity, and measure synchronized latency, memory and payload size. CPU tests
 do not establish any of these results or physical task success.
+
+The [real-model probe](../../tests/pi05_trace/README.md#real-model-validation)
+provides baseline capture and trace-off/on comparison commands with explicit
+checkpoint, observation and noise inputs. It runs only when invoked in an existing
+model environment. It does not install dependencies, start a policy server or
+connect hardware. A passing probe covers local model inference, not the WebSocket
+debug loop or ManiMux's complete runtime. Record those checks separately before
+claiming deployment readiness. RTC+trace remains unsupported.
 
 ## Tianji pass-ball zero-pose deployment
 
