@@ -8,6 +8,8 @@ env_cfg_type: null
 seed: null
 # Sampling noise; independent of the checkpoint/training seed above.
 inference_seed: 0
+# Opt-in raw velocity evidence, JAX native-joint default sampling only.
+return_denoise_trace: false
 eval_batch: true
 
 checkpoint_num: 59999
