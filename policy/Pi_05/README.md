@@ -58,6 +58,31 @@ bash eval.sh RoboDojo stack_bowls RoboDojo-cotrain-arx_x5-joint-0 arx_x5 joint 0
 
 ## Configuration
 
+### Flexiv absolute joint profile
+
+`observation_profile: flexiv_joint` selects the deployment-only pipeline in
+`flexiv_joint.py`: left 7 joints + opening, then right 7 joints + opening;
+three RGB views; absolute targets; quantile normalization; full Pi05 with
+32 padded action coordinates and 16 native outputs. Set explicit
+`robot_action_dim_info: {arm_dim: [7, 7], ee_dim: [1, 1]}` and
+`use_delta_joint_actions: false`. ALOHA's 14-coordinate slicing and gripper
+conversion do not apply. Only default sampling is advertised.
+
+The recipe must supply `preprocessing_contract: stack_cube_joint_3cam_v1`,
+`model_path`, `checkpoint_num`, `norm_stats_path`,
+`norm_stats_sha256`, `norm_stats_source`, `repo_id`, `train_config_name`,
+`action_horizon`, `num_steps` and `action_semantics: absolute_joint_position`.
+Artifact checks validate normalization identity, finite 16-coordinate statistics
+and joint layout. This profile does not register data conversion or training in
+`process_data.sh` / `train.sh`. The supplied stack-cube training source pins
+OpenPI revision `215abfb217dbac7d5f1273282331b9b1866c0479`. Its native dataset uses
+PIL bilinear resize with rounded dimensions and centered black padding; this
+profile reproduces that step before OpenPI's transforms. A 640×480 view becomes
+224×168 with 28 black rows above/below. The submitted source's joint input/output
+transforms and the deployment were compared through normalization, tokenization
+and padding with array-equal results. `flexiv_joint.py` records the resize source
+checksum; deployment never imports the private training project.
+
 `deploy.yml` keys to check before evaluation: `checkpoint_num`, `result_dir`, `obs_transform_pipeline`, `policy_uv_env_path`, `train_config_name` (must match the config used by `train.sh`), `repo_id`.
 
 Set `inference_seed: 0` explicitly in deployment recipes (the adapter default is 0).

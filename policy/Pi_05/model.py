@@ -93,6 +93,11 @@ def _resolve_pi05_model_root(model_cfg: dict[str, Any]) -> Path:
 
 
 def _resolve_train_config(model_cfg: dict[str, Any]):
+    if model_cfg.get("observation_profile") == "flexiv_joint":
+        from .flexiv_joint import make_train_config, validate_artifacts
+
+        validate_artifacts(model_cfg)
+        return make_train_config(model_cfg)
     config = _config.get_config(model_cfg.get("train_config_name", "pi05_aloha"))
     data_updates: dict[str, Any] = {}
     for key in ("repo_id", "use_delta_joint_actions", "adapt_to_pi"):
@@ -167,7 +172,9 @@ class Model(ModelTemplate):
 
         self._train_config = _resolve_train_config(model_cfg)
         expected_profile = (
-            "yam_native"
+            "flexiv_joint"
+            if type(self._train_config.data).__name__ == "FlexivDataConfig"
+            else "yam_native"
             if type(self._train_config.data).__name__
             in {"LeRobotYamDataConfig", "LeRobotYamJointEeDataConfig"}
             else "aloha"
@@ -212,6 +219,8 @@ class Model(ModelTemplate):
 
     def sampling_modes(self) -> list[str]:
         """Advertise hooks supported by the loaded backend and denoising budget."""
+        if getattr(self, "observation_profile", None) == "flexiv_joint":
+            return ["default"]
         if self.policy._is_pytorch_model:
             return ["default"]
         modes = ["default", "rtc", "aac", "paint"]
@@ -310,6 +319,8 @@ class Model(ModelTemplate):
             "num_steps": self.num_steps,
             "inference_seed": self.inference_seed,
             "observation_profile": self.observation_profile,
+            **({"preprocessing_contract": "stack_cube_joint_3cam_v1"}
+               if self.observation_profile == "flexiv_joint" else {}),
             "execution": execution,
         }
 
@@ -522,7 +533,7 @@ def encode_obs(
     *,
     observation_profile="aloha",
 ):
-    if observation_profile == "yam_native":
+    if observation_profile in {"yam_native", "flexiv_joint"}:
         return encode_yam_obs(observation, action_type, robot_action_dim_info)
     if observation_profile != "aloha":
         raise ValueError(f"Unsupported Pi05 observation profile: {observation_profile!r}")
