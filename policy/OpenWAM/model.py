@@ -89,7 +89,7 @@ def _configure_deploy_runtime(deploy_cfg, model_cfg: Mapping[str, Any]) -> bool:
     """Apply XPolicy mode constraints and return whether true batching is enabled."""
     from omegaconf import OmegaConf
 
-    cache_modes = _parse_dit_cache_modes(model_cfg)
+    _parse_dit_cache_modes(model_cfg)
     eval_batch = _is_true(model_cfg.get("eval_batch", False))
     if eval_batch:
         OmegaConf.update(deploy_cfg, "optimization.dit_cache.enabled", False, merge=False)
@@ -109,12 +109,6 @@ def _configure_deploy_runtime(deploy_cfg, model_cfg: Mapping[str, Any]) -> bool:
                 _is_true(model_cfg["compile_enabled"]),
                 merge=False,
             )
-    if (
-        "rtc" in cache_modes
-        and OmegaConf.select(deploy_cfg, "optimization.dit_cache.enabled")
-        and OmegaConf.select(deploy_cfg, "optimization.compile.enabled")
-    ):
-        raise ValueError("RTC DiT caching requires compile_enabled: false")
     OmegaConf.update(deploy_cfg, "optimization.decode_video", False, merge=False)
     OmegaConf.update(deploy_cfg, "inference.inference_mode", "sync", merge=False)
     return eval_batch
@@ -669,7 +663,7 @@ class Model(ModelTemplate):
             return ["default"]
         modes = ["default", "aac"]
         # Each request selects its cache explicitly; PAINT/attention never reuse it.
-        if self._compile_enabled or self.eval_batch:
+        if self.eval_batch:
             return modes
         import inspect
         arch = self._engine.architecture
@@ -677,7 +671,14 @@ class Model(ModelTemplate):
             return modes
         if float(self._engine._cfg_scale) != 1.0:
             return modes
-        modes += ["rtc", "paint"]
+        # RTC differentiates the compiled forward through AOTAutograd. Its
+        # Python cache gate/VJP remain outside the compiled network region.
+        modes.append("rtc")
+        if self._compile_enabled:
+            # PAINT and the attention-capture hook are not validated with the
+            # compiled backend; do not broaden their capabilities incidentally.
+            return modes
+        modes.append("paint")
         if getattr(arch, "mot_driver", None) is not None and int(self._engine.cfg.inference.denoise_steps) >= 3:
             modes.append("autohorizon")
         return modes
@@ -724,7 +725,11 @@ class Model(ModelTemplate):
         from .sampling import JointFlowSampler, normalize_action
         from XPolicyLab.utils.sampling_contracts import validate_prefix, validate_rtc
         if mode not in self.sampling_modes():
-            raise ValueError(f"OpenWAM {mode} needs an eager, single-stream, full-horizon backend with CFG scale 1")
+            raise ValueError(
+                f"OpenWAM {mode} is unavailable for this backend; conditioned sampling "
+                "requires single-stream, full-horizon generation with CFG scale 1; "
+                "PAINT and AutoHorizon additionally require compile_enabled: false"
+            )
         arch = self._engine.architecture
         horizon = int(self._engine.cfg.inference.num_frames)-1
         target = weights = delay = None

@@ -141,11 +141,22 @@ the three matching metadata files are read from that run directory.
 - The XPolicy adapter preserves the checkpoint's native action semantics.
   ManiMux uses `lingbot_vla2_yam` to convert anchor-relative arm actions to
   canonical absolute joints while leaving grippers absolute.
-- `rtc.py` is an XPolicy sampler extension and is not part of the upstream
-  LingBot-VLA2 release; it must be evaluated separately from normal inference.
-  It supports both absolute-joint and YAM anchor-relative checkpoints. RTC
-  receives absolute joint conditions, subtracts the current observation anchor
-  before normalization for relative checkpoints, and returns native relative
-  arm actions with absolute grippers. ManiMux adds that anchor exactly once.
+- RTC was withdrawn on 2026-10-18. The conditioned sampler did not meet the
+  H=50, K=32, 30 Hz real-time budget; do not advertise or select RTC for LingBot.
+  Existing recordings are historical implementation evidence, not a validated RTC baseline.
+- `sampling.py` owns shared normalization and prefix preparation for PAINT and
+  AutoHorizon. With `use_compile: true`, prefix preparation and the native
+  velocity predictor have independently cached compiled entries. Python owns
+  the small sampling-control loop; the large model forward remains compiled.
+  Full sampler-loop compilation was rejected after excessive cold/repeated
+  overhead in real-weight tests. Both algorithms remain inference-only and use
+  the native action expert; RTC is not reintroduced.
+- AutoHorizon receives action attention as an explicit tensor from the third
+  velocity evaluation. Horizon selection and response metadata run outside the
+  compiled region; no temporary attention hook mutates the compiled module.
+  The pinned selector and its thresholds are unchanged. Ordinary inference
+  continues to use the native sampler. Compilation is lazy: warm every selected
+  mode and measure steady-state latency, recompilation and numerical differences
+  before treating a deployment as ready.
 - Training, simulator task success and real-robot success require separate
   evidence. A successful debug loop validates wiring, not policy quality.
