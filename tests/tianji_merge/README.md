@@ -68,6 +68,8 @@ Integration concerns:
   as supported; their capability negotiation now rejects RTC.
 - Upstream Cosmos3 pins `74c550f45fe536c080c0e161e43b80556d2035bd`, which its
   configured NVIDIA remote rejects with `not our ref`. The previous pin
-  `c7e8d76b5da8aeae38cdac91c6cfd57185b2f6bc` is fetchable. The integration branch
-  currently preserves the upstream pin, pending an explicit choice before
-  applying this branch to the live checkout or publishing it.
+  `c7e8d76b5da8aeae38cdac91c6cfd57185b2f6bc` is fetchable. The operator explicitly
+  chose to retain upstream's new pin and LingBot implementation on 2026-11-06,
+  because the local deployment changes do not involve those components. No
+  fallback revision is substituted. Cosmos3 recursive checkout remains an
+  upstream availability limitation, outside the passing CPU test coverage.
