@@ -91,6 +91,7 @@ The adapter implements the following WebSocket sampling modes. The handshake rep
 only modes available for the loaded backend: PyTorch exposes `default`; JAX exposes
 `default`, `rtc`, `aac` and `paint`, plus `autohorizon` with at least three denoising
 steps. Per-request parameter validation still applies.
+An opt-in denoising-trace deployment advertises only `default`, as described below.
 
 | Mode | Adapter method | OpenPI path |
 |---|---|---|
@@ -111,6 +112,96 @@ normalizes the raw robot-unit prefix with the same official input transform as m
 runs `3N` velocity evaluations without gradients. The public PAINT repository currently contains
 documentation rather than source code, so this path is an explicit paper reproduction of
 arXiv:2606.19774, not an upstream-code claim.
+
+### Optional JAX denoising traces
+
+`return_denoise_trace: false` is the deployment default. Set it to `true` in an
+existing, matching Pi05 native-joint recipe to expose raw network velocity for
+downstream analysis or adaptive-horizon methods such as ChunkTrust. This change
+does not select an execution horizon or add a ChunkTrust runtime dependency.
+
+```yaml
+# Overrides for an existing recipe with matching checkpoint and normalization.
+return_denoise_trace: true
+action_type: joint
+robot_action_dim_info: {arm_dim: [6, 6], ee_dim: [1, 1]}
+num_envs: 1
+num_steps: 10
+```
+
+The resolved model must be JAX Pi05, with `LeRobotAlohaDataConfig` or
+`LeRobotYamDataConfig`. The adapter requires the explicit 6+1/6+1 layout above
+and exactly one observation and action sample. DROID, PyTorch, Tianji, EEF and
+YAM joint+EE auxiliary profiles are not supported. Existing checkpoint-specific
+delta-action, normalization and ALOHA remapping transforms remain in effect.
+Enabling the flag does not turn one checkpoint/profile into another.
+
+This is a deployment option, not a WebSocket sampling parameter. Send ordinary
+default inference requests. A trace-enabled deployment advertises only `default`
+and rejects RTC, AAC, PAINT and AutoHorizon requests. Disable the flag to restore
+the original sampling capabilities and action-only result format.
+
+The existing `INFER_RESULT` payload gains one field:
+
+```text
+actions: original complete, decoded action chunk
+denoise_trace:
+  v: float32 array [T, H, D_model]
+```
+
+`T` is the number of denoising steps and `H` the prediction horizon. Each entry
+is the raw network velocity at the current sample **before** its Euler update,
+ordered from noise towards the final sample. The schedule starts at model time
+1 and advances by -1/T per step. This is normalized model-space velocity, not
+joint speed or a sequence of executable robot commands. Trace serialization uses
+float32 without changing the sampler's compute precision.
+
+All model dimensions are retained, including padding. For the supported data
+profiles, valid action indices are 0 through 13. The complete `[H, 14]` action
+chunk follows the original output transforms and unpacking. Trace is attached
+after those transforms and is neither unnormalized nor truncated. The adapter
+rejects missing, non-finite or incorrectly shaped trace/action output rather
+than falling back to actions without evidence. No extra network evaluation or
+RNG split is added to produce the trace.
+
+HELLO's `model_metadata.denoise_trace` is present only when enabled and declares
+`enabled: true`, `schema_version: 1`, `field: v`,
+`axes: [denoising_step, action_step, model_action]`,
+`coordinate_space: normalized_model`, `velocity_kind: raw_network_velocity`,
+`model_action_dim`, `valid_action_indices`, `dtype: float32` and
+`supported_modes: [default]`. Clients must preserve the result mapping and check
+this contract before consuming evidence. [ManiMux #25](https://github.com/SII-LiuLab/manimux/pull/25)
+provides the downstream trace consumer and AHS selector. Its managed deployment
+must pin an XPolicyLab revision containing this output capability; adding the
+configuration flag to an older backend does not supply trace support.
+
+With the flag disabled, the original sampler loop, callable and output type are
+retained. The trace path uses a separate, lazily constructed JIT wrapper with
+static denoising-step count. Real-checkpoint numerical equivalence across the
+two compiled paths is **not yet validated**.
+
+#### Lightweight validation
+
+The [trace test instructions](../../tests/pi05_trace/README.md) provide a pinned
+CPU test environment and reproducible commands. These checks use the real
+adapter/protocol code with isolated model-dependency substitutes, without
+weights, a listening service, cameras or robot hardware. They establish data
+contracts and Python control flow, not JAX compilation or model numerics.
+
+Before deployment qualification, still run the contribution guide's real-model
+debug loop and compare the unchanged baseline, trace-off and trace-on paths
+using the same checkpoint, normalization, observations and explicit noise.
+Check consecutive seeded requests and reset, independently verify per-step
+velocity, and measure synchronized latency, memory and payload size. CPU tests
+do not establish any of these results or physical task success.
+
+The [real-model probe](../../tests/pi05_trace/README.md#real-model-validation)
+provides baseline capture and trace-off/on comparison commands with explicit
+checkpoint, observation and noise inputs. It runs only when invoked in an existing
+model environment. It does not install dependencies, start a policy server or
+connect hardware. A passing probe covers local model inference, not the WebSocket
+debug loop or ManiMux's complete runtime. Record those checks separately before
+claiming deployment readiness. RTC+trace remains unsupported.
 
 ## Tianji pass-ball zero-pose deployment
 

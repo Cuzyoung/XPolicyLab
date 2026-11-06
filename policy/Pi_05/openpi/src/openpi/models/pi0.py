@@ -285,7 +285,25 @@ class Pi0(_model.BaseModel):
         paint_action_condition: at.Float[at.Array, "b ah ad"] | None = None,
         paint_delay_steps: int | at.Int[at.Array, ""] | None = None,
         return_attention: bool = False,
+        return_denoise_trace: bool = False,
     ):
+        if not isinstance(return_denoise_trace, bool):
+            raise ValueError("return_denoise_trace must be a bool")
+        if return_denoise_trace:
+            if not self.pi05:
+                raise NotImplementedError("denoising traces are only implemented for JAX Pi05")
+            if isinstance(num_steps, bool) or not isinstance(num_steps, int) or num_steps <= 0:
+                raise ValueError("denoising traces require a positive integer num_steps")
+            if num_samples != 1 or observation.state.shape[0] != 1:
+                raise ValueError("denoising traces require one observation and one action sample")
+            if (
+                action_condition is not None
+                or condition_weights is not None
+                or paint_action_condition is not None
+                or paint_delay_steps is not None
+                or return_attention
+            ):
+                raise ValueError("denoising traces only support default sampling")
         if (action_condition is None) != (condition_weights is None):
             raise ValueError("action_condition and condition_weights must be provided together")
         if (paint_action_condition is None) != (paint_delay_steps is None):
@@ -451,6 +469,22 @@ class Pi0(_model.BaseModel):
                 (initial_noise, 1.0),
             )
             return actions
+
+        if return_denoise_trace:
+            def trace_step(carry, _):
+                x_t, time = carry
+                # Record the raw network velocity before the Euler update, in
+                # normalized model coordinates, including padding dimensions.
+                velocity = predict_velocity(x_t, time)
+                return (x_t + dt * velocity, time + dt), velocity
+
+            (actions, _), velocity_trace = jax.lax.scan(
+                trace_step,
+                (noise, 1.0),
+                xs=None,
+                length=num_steps,
+            )
+            return actions, jnp.swapaxes(velocity_trace, 0, 1)
 
         if paint_action_condition is None:
             return integrate_forward(noise)

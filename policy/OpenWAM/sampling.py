@@ -118,6 +118,9 @@ class JointFlowSampler:
                     vvideo, vaction = dit_cache.get_cached(), dit_cache.get_cached_action()
                     cache_hits += 1
                 else:
+                    # Match native generation's CUDA-graph iteration boundary.
+                    # The RTC backward completes within this same iteration.
+                    torch.compiler.cudagraph_mark_step_begin()
                     with attention_context, torch.set_grad_enabled(guided):
                         sample = x.detach().requires_grad_(guided)
                         vvideo, vaction = arch.forward(sample, at, **inputs, timestep=vt)
