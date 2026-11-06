@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 
 from XPolicyLab.policy.Pi_05.model import Model
@@ -7,6 +9,9 @@ from XPolicyLab.policy.Pi_05.model import Model
 
 def test_pi05_rtc_copies_read_only_wire_arrays_before_openpi_transform() -> None:
     model = Model.__new__(Model)
+    model.observation_profile = "aloha"
+    model.num_steps = 10
+    model.policy = SimpleNamespace(_is_pytorch_model=False)
     model.action_horizon = 5
     model.robot_action_dim = 14
     model.action_dim = 32

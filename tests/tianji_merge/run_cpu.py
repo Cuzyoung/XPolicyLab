@@ -22,7 +22,10 @@ env.update({
 env['PYTHONPATH'] = os.pathsep.join(map(str, [
     ROOT.parent, ROOT, ROOT / 'policy/Pi_05/openpi/src',
     ROOT / 'policy/Pi_05/openpi/packages/openpi-client/src',
+    ROOT / 'policy/OpenWAM/OpenWAM',
 ]))
+if env.get('XPOLICYLAB_TEST_EXTRA_PATH'):
+    env['PYTHONPATH'] += os.pathsep + env['XPOLICYLAB_TEST_EXTRA_PATH']
 selected = [
     'test_tianji_merge_regression.py', 'test_pi05_pack_plate.py',
     'test_pi05_pack_plate_h50.py', 'test_pi05_pass_ball_zero_pose.py',
@@ -33,6 +36,20 @@ selected = [
     'test_pi05_autohorizon_adapter.py', 'test_pi05_autohorizon_selector.py',
     'test_flow_sampling_expansion.py',
 ]
+arguments = sys.argv[1:]
+paths = [str(ROOT / 'tests/unit' / name) for name in selected]
+if '--upstream' in arguments:
+    arguments.remove('--upstream')
+    paths += [str(ROOT / name) for name in (
+        'tests/unit/test_main_merge_contracts.py',
+        'tests/unit/test_pi05_denoise_trace.py',
+        'tests/pi05_trace/test_real_model_probe.py',
+        'tests/unit/test_lingbot_vla2_xpolicy_adapter.py',
+        'policy/Pi_05/openpi/src/openpi/policies/policy_test.py',
+    )]
+if '--only' in arguments:
+    arguments.remove('--only')
+    paths = []
 probe = '''
 from pathlib import Path
 import jax, torch, openpi.models.model, XPolicyLab.policy.Pi_05.model
@@ -46,5 +63,5 @@ print('CPU-only backend and checkout import provenance verified', flush=True)
 subprocess.run([sys.executable, '-c', probe], cwd=ROOT, env=env, check=True)
 raise SystemExit(subprocess.run([
     sys.executable, '-m', 'pytest', '-o', 'addopts=', '-q', '--import-mode=importlib',
-    *[str(ROOT / 'tests/unit' / name) for name in selected], *sys.argv[1:],
+    '-m', 'not manual', *paths, *arguments,
 ], cwd=ROOT, env=env).returncode)

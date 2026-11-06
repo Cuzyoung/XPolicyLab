@@ -27,6 +27,12 @@ Coverage:
   behavior and synthetic RTC/PAINT/AAC/AutoHorizon flow tests.
 
 New upstream features should also run their own CPU unit tests after merging.
+Use `--upstream` to include the DROID and trace restrictions, AutoHorizon context
+isolation, upstream trace/serialization tests, LingBot capability tests and the
+OpenPI policy wrapper's non-manual tests. Real-model manual tests stay deselected.
+Pass `--only <test paths>` to run an explicit selection with the same CPU guards.
+`XPOLICYLAB_TEST_EXTRA_PATH` can point to isolated test dependencies without
+changing the production interpreter's packages.
 Compare failures to the pre-merge baseline; do not mask new failures by globally
 excluding tests. A synthetic backend cannot establish real-weight prediction
 quality, GPU compatibility, hardware timing or physical task success.

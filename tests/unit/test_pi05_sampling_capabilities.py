@@ -26,6 +26,7 @@ def test_hello_reports_pi05_backend_and_step_capabilities(
 ):
     # Exercise the real server handshake without loading model weights.
     model = Model.__new__(Model)
+    model.observation_profile = "aloha"
     model.policy = SimpleNamespace(_is_pytorch_model=is_pytorch)
     model.num_steps = num_steps
     monkeypatch.setattr(model, "runtime_metadata", lambda: {})

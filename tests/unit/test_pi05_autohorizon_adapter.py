@@ -6,6 +6,8 @@ from XPolicyLab.policy.Pi_05.model import Model
 
 
 class _FakePolicy:
+    _is_pytorch_model = False
+
     def __init__(self, actions: np.ndarray, execution_steps: int) -> None:
         self.actions = actions
         self.execution_steps = execution_steps
@@ -25,6 +27,7 @@ class _FakePolicy:
 
 def _model(actions: np.ndarray, execution_steps: int) -> Model:
     model = Model.__new__(Model)
+    model.observation_profile = "aloha"
     model.observation_window = {
         "observation/state": np.zeros((1, 14), dtype=np.float32),
         "observation/image": np.zeros((1, 2, 2, 3), dtype=np.uint8),
