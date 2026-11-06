@@ -31,8 +31,8 @@ def main() -> None:
         obs["vision"][f"cam_{side}_wrist"] = {"color": np.full((224, 224, 3), 127, np.uint8)}
     model.update_obs(obs)
     steps = model.get_action()
-    if len(steps) != 32:
-        raise ValueError("pack-plate forward did not produce 32 steps")
+    if len(steps) != config["action_horizon"]:
+        raise ValueError(f"pack-plate forward did not produce {config['action_horizon']} steps")
     for step in steps:
         for side in ("left", "right"):
             for key, shape in ((f"{side}_ee_pose", (7,)), (f"{side}_ee_joint_state", (1,))):

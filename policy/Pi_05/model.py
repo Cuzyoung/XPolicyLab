@@ -127,6 +127,13 @@ class Model(ModelTemplate):
         # Explicit opt-in keeps all existing ALOHA/YAM configurations unchanged.
         if (
             model_cfg is not None
+            and model_cfg.get("observation_profile") == "tianji_taccap_pi05_pack_plate_joint"
+        ):
+            from .pack_plate_joint_model import PackPlateJointModel
+
+            return PackPlateJointModel(model_cfg)
+        if (
+            model_cfg is not None
             and model_cfg.get("observation_profile") == "tianji_taccap_pi05_zero_pose"
         ):
             from .pass_ball_model import PassBallZeroPoseModel

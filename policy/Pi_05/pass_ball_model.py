@@ -135,10 +135,12 @@ def encode_observation(obs: dict) -> dict:
     }
 
 
-def decode_actions(anchor: np.ndarray, actions: np.ndarray) -> list[dict]:
+def decode_actions(
+    anchor: np.ndarray, actions: np.ndarray, *, action_horizon: int = 32
+) -> list[dict]:
     actions = np.asarray(actions)
-    if actions.shape != (32, 20) or not np.isfinite(actions).all():
-        raise ValueError("pass-ball must return finite (32,20) native actions")
+    if actions.shape != (action_horizon, 20) or not np.isfinite(actions).all():
+        raise ValueError(f"Pi05 TCP must return finite ({action_horizon},20) native actions")
     absolute = relative_action_chunk(anchor, actions, inverse=True)
     steps = []
     for row in absolute:
@@ -155,6 +157,8 @@ def decode_actions(anchor: np.ndarray, actions: np.ndarray) -> list[dict]:
 
 class PassBallZeroPoseModel(ModelTemplate):
     """Deployment-only profile; unsupported sampler methods are deliberately absent."""
+
+    action_horizon = 32
 
     def __init__(self, model_cfg: dict):
         from openpi.policies.policy_config import create_trained_policy
@@ -219,7 +223,7 @@ class PassBallZeroPoseModel(ModelTemplate):
                 )
             },
             "action_type": "ee",
-            "action_horizon": 32,
+            "action_horizon": self.action_horizon,
             "action_dim": 32,
             "num_steps": self.num_steps,
             "native_action_encoding": "tcp_relative_chunk",
@@ -256,7 +260,9 @@ class PassBallZeroPoseModel(ModelTemplate):
             obs = self.observations[index]
             anchor = np.array(obs["state"], copy=True)
             predicted = self.policy.infer(obs, num_steps=self.num_steps)
-            result.append(decode_actions(anchor, predicted["actions"]))
+            result.append(decode_actions(
+                anchor, predicted["actions"], action_horizon=self.action_horizon
+            ))
         return result
 
     def reset(self):

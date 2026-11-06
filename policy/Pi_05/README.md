@@ -179,6 +179,27 @@ it has no LoRA parameter leaves. Its normalization asset is
 `pack-plate-taccap-h32-zero-pose-pack-instruction`. The old wrist-only export
 continues to use `gemma_2b_lora` and `gemma_300m_lora` by default.
 
+For hosts with limited RAM, the optional deployment key
+`checkpoint_low_memory: true` reads JAX parameters one at a time, limits TensorStore
+file I/O and decompression workers to one, and waits for each device transfer.
+Both levels matter: a single large parameter can contain several large compressed
+chunks. It uses a restore-local handler registry and preserves the original
+checkpoint values, bfloat16 conversion, sharding and global handlers. Omitting the
+key preserves the existing loader. This reduces peaks but is not a total RAM cap.
+`XLA_PYTHON_CLIENT_PREALLOCATE=false` controls GPU allocation, not these host buffers.
+
+The `pi05_pack_plate_umi_half_speed_h50_step29999` variant selects the
+`pi05-plate-umi-half-b64-h50-30k-dist-p4-20261105-152316-final-29999/checkpoint-29999`
+export and its `assets/umi-half-speed-h50` normalization. It uses full Gemma
+weights, **50 action steps at 30 Hz**, and the same two-wrist, zero-pose,
+right/left TCP-relative contract. Half speed refers to training trajectory
+resampling; do not halve the deployment rate again. This data contract was
+confirmed by the operator on 2026-11-06; training source is not bundled.
+`pi05_pack_plate_umi_half_speed_h50_deploy` is a deployment reconstruction name.
+Model configuration, default and RTC decoding, RTC conditions, runtime metadata
+and the offline forward checker all retain the selected horizon. Existing
+32-step variants and pass-ball keep their previous horizon and identity gates.
+
 This pack-plate profile supports default and RTC sampling. The RTC condition
 arrives as left/right absolute TCP poses and normalized openings from ManiMux;
 it is converted to the model's right/left 20-D absolute layout, then the
@@ -222,3 +243,34 @@ uses the existing `PackPlateZeroPoseModel` class and server dispatch; its histor
 class name does not choose the state representation. See
 [the independent experiment runbook](../../../.agents/skills/manimux-inference/references/deployment/pi05-tianji-pack-plate-inter-hand-relative.md)
 for geometry provenance, frozen settings, launch commands and validation status.
+
+## Pack-plate native-joint checkpoints (2026-10-19 exports)
+
+The `tianji_taccap_pi05_pack_plate_joint` profile selects `PackPlateJointModel`.
+It reconstructs the exported `PassBallDataConfig` absolute-joint contract from
+`training_run.json`: full Gemma 2B / 300M, 32 action rows, measured 16-D state,
+quantile normalization, discrete-state prompt, then padding to 32 model dimensions.
+Order is left seven joint radians + normalized opening, followed by right seven
+joint radians + opening. Both observation and action are absolute; no ALOHA
+conversion, TCP-relative transform, zero-state encoding or IK is applied.
+
+`camera_mode: wrist_only` supplies the two RGB wrists and masks a black base image.
+`camera_mode: wrist_main` requires the real `cam_main` RGB image and enables the
+base image mask. `cam_left_wrist` and `cam_right_wrist` are shared wire names.
+Image preprocessing uses the same OpenPI 224x224 resize/tokenization pipeline.
+Missing main images fail; input images are already decoded RGB by the server.
+
+Default and RTC are supported. RTC receives physical 16-D absolute joint targets,
+passes them through the same action quantile normalization and padding, and uses
+the existing JAX Pi-guidance sampler. ManiMux's standard joint adapter owns the
+aperture curve and inverse RTC mapping. `gripper_clip_tolerance` allows small
+output overshoot before clipping only normalized openings into [0,1]; larger
+overshoot raises, and arm angles are never clipped by the model wrapper.
+The profile supports the existing `checkpoint_low_memory` loader option.
+
+The `joint-wrist` and `joint-3cam` step29999 recipes pin their own weights and the
+checkpoint-local `joint-native-h32` normalization assets. The `joint-fk-tcp-zstate`
+step29999 export instead retains the established 20-D relative-TCP profile and
+`joint-fk-tcp-h32-zero-pose` assets. These are distinct action contracts.
+Training source files are not bundled; transforms are reconstructed from export
+metadata. CPU transform/RTC tests do not establish real-weight or robot success.

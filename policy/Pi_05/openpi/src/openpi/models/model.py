@@ -15,6 +15,7 @@ import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as ocp
 import safetensors
+import tensorstore as ts
 import torch
 
 from openpi.models_pytorch import pi0_pytorch
@@ -283,12 +284,30 @@ class BaseModel(nnx.Module, abc.ABC):
     def sample_actions(self, rng: at.KeyArrayLike, observation: Observation, **kwargs) -> Actions: ...
 
 
+class _LowMemoryArrayHandler(ocp.type_handlers.ArrayHandler):
+    """Read/decompress one chunk at a time and finish each parameter's transfer."""
+
+    async def deserialize(self, infos, args=None):
+        context = ts.Context(
+            {"file_io_concurrency": {"limit": 1}, "data_copy_concurrency": {"limit": 1}},
+            parent=infos[0].ts_context,
+        )
+        original_handler = ocp.type_handlers.get_type_handler(jax.Array)
+        arrays = []
+        for index, info in enumerate(infos):
+            info = dataclasses.replace(info, ts_context=context)
+            restored = await original_handler.deserialize([info], None if args is None else [args[index]])
+            arrays.extend(jax.block_until_ready(restored))
+        return arrays
+
+
 def restore_params(
     params_path: pathlib.Path | str,
     *,
     restore_type: type[np.ndarray] | type[jax.Array] = jax.Array,
     dtype: jnp.dtype | None = None,
     sharding: jax.sharding.Sharding | None = None,
+    low_memory: bool = False,
 ) -> at.Params:
     """Restores unstructured params PyTree from a checkpoint.
 
@@ -300,6 +319,8 @@ def restore_params(
         restore_type: The type to restore the params as. Can be set to `np.ndarray` to load the params as a numpy array.
         dtype: The dtype to restore all params as. If not provided, will use the original dtype from the checkpoint.
         sharding: The sharding to use for the params. If not provided, the params will be replicated across all devices.
+        low_memory: Serialize JAX parameter reads, chunk decompression and device transfers.
+            Uses the original checkpoint values, dtype conversion and sharding; not a total memory cap.
 
     Returns:
         The restored params.
@@ -310,7 +331,16 @@ def restore_params(
         mesh = jax.sharding.Mesh(jax.devices(), ("x",))
         sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
 
-    with ocp.PyTreeCheckpointer() as ckptr:
+    handler_options = {}
+    if low_memory:
+        handler_options["type_handler_registry"] = ocp.type_handlers.create_type_handler_registry(
+            *(
+                (kind, _LowMemoryArrayHandler() if kind is jax.Array else ocp.type_handlers.get_type_handler(kind))
+                for kind in ocp.type_handlers.supported_types()
+            )
+        )
+    handler = ocp.PyTreeCheckpointHandler(**handler_options)
+    with ocp.Checkpointer(handler) as ckptr:
         metadata = ckptr.metadata(params_path)
         item = {"params": metadata["params"]}
 
