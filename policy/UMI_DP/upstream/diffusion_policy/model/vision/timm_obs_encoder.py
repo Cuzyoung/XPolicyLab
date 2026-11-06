@@ -68,6 +68,7 @@ class TimmObsEncoder(ModuleAttrMixin):
             feature_aggregation: str='spatial_embedding',
             downsample_ratio: int=32,
             position_encording: str='learnable',
+            dynamic_img_size: bool=False,
 
         ):
         """
@@ -83,11 +84,18 @@ class TimmObsEncoder(ModuleAttrMixin):
         key_shape_map = dict()
 
         assert global_pool == ''
+        model_kwargs = {}
+        if dynamic_img_size:
+            if not model_name.startswith('vit'):
+                raise ValueError('dynamic_img_size is supported only for ViT encoders')
+            # Keep native checkpoint embeddings; timm interpolates the patch grid.
+            model_kwargs['dynamic_img_size'] = True
         model = timm.create_model(
             model_name=model_name,
             pretrained=pretrained,
             global_pool=global_pool, # '' means no pooling
-            num_classes=0            # remove classification layer
+            num_classes=0,           # remove classification layer
+            **model_kwargs,
         )
 
         # Resolve before a CNN backbone is replaced by a Sequential below.
@@ -149,8 +157,8 @@ class TimmObsEncoder(ModuleAttrMixin):
             assert transforms[0].type == 'RandomCrop'
             ratio = transforms[0].ratio
             transforms = [
-                torchvision.transforms.RandomCrop(size=int(image_shape[0] * ratio)),
-                torchvision.transforms.Resize(size=image_shape[0], antialias=True)
+                torchvision.transforms.RandomCrop(size=tuple(int(size * ratio) for size in image_shape)),
+                torchvision.transforms.Resize(size=tuple(image_shape), antialias=True)
             ] + transforms[1:]
         transform = nn.Identity() if transforms is None else torch.nn.Sequential(*transforms)
         if imagenet_norm and any(

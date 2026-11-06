@@ -1,10 +1,10 @@
 """UMI checkpoint transforms. Input images are already decoded RGB arrays."""
 
-import math
-
 import numpy as np
 from PIL import Image
 from scipy.spatial.transform import Rotation
+
+from .upstream.diffusion_policy.common.image_preprocessing import crop_image, resize_image
 
 
 def pose_matrix(value):
@@ -51,25 +51,20 @@ def from_pose9(value):
     return matrix
 
 
-def preprocess_rgb(rgb, shape):
+def preprocess_rgb(rgb, shape, *, image_crop=None, image_resize_mode="center_crop"):
     rgb = np.asarray(rgb)
     if rgb.dtype != np.uint8 or rgb.ndim != 3 or rgb.shape[-1] != 3:
         raise ValueError("Expected decoded RGB uint8 HWC")
     _, height, width = shape
-    ih, iw = rgb.shape[:2]
-    scale = max(width / iw, height / ih)
-    rw, rh = math.ceil(iw * scale), math.ceil(ih * scale)
-    image = Image.fromarray(rgb).resize((rw, rh), Image.Resampling.BILINEAR)
-    left, top = (rw - width) // 2, (rh - height) // 2
+    image = crop_image(Image.fromarray(rgb), image_crop or {})
+    image = resize_image(image, (height, width), image_resize_mode)
     return (
-        np.asarray(image.crop((left, top, left + width, top + height)), dtype=np.float32).transpose(
-            2, 0, 1
-        )
+        np.asarray(image, dtype=np.float32).transpose(2, 0, 1)
         / 255
     )
 
 
-def build_observation(obs, shape, period_s, tolerance_s):
+def build_observation(obs, shape, period_s, tolerance_s, *, image_crop=None, image_resize_mode="center_crop"):
     info = obs["additional_info"]["umi_dp"]
     timestamps = np.asarray(info["frame_times_ns"], dtype=np.int64)
     if timestamps.shape != (2,) or timestamps[1] <= timestamps[0]:
@@ -96,7 +91,8 @@ def build_observation(obs, shape, period_s, tolerance_s):
         tensors[key] = np.stack(
             [
                 preprocess_rgb(
-                    obs["vision"][f"cam_{side}_wrist{suffix}"]["color"], shape["obs"][key]["shape"]
+                    obs["vision"][f"cam_{side}_wrist{suffix}"]["color"], shape["obs"][key]["shape"],
+                    image_crop=image_crop, image_resize_mode=image_resize_mode,
                 )
                 for suffix in ("_prev", "")
             ]

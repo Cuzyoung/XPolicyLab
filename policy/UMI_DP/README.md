@@ -133,6 +133,14 @@ claimed by the debug loop.
 - `expected_artifacts`: optional exact key/value identity checked at load time.
   Runtime metadata includes checkpoint/config SHA256, EMA/model key, horizon,
   action dt, first action offset, observation period and image normalization.
+- Image preprocessing follows embedded `task.dataset.image_crop` (pixel margins
+  `left`, `right`, `top`, `bottom`) and `task.dataset.image_resize_mode`
+  (`center_crop` or `letterbox`). Missing values retain zero crop and center crop
+  for older checkpoints. The vendored CalibWrist helper applies crop before
+  resize; no training checkout is imported during serving. Output height/width
+  come from each camera's `shape_meta`. For rectangular ViT checkpoints,
+  `policy.obs_encoder.dynamic_img_size` enables native position-embedding
+  interpolation, and random crop/resize preserves both image dimensions.
 
 Horizon and dt come from the embedded `shape_meta`; H16, H32 and H64 are supported.
 With LeRobot's next-native-frame action export, the first target occurs at

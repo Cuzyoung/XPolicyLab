@@ -69,7 +69,9 @@ class Model(ModelTemplate):
             if index in observations:
                 raise ValueError("Duplicate env_idx in observation batch")
             observations[index] = build_observation(
-                obs, self.shape_meta, self._metadata["observation_period_s"], self.tolerance_s
+                obs, self.shape_meta, self._metadata["observation_period_s"], self.tolerance_s,
+                image_crop=self.cfg.task.dataset.get("image_crop", None),
+                image_resize_mode=self.cfg.task.dataset.get("image_resize_mode", "center_crop"),
             )
             order.append(index)
         if not order:

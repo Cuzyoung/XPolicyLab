@@ -42,3 +42,14 @@ The model adapter selects these classes only for embedded `policy.rtc.enabled`.
 `TrainTimeRtcSampler` passes unnormalized relative actions as `fixed_action_prefix`;
 it never installs `RtcGuidance`. The training pipeline and dataset were not
 reimported or rerun for this inference integration.
+
+## Rectangular crop checkpoints (2026-10-16)
+
+`common/image_preprocessing.py` is copied unchanged from CalibWrist's
+`policies/diffusion_policy/diffusion_policy/common/image_preprocessing.py`
+(checkout HEAD `889792408d32b36c034021e1c5f1594cb24a8a75`, file SHA256
+`8b89f5600678bb63bf32b0782046db9bb3c7e14f2464e4b0a44c2b0b8aa5b4d8`).
+The adapter reads crop margins and resize mode from the checkpoint dataset config.
+Absent fields preserve the original center-crop path. The encoder ports the
+matching `dynamic_img_size` and rectangular random-crop/resize changes, retaining
+this adapter's existing RGB normalization and strict checkpoint loading.
