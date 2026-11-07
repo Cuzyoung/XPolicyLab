@@ -139,6 +139,10 @@ class Model(ModelTemplate):
             }:
                 raise ValueError("denoise trace supports only ALOHA/YAM native joint profiles")
         # Explicit opt-in keeps all existing ALOHA/YAM configurations unchanged.
+        if model_cfg is not None and model_cfg.get("observation_profile") == "flexiv_ee_umi":
+            from .flexiv_ee import FlexivEEModel
+
+            return FlexivEEModel(model_cfg)
         if (
             model_cfg is not None
             and model_cfg.get("observation_profile") == "tianji_taccap_pi05_zero_pose"

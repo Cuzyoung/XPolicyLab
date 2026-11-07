@@ -135,10 +135,10 @@ def encode_observation(obs: dict) -> dict:
     }
 
 
-def decode_actions(anchor: np.ndarray, actions: np.ndarray) -> list[dict]:
+def decode_actions(anchor: np.ndarray, actions: np.ndarray, *, horizon: int = 32) -> list[dict]:
     actions = np.asarray(actions)
-    if actions.shape != (32, 20) or not np.isfinite(actions).all():
-        raise ValueError("pass-ball must return finite (32,20) native actions")
+    if actions.shape != (horizon, 20) or not np.isfinite(actions).all():
+        raise ValueError(f"UMI policy must return finite ({horizon},20) native actions; got {actions.shape}")
     absolute = relative_action_chunk(anchor, actions, inverse=True)
     steps = []
     for row in absolute:

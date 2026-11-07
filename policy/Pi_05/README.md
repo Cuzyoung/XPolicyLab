@@ -345,3 +345,37 @@ uses the existing `PackPlateZeroPoseModel` class and server dispatch; its histor
 class name does not choose the state representation. See
 [the independent experiment runbook](../../../.agents/skills/manimux-inference/references/deployment/pi05-tianji-pack-plate-inter-hand-relative.md)
 for geometry provenance, frozen settings, launch commands and validation status.
+
+
+### Flexiv flange EE / UMI profile
+
+`observation_profile: flexiv_ee_umi` selects `flexiv_ee.py` through the ordinary
+Pi_05 model factory. This deployment-only full Gemma 2B/300M profile uses three
+RGB cameras, H50, native right/left xyz + Rot6D rows + normalized opening,
+observation-relative tool-frame actions and zero-pose state. It reuses the
+training-derived HiFi-UMI pose/state helpers. The same request's flange anchors
+restore absolute per-arm-base xyz/wxyz poses outside the model; no ALOHA joint
+or gripper conversion is applied. The dataset targets the next measured frame.
+PIL resize/padding, all three image masks, normalization, zeroing after
+normalization, tokenization and output transforms match the submitted source.
+
+Declare physical dimensions `[7,7]` plus `[1,1]`, `action_type: ee`,
+`pose_frame: flange`, `model_state_encoding: zero_pose`,
+`native_action_encoding: tcp_relative_chunk`, and
+`preprocessing_contract: stack_cube_flexiv_flange_ee_umi_v1`. The recipe binds
+checkpoint assets by SHA256 and verifies the zero-pose normalization contract.
+Standard single/batch observation, action and reset methods are provided with
+`num_envs: 1`. The JAX profile supports default and RTC sampling. RTC receives
+absolute left/right `(50,16)` xyz+wxyz+opening targets. It converts them to
+right/left Rot6D with the training tool axes, then uses the current request's
+measured anchor for relative actions, quantile normalization and padding to 32.
+State pose zeroing happens after that conversion. Zero-weight rows use a valid
+anchor pose before rotation conversion; active rows require unit quaternions and
+normalized openings. The existing OpenPI VJP sampler owns guidance. An entirely
+zero-weight request takes the ordinary sampling graph, preserving reset-RNG
+output exactly rather than introducing bf16 graph differences. No hardware IK
+runs in the model server. PAINT/AAC remain unsupported for this profile.
+Model serving owns no robot or IK. ManiMux supplies measured flange poses,
+selects bounded offline IK and preserves the shared whole-command failure policy.
+Recorded-image real-weight WebSocket and disconnected runtime checks are software
+qualification only, not physical task validation.
