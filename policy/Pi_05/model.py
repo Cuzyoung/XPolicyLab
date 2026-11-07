@@ -99,6 +99,8 @@ def _resolve_train_config(model_cfg: dict[str, Any]):
 
         validate_artifacts(model_cfg)
         return make_train_config(model_cfg)
+    if model_cfg.get("image_processing") is not None:
+        raise ValueError("Pi05 image_processing is supported only by the Flexiv profiles")
     config = _config.get_config(model_cfg.get("train_config_name", "pi05_aloha"))
     data_updates: dict[str, Any] = {}
     for key in ("repo_id", "use_delta_joint_actions", "adapt_to_pi"):
@@ -362,7 +364,9 @@ class Model(ModelTemplate):
             "num_steps": self.num_steps,
             "inference_seed": self.inference_seed,
             "observation_profile": self.observation_profile,
-            **({"preprocessing_contract": "stack_cube_joint_3cam_v1"}
+            **({"preprocessing_contract": "stack_cube_joint_3cam_v1",
+                "image_processing": self.policy.metadata.get("image_processing"),
+                "image_processing_effective": self.policy.metadata.get("image_processing_effective")}
                if self.observation_profile == "flexiv_joint" else {}),
             "execution": execution,
         }

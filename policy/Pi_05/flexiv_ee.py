@@ -17,7 +17,7 @@ from scipy.spatial.transform import Rotation
 from XPolicyLab.model_template import ModelTemplate
 from XPolicyLab.utils.process_data import get_batch_size, get_robot_action_dim_info
 
-from .flexiv_joint import resize_training_rgb
+from .flexiv_joint import SingleFrameCompression, resize_training_rgb
 from .pass_ball_model import decode_actions, encode_observation
 from .pass_ball_pose import OPTICAL_FROM_FLU, relative_action_chunk
 from .pass_ball_state import POSE_INDICES, EncodeState, ZeroNormalizedPose
@@ -28,6 +28,8 @@ SEMANTICS = "absolute_per_arm_base_xyz_wxyz"
 
 
 def validate_artifacts(config):
+    if config.get("image_processing") is not None:
+        SingleFrameCompression.parameters(config["image_processing"])
     required = {
         "policy_name": "Pi_05",
         "observation_profile": PROFILE,
@@ -95,6 +97,8 @@ def validate_artifacts(config):
 
 @dataclasses.dataclass(frozen=True)
 class FlexivEEInputs:
+    compression: SingleFrameCompression | None = None
+
     def __call__(self, data):
         state = np.asarray(data["state"], dtype=np.float32)
         if state.shape != (20,) or not np.isfinite(state).all():
@@ -113,6 +117,8 @@ class FlexivEEInputs:
                 or min(image.shape[:2]) < 1
             ):
                 raise ValueError(f"Flexiv EE {camera} must be HWC uint8 RGB")
+            if self.compression is not None:
+                image = self.compression.process(image, camera=camera)
             images[slot] = resize_training_rgb(image)
         result = {
             "state": state,
@@ -167,6 +173,8 @@ def make_train_config(config):
     from openpi.models.pi0_config import Pi0Config
     from openpi.training import config as oc
 
+    compression = SingleFrameCompression.from_config(config)
+
     @dataclasses.dataclass(frozen=True)
     class FlexivEEDataConfig(oc.DataConfigFactory):
         def create(self, assets_dirs, model_config):
@@ -177,7 +185,7 @@ def make_train_config(config):
             return dataclasses.replace(
                 self.create_base_config(assets_dirs, model_config),
                 data_transforms=transforms.Group(
-                    inputs=(FlexivEEInputs(), EncodeState("zero_pose")),
+                    inputs=(FlexivEEInputs(compression), EncodeState("zero_pose")),
                     outputs=(FlexivEEOutputs(),),
                 ),
                 model_transforms=model_transforms,
@@ -194,6 +202,8 @@ def make_train_config(config):
             assets=oc.AssetsConfig(assets_dir=str(stats.parent), asset_id=stats.name),
         ),
         policy_metadata={
+            "image_processing": None if compression is None else dict(config["image_processing"]),
+            "image_processing_effective": None if compression is None else compression.options,
             "model_state_encoding": "zero_pose",
             "action_encoding": "tcp_relative_chunk",
         },
@@ -252,6 +262,8 @@ class FlexivEEModel(ModelTemplate):
             "rotation_6d_layout": "first_two_rows",
             "axis_change": "tool",
             "base_image_mask": True,
+            "image_processing": self.policy.metadata.get("image_processing"),
+            "image_processing_effective": self.policy.metadata.get("image_processing_effective"),
         }
 
     def update_obs(self, obs):

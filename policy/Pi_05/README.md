@@ -347,6 +347,43 @@ class name does not choose the state representation. See
 for geometry provenance, frozen settings, launch commands and validation status.
 
 
+### Optional Flexiv deployment image compression
+
+The `flexiv_joint` and `flexiv_ee_umi` profiles accept `image_processing` in the
+model recipe; omission or `null` disables it. `SingleFrameCompression` lives in
+`flexiv_joint.py` and is composed into `FlexivInputs` and `FlexivEEInputs`, before
+the existing training resize. It operates on decoded RGB arrays only. JPEG
+round trips use XPolicyLab's shared RGB encode/decode helpers; temporary H.264
+containers are local to each call. No sensor, robot, or ManiMux runtime is imported.
+
+```yaml
+image_processing:
+  type: jpeg_h264_single_frame
+  jpeg_quality: 80
+  crf: 20
+  fps: 30
+  gop_size: 30
+  thread_count: 2
+  preset: ultrafast
+  tune: zerolatency
+  pix_fmt: yuv420p
+```
+
+This optional path requires PyAV (`av>=12`) with libx264/H.264 support in the
+model environment, alongside the existing OpenCV dependency. Missing codecs fail
+policy construction. Inputs must be even-sized HWC uint8 RGB. Each frame is an
+independent I-frame; this does not reproduce training-video P/B-frame history.
+The feature is deployment-only: leave it disabled when training on images already
+decoded from compressed datasets, to avoid adding another compression pass.
+
+Processing occurs for each model input-transform invocation, with no source-frame
+cache or background worker pool. Repeated observations are processed again. Settings
+and resolved defaults are exposed as `image_processing` and
+`image_processing_effective` in runtime metadata. Model-service INFO logs record
+codec versions and per-image `flexiv_image_processing` timings, camera keys and
+input SHA256 values. These timings include preprocessing, not only model sampling.
+They are not per-control-tick sensor metrics or a new action-response field.
+
 ### Flexiv flange EE / UMI profile
 
 `observation_profile: flexiv_ee_umi` selects `flexiv_ee.py` through the ordinary
