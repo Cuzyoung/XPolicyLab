@@ -78,7 +78,7 @@ def validate_artifacts(config: dict) -> dict:
         "native_action_dim": ACTION_DIM,
         "action_horizon": config["action_horizon"],
         "action_semantics": config["action_semantics"],
-        "sampling_modes": ["default"],
+        "sampling_modes": ["default", "rtc"],
         "inference_status": "not_run_by_artifact_check",
     }
 

@@ -258,8 +258,10 @@ class Model(ModelTemplate):
         """Advertise hooks supported by the loaded backend and denoising budget."""
         if getattr(self, "return_denoise_trace", False):
             return ["default"]
-        if self.observation_profile in {"droid_jointpos", "flexiv_joint"} or self.policy._is_pytorch_model:
+        if self.observation_profile == "droid_jointpos" or self.policy._is_pytorch_model:
             return ["default"]
+        if self.observation_profile == "flexiv_joint":
+            return ["default", "rtc"]
         modes = ["default", "rtc", "aac", "paint"]
         if self.num_steps >= 3:
             modes.append("autohorizon")
@@ -406,6 +408,10 @@ class Model(ModelTemplate):
         condition, weights, beta = validate_rtc(
             sampling, self.action_horizon, self.robot_action_dim or self.action_dim, copy=True
         )
+        if not np.any(weights):
+            # No guidance: use the identical graph/RNG path, avoiding bf16 drift
+            # from compiling an otherwise unnecessary VJP sampling branch.
+            return self.get_action()
 
         return self.get_action(
             action_condition=condition,

@@ -66,7 +66,14 @@ three RGB views; absolute targets; quantile normalization; full Pi05 with
 32 padded action coordinates and 16 native outputs. Set explicit
 `robot_action_dim_info: {arm_dim: [7, 7], ee_dim: [1, 1]}` and
 `use_delta_joint_actions: false`. ALOHA's 14-coordinate slicing and gripper
-conversion do not apply. Only default sampling is advertised.
+conversion do not apply. The JAX backend advertises default and RTC sampling;
+PyTorch remains default-only. RTC uses the same `Model.get_action_rtc`, OpenPI
+policy transforms and JAX Pi0 sampler as ALOHA/YAM. Conditions are `(H,16)`
+absolute joint/opening targets in left/right order, with `(H,)` weights. They
+pass through the checkpoint's quantile normalization and 32-coordinate padding
+before guidance; outputs use the ordinary unnormalization and native slicing.
+No Flexiv-specific sampler or delta conversion is involved. Other specialized
+sampling modes remain unavailable for this profile.
 
 The recipe must supply `preprocessing_contract: stack_cube_joint_3cam_v1`,
 `model_path`, `checkpoint_num`, `norm_stats_path`,
